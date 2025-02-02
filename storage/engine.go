@@ -122,10 +122,10 @@ func (se *Engine) persistKeyValue(key []byte, value []byte, op LogOperation, bat
 		} else {
 			memValue = append([]byte{0}, chunkPos.Encode()...) // Store WAL reference
 		}
-		
+
 		se.mu.Lock()
 		se.memTable.Put(key, y.ValueStruct{
-			Meta:  OpInsert,
+			Meta:  op,
 			Value: memValue,
 		})
 		se.mu.Unlock()
