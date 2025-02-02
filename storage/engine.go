@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	defaultValueThreshold = 256 // Values below this size are stored directly in MemTable
+	defaultValueThreshold = 2 * wal.KB // Values below this size are stored directly in MemTable
+	defaultArenaSize      = wal.MB
 )
 
 // ErrKeyNotFound is a sentinel error for missing keys
@@ -62,7 +63,7 @@ func NewStorageEngine(baseDir, namespace string, flushSize int64) (*Engine, erro
 	}
 
 	// Initialize SkipList (MemTable)
-	memTable := skl.NewSkiplist(10 * 1024 * 1024)            // 10MB
+	memTable := skl.NewSkiplist(defaultArenaSize)            // 1MB
 	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001) // 1M keys, 0.01% false positives
 
 	// Create storage engine

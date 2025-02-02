@@ -4,8 +4,8 @@ import "github.com/rosedblabs/wal"
 
 // Default permission values
 const (
-	defaultBytesPerSync = 1024 * 1024      // 1MB
-	defaultSegmentSize  = 16 * 1024 * 1024 // 16MB
+	defaultBytesPerSync = 1 * wal.MB  // 1MB
+	defaultSegmentSize  = 16 * wal.MB // 16MB
 )
 
 func newWALOptions(dirPath string) wal.Options {
