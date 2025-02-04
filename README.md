@@ -1,6 +1,8 @@
 ## kvalchemy 🚀
 > A Hybrid Key-Value Store for Fast Writes, Efficient Reads, and Seamless Replication
 
+![build](https://github.com/github/docs/actions/workflows/go.yml/badge.svg)
+
 ## Overview
 
 kvalchemy is a high-performance, replicated key-value store that blends the best of WALs, Memtables, and B-Trees to achieve:
@@ -36,3 +38,7 @@ kvalchemy is designed to scale efficiently across distributed environments:
 ## Storage Engine
 
 ![storage architecture](docs/kvalchemy_storage.png)
+
+## License
+
+[Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0)
