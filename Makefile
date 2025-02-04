@@ -6,14 +6,14 @@ test:
 	@echo "[go test] running unit tests and collecting coverage metrics"
 	@-rm -r $(COVERAGE_DIR)
 	@mkdir $(COVERAGE_DIR)
-	@go test -v -tags unit_tests -race -covermode atomic -coverprofile $(COVERAGE_DIR)/combined.txt ./...
+	@go test -v -race -covermode atomic -coverprofile $(COVERAGE_DIR)/combined.txt `go list ./... | grep -v tmp `
 
 .PHONY: test_integration
 test_integration:
 	@echo "[go test] running integration tests and collecting coverage metrics"
 	@-rm -r $(COVERAGE_DIR)
 	@mkdir $(COVERAGE_DIR)
-	@go test -v -tags integration_tests -race -covermode atomic -coverprofile $(COVERAGE_DIR)/combined.txt ./...
+	@go test -v -tags integration_tests -race -covermode atomic -coverprofile $(COVERAGE_DIR)/combined.txt `go list ./... | grep -v tmp`
 
 # get the html coverage
 html-coverage:
