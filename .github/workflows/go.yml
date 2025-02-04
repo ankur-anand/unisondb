@@ -1,0 +1,29 @@
+name: golang test and lint.
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '^1.23.2' # The Go version to download (if necessary) and use.
+      - run: go version
+        # Step 6: Install golangci-lint
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+        # Step 7: Run golangci-lint to lint Go code
+      - name: Run golangci-lint
+        run: golangci-lint run ./...
+
+      - name: Run go test
+        run: go test -v -race -covermode atomic ./...
