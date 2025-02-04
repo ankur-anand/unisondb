@@ -27,9 +27,10 @@ const arenaSafetyMargin = wal.KB
 //
 //nolint:unused
 type memTable struct {
-	sList *skl.Skiplist
-	pos   *wal.ChunkPosition
-	size  int64
+	sList  *skl.Skiplist
+	pos    *wal.ChunkPosition
+	size   int64
+	kCount int
 }
 
 func newMemTable(size int64) *memTable {
@@ -53,11 +54,16 @@ func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.ChunkPosition
 	}
 	table.sList.Put(y.KeyWithTs(key, 0), val)
 	table.pos = pos
+	table.kCount++
 	return nil
 }
 
 func (table *memTable) get(key []byte) y.ValueStruct {
 	return table.sList.Get(y.KeyWithTs(key, 0))
+}
+
+func (table *memTable) keysCount() int {
+	return table.kCount
 }
 
 //nolint:unused
@@ -151,6 +157,10 @@ func (e *Engine) handleFlush() {
 		}
 		// Create WAL checkpoint
 		err = saveChunkPosition(e.db, mt.pos)
+		if err != nil {
+			log.Fatal("Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
+		}
+		err = e.saveBloomFilter()
 		if err != nil {
 			log.Fatal("Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
 		}

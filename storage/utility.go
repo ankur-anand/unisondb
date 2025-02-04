@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	walCheckPointBucket = []byte("wal-checkpoint")
+	walCheckPointBucket = []byte("namespace-meta-data")
 	walCheckPointKey    = []byte("wal-checkpoint-key")
+	bloomFilterKey      = []byte("bloom-filter")
 )
 
 // LZ4WriterPool reuses writers to optimize performance.

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/dgraph-io/badger/v4/y"
+	"github.com/gofrs/flock"
 	"github.com/google/uuid"
 	"github.com/rosedblabs/wal"
 	"go.etcd.io/bbolt"
@@ -19,21 +21,24 @@ import (
 
 var (
 	// ErrKeyNotFound is a sentinel error for missing keys.
-	ErrKeyNotFound    = errors.New("key not found")
-	ErrInCloseProcess = errors.New("in-close process")
+	ErrKeyNotFound      = errors.New("key not found")
+	ErrInCloseProcess   = errors.New("in-close process")
+	ErrDatabaseDirInUse = errors.New("pid.lock is held by another process")
 )
 
 // Engine manages WAL, MemTable (SkipList), and BoltDB for a given namespace.
 type Engine struct {
-	namespace     string
-	wal           *wal.WAL
-	db            *bbolt.DB
-	queueChan     chan struct{}
-	flushQueue    *flusherQueue
-	storageConfig StorageConfig
+	namespace             string
+	wal                   *wal.WAL
+	db                    *bbolt.DB
+	queueChan             chan struct{}
+	flushQueue            *flusherQueue
+	storageConfig         StorageConfig
+	fileLock              *flock.Flock
+	recoveredEntriesCount int
 
 	// used in testing
-	callback func()
+	Callback func()
 
 	shutdown atomic.Bool
 	wg       *sync.WaitGroup
@@ -49,6 +54,22 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 	nsDir := filepath.Join(baseDir, namespace)
 	walDir := filepath.Join(nsDir, "wal")
 	dbFile := filepath.Join(nsDir, "db.bolt")
+
+	if _, err := os.Stat(nsDir); err != nil {
+		if err := os.MkdirAll(nsDir, os.ModePerm); err != nil {
+			return nil, err
+		}
+	}
+
+	fileLock := flock.New(filepath.Join(nsDir, "pid.lock"))
+	locked, err := fileLock.TryLock()
+	if err != nil {
+		return nil, err
+	}
+	// unable to get the exclusive lock
+	if !locked {
+		return nil, ErrDatabaseDirInUse
+	}
 
 	// Open WAL
 	w, err := wal.Open(newWALOptions(walDir))
@@ -96,21 +117,29 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 		flushQueue:    newFlusherQueue(signal),
 		queueChan:     signal,
 		storageConfig: *config,
+		fileLock:      fileLock,
 		memTable:      memTable,
 		bloom:         bloomFilter,
-		callback:      func() {},
+		Callback:      func() {},
 		wg:            &sync.WaitGroup{},
 	}
 
 	// background task:
 	engine.processFlushQueue(engine.wg, signal)
-	// Recover WAL logs on startup
-	slog.Info("Recovering WAL...", "namespace", namespace)
-	if err := engine.recoverWAL(); err != nil {
-		slog.Error("WAL recovery failed", "err", err)
+	// Recover WAL logs and bloom filter on startup
+	err = engine.loadBloomFilter()
+	if err != nil && !errors.Is(err, ErrKeyNotFound) {
+		return nil, err
 	}
 
-	return engine, nil
+	slog.Info("Recovering WAL...", "namespace", namespace)
+	count, err := engine.recoverWAL()
+	if err != nil {
+		slog.Error("WAL recovery failed", "err", err)
+	}
+	engine.recoveredEntriesCount = count
+
+	return engine, err
 }
 
 // persistKeyValue writes a key-value pair to WAL and MemTable, ensuring durability.
@@ -164,10 +193,21 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op LogOperation, batc
 		if err != nil {
 			return err
 		}
-
 	}
 
 	return nil
+}
+
+// RecoveredEntriesCount keeps track of the number of WAL entries successfully recovered
+func (e *Engine) RecoveredEntriesCount() int {
+	return e.recoveredEntriesCount
+}
+
+// MemTableSize returns the number of keys currently stored in the MemTable.
+func (e *Engine) MemTableSize() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.memTable.keysCount()
 }
 
 // memTableWrite will write the provided key and value to the memTable.
@@ -200,6 +240,7 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, chunkPos *wal.ChunkP
 		//put inside the bloom filter.
 		e.bloom.Add(key)
 	}
+
 	return err
 }
 
@@ -238,7 +279,6 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		}
 		it := e.memTable.get(key)
 		return it, nil
-
 	}
 
 	it, err := checkFunc()
@@ -314,8 +354,11 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	return record.Value, nil
 }
 
-// Close all the associated resource
+// Close all the associated resource.
 func (e *Engine) Close() error {
+	if e.shutdown.Load() {
+		return ErrInCloseProcess
+	}
 	e.shutdown.Store(true)
 	close(e.queueChan)
 
@@ -338,6 +381,12 @@ func (e *Engine) Close() error {
 	}
 
 	if err := e.db.Close(); err != nil {
+		errs.WriteString(err.Error())
+		errs.WriteString("|")
+	}
+
+	// release the lock file.
+	if err := e.fileLock.Unlock(); err != nil {
 		errs.WriteString(err.Error())
 		errs.WriteString("|")
 	}

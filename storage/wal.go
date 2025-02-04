@@ -1,60 +1,59 @@
 package storage
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 
+	"github.com/dgraph-io/badger/v4/y"
 	"github.com/rosedblabs/wal"
 	"go.etcd.io/bbolt"
 )
 
-// loadChunkPosition retrieves the WAL checkpoint from BoltDB
-func loadChunkPosition(db *bbolt.DB) (*wal.ChunkPosition, error) {
-	var pos *wal.ChunkPosition
-
-	err := db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte("wal_checkpoint"))
-		if bucket == nil {
-			return nil // No checkpoint saved yet
-		}
-
-		data := bucket.Get([]byte("last_position"))
-		pos = wal.DecodeChunkPosition(data)
-
-		return nil
-	})
-
-	return pos, err
-}
-
 // recoverWAL starts from the last stored sequence in BoltDB.
-func (se *Engine) recoverWAL() error {
-	se.mu.Lock()
-	defer se.mu.Unlock()
+func (e *Engine) recoverWAL() (int, error) {
+	slog.Info("Recovering WAL...", "namespace", e.namespace)
 
-	slog.Info("Recovering WAL...", "namespace", se.namespace)
-
-	chunkPosition, err := loadChunkPosition(se.db)
+	chunkPosition, err := loadChunkPosition(e.db)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
+	var reader *wal.Reader
+	ignoreFirstChunk := false
+	// if the chunkPosition is nil
+	// maybe in first run itself, we never crossed the arena limit, and it was never flushed.
+	// or the db file was new, somehow.
+	// in both the case try loading the entire wal.
 	if chunkPosition == nil {
-		slog.Info("WAL Chunk Position is nil. Skipping...")
-		return nil
+		slog.Info("WAL Chunk Position is nil. Loading the Complete WAL...")
+		reader = e.wal.NewReader()
 	}
-	slog.Info("Starting WAL replay from index ..")
 
-	reader, err := se.wal.NewReaderWithStart(chunkPosition)
-	if err != nil {
-		return err
+	if chunkPosition != nil {
+		// recovery should happen from last chunk position + 1.
+		ignoreFirstChunk = true
+		slog.Info("Starting WAL replay from index ..", "segment", chunkPosition.SegmentId, "offset", chunkPosition.ChunkOffset)
+
+		reader, err = e.wal.NewReaderWithStart(chunkPosition)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	recordCount := 0
+
 	for {
 		val, pos, err := reader.Next()
 		if err == io.EOF {
 			break
+		}
+
+		if ignoreFirstChunk {
+			ignoreFirstChunk = false
+			continue
 		}
 
 		// decompress the data
@@ -67,17 +66,77 @@ func (se *Engine) recoverWAL() error {
 		// build the mem-table,
 		// decode the data
 		recordCount++
-		record, err := decodeWalRecord(data)
-		if err != nil {
-			slog.Error("Skipping unreadable WAL entry:", "pos", pos, "err", err)
-			continue
+		record := decodeWalRecord(data)
+
+		// Store in MemTable
+		if record.Operation == OpInsert || record.Operation == OpDelete {
+			var memValue []byte
+			if int64(len(val)) <= e.storageConfig.ValueThreshold {
+				memValue = append([]byte{1}, val...) // Directly store small values
+			} else {
+				memValue = append([]byte{0}, pos.Encode()...) // Store WAL reference
+			}
+
+			err = e.memTableWrite(record.Key, y.ValueStruct{
+				Meta:  record.Operation,
+				Value: memValue,
+			}, pos)
+			if err != nil {
+				return recordCount, err
+			}
 		}
-		err = se.persistKeyValue(record.Key, record.Value, record.Operation, record.BatchID)
+	}
+	slog.Info("WAL Recovery Completed", "namespace", e.namespace, "record-count", recordCount)
+	return recordCount, nil
+}
+
+func (e *Engine) saveBloomFilter() error {
+	// Serialize Bloom Filter
+	var buf bytes.Buffer
+	e.mu.RLock()
+	_, err := e.bloom.WriteTo(&buf)
+	e.mu.RUnlock()
+	if err != nil {
+		return err
+	}
+
+	return e.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(walCheckPointBucket)
+
+		if bucket == nil {
+			return errors.New("walCheckPointBucket not found") // No checkpoint saved yet
+		}
+		// Save serialized Bloom Filter to BoltDB
+		return bucket.Put(bloomFilterKey, buf.Bytes())
+	})
+}
+
+func (e *Engine) loadBloomFilter() error {
+	var result []byte
+	err := e.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(walCheckPointBucket)
+		if bucket == nil {
+			return nil // No existing Bloom filter, create a new one
+		}
+
+		data := bucket.Get(bloomFilterKey)
+		if data == nil {
+			return ErrKeyNotFound
+		}
+
+		// copy the value
+		result = append([]byte{}, data...)
+		return nil
+	})
+
+	if len(result) != 0 {
+		// Deserialize Bloom Filter
+		buf := bytes.NewReader(result)
+		_, err = e.bloom.ReadFrom(buf)
 		if err != nil {
-			return err
+			return fmt.Errorf("failed to deserialize bloom filter: %w", err)
 		}
 	}
 
-	slog.Info("WAL Recovery Completed", "namespace", se.namespace, "record-count", recordCount)
-	return nil
+	return err
 }
