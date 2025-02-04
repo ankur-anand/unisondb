@@ -1,0 +1,16 @@
+.DS_Store
+cli/build
+cli/cli
+cli/migrate
+.coverage
+.godoc.pid
+vendor/
+.vscode/
+.idea/
+.playground
+*.out
+*.test
+*.telemetry
+*.idea
+*.bin
+
