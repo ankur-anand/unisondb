@@ -2,7 +2,7 @@ package storage
 
 import "github.com/rosedblabs/wal"
 
-// Default permission values
+// Default permission values.
 const (
 	defaultBytesPerSync = 1 * wal.MB  // 1MB
 	defaultSegmentSize  = 16 * wal.MB // 16MB
@@ -10,6 +10,7 @@ const (
 
 func newWALOptions(dirPath string) wal.Options {
 	return wal.Options{
+		DirPath:        dirPath,
 		SegmentSize:    defaultSegmentSize,
 		SegmentFileExt: ".seg.wal",
 		// writes are buffered to OS.

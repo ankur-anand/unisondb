@@ -5,37 +5,46 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/bits-and-blooms/bloom/v3"
-	"github.com/dgraph-io/badger/v4/skl"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/google/uuid"
 	"github.com/rosedblabs/wal"
 	"go.etcd.io/bbolt"
 )
 
-const (
-	defaultValueThreshold = 2 * wal.KB // Values below this size are stored directly in MemTable
-	defaultArenaSize      = wal.MB
+var (
+	// ErrKeyNotFound is a sentinel error for missing keys.
+	ErrKeyNotFound    = errors.New("key not found")
+	ErrInCloseProcess = errors.New("in-close process")
 )
 
-// ErrKeyNotFound is a sentinel error for missing keys
-var ErrKeyNotFound = errors.New("key not found")
-
-// Engine manages WAL, MemTable (SkipList), and BoltDB for a given namespace
+// Engine manages WAL, MemTable (SkipList), and BoltDB for a given namespace.
 type Engine struct {
-	wal       *wal.WAL
-	memTable  *skl.Skiplist
-	db        *bbolt.DB
-	mu        sync.RWMutex
-	bloom     *bloom.BloomFilter
-	flushSize int64
-	namespace string
+	namespace     string
+	wal           *wal.WAL
+	db            *bbolt.DB
+	queueChan     chan struct{}
+	flushQueue    *flusherQueue
+	storageConfig StorageConfig
+
+	// used in testing
+	callback func()
+
+	shutdown atomic.Bool
+	wg       *sync.WaitGroup
+	// protect the mem table and bloom filter
+	mu       sync.RWMutex
+	bloom    *bloom.BloomFilter
+	memTable *memTable
 }
 
-// NewStorageEngine initializes WAL, MemTable, and BoltDB
-func NewStorageEngine(baseDir, namespace string, flushSize int64) (*Engine, error) {
+// NewStorageEngine initializes WAL, MemTable, and BoltDB.
+func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, error) {
 	// Define paths for WAL & BoltDB
 	nsDir := filepath.Join(baseDir, namespace)
 	walDir := filepath.Join(nsDir, "wal")
@@ -56,26 +65,45 @@ func NewStorageEngine(baseDir, namespace string, flushSize int64) (*Engine, erro
 	// Create namespace bucket in BoltDB
 	err = db.Update(func(tx *bbolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte(namespace))
+		if err != nil {
+			return err
+		}
+		_, err = tx.CreateBucketIfNotExists(walCheckPointBucket)
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-
-	// Initialize SkipList (MemTable)
-	memTable := skl.NewSkiplist(defaultArenaSize)            // 1MB
-	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001) // 1M keys, 0.01% false positives
-
-	// Create storage engine
-	engine := &Engine{
-		wal:       w,
-		memTable:  memTable,
-		db:        db,
-		flushSize: flushSize,
-		bloom:     bloomFilter,
-		namespace: namespace,
+	config := sc
+	if config == nil {
+		config = DefaultConfig()
 	}
 
+	// skiplist itself needs few bytes for initialization
+	// and we don't want to keep on trashing writing boltdb often.
+	if config.ArenaSize < 100*wal.KB {
+		return nil, errors.New("arena size too small min size 2 KB")
+	}
+
+	memTable := newMemTable(config.ArenaSize)
+	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001) // 1M keys, 0.01% false positives
+	signal := make(chan struct{}, 2)
+	// Create storage engine
+	engine := &Engine{
+		namespace:     namespace,
+		wal:           w,
+		db:            db,
+		flushQueue:    newFlusherQueue(signal),
+		queueChan:     signal,
+		storageConfig: *config,
+		memTable:      memTable,
+		bloom:         bloomFilter,
+		callback:      func() {},
+		wg:            &sync.WaitGroup{},
+	}
+
+	// background task:
+	engine.processFlushQueue(engine.wg, signal)
 	// Recover WAL logs on startup
 	slog.Info("Recovering WAL...", "namespace", namespace)
 	if err := engine.recoverWAL(); err != nil {
@@ -86,14 +114,18 @@ func NewStorageEngine(baseDir, namespace string, flushSize int64) (*Engine, erro
 }
 
 // persistKeyValue writes a key-value pair to WAL and MemTable, ensuring durability.
-// This function follows a multi-step process to persist the key-value pair:
-// 1. Encodes and compresses the record.
-// 2. Writes the record to the WAL (Write-Ahead Log).
-// 3. If it's an insert operation (`OpInsert`):
+// multistep process to persist the key-value pair:
+// 1. Encodes the record.
+// 2. Compresses the record.
+// 3. Writes the record to the WAL (Write-Ahead Log).
+// 4. Write the record to the SKIP LIST as well.
+// ->	4.a If it's an insert operation (`OpInsert`):
 //   - Stores small values directly in MemTable.
 //   - Stores large values in WAL and keeps a reference in MemTable.
 //   - Updates the Bloom filter for quick existence checks.
-func (se *Engine) persistKeyValue(key []byte, value []byte, op LogOperation, batchID uuid.UUID) error {
+//
+// 5. Store the current Chunk Position in the variable.
+func (e *Engine) persistKeyValue(key []byte, value []byte, op LogOperation, batchID uuid.UUID) error {
 	record := &walRecord{
 		Operation: op,
 		Key:       key,
@@ -104,68 +136,124 @@ func (se *Engine) persistKeyValue(key []byte, value []byte, op LogOperation, bat
 	// Encode and compress WAL record
 	encoded := encodeWalRecord(record)
 	compressed, err := compressLZ4(encoded)
+
 	if err != nil {
 		return err
 	}
 
 	// Write to WAL
-	chunkPos, err := se.wal.Write(compressed)
+	chunkPos, err := e.wal.Write(compressed)
 	if err != nil {
 		return err
 	}
 
 	// Store in MemTable
 	if op == OpInsert || op == OpDelete {
-
 		var memValue []byte
-		if len(value) <= defaultValueThreshold {
+		if int64(len(value)) <= e.storageConfig.ValueThreshold {
 			memValue = append([]byte{1}, compressed...) // Directly store small values
 		} else {
 			memValue = append([]byte{0}, chunkPos.Encode()...) // Store WAL reference
 		}
 
-		se.mu.Lock()
-		se.memTable.Put(key, y.ValueStruct{
+		err := e.memTableWrite(key, y.ValueStruct{
 			Meta:  op,
 			Value: memValue,
-		})
-		se.mu.Unlock()
+		}, chunkPos)
 
-		//3. put inside the bloom filter.
-		se.bloom.Add(key)
+		if err != nil {
+			return err
+		}
+
 	}
 
 	return nil
 }
 
-// Put inserts a key-value pair into WAL and MemTable
-func (se *Engine) Put(key, value []byte) error {
-	return se.persistKeyValue(key, value, OpInsert, uuid.New())
+// memTableWrite will write the provided key and value to the memTable.
+func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, chunkPos *wal.ChunkPosition) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var err error
+	err = e.memTable.put(key, v, chunkPos)
+	if err != nil {
+		if errors.Is(err, errArenaSizeWillExceed) {
+			// put the old table in the queue
+			oldTable := e.memTable
+			e.memTable = newMemTable(e.storageConfig.ArenaSize)
+			e.flushQueue.enqueue(*oldTable)
+			select {
+			case e.queueChan <- struct{}{}:
+			default:
+				slog.Warn("queue signal channel full")
+			}
+			err = e.memTable.put(key, v, chunkPos)
+			// :(
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	// bloom filter also need to be protected for concurrent ops.
+	if err == nil {
+		//put inside the bloom filter.
+		e.bloom.Add(key)
+	}
+	return err
 }
 
-// Delete removes a key and its value pair from WAL and MemTable
-func (se *Engine) Delete(key []byte) error {
-	return se.persistKeyValue(key, nil, OpDelete, uuid.New())
+// Put inserts a key-value pair into WAL and MemTable.
+func (e *Engine) Put(key, value []byte) error {
+	if e.shutdown.Load() {
+		return ErrInCloseProcess
+	}
+	return e.persistKeyValue(key, value, OpInsert, uuid.New())
+}
+
+// Delete removes a key and its value pair from WAL and MemTable.
+func (e *Engine) Delete(key []byte) error {
+	if e.shutdown.Load() {
+		return ErrInCloseProcess
+	}
+	return e.persistKeyValue(key, nil, OpDelete, uuid.New())
 }
 
 // Get retrieves a value from MemTable, WAL, or BoltDB.
-func (se *Engine) Get(key []byte) ([]byte, error) {
-	// fast negative check
-	if !se.bloom.Test(key) {
-		return nil, ErrKeyNotFound
+// 1. check bloom filter for key presence.
+// 2. check recent mem-table
+// 3. Check BoltDB.
+func (e *Engine) Get(key []byte) ([]byte, error) {
+	if e.shutdown.Load() {
+		return nil, ErrInCloseProcess
 	}
 
-	// Retrieve entry from MemTable
-	se.mu.RLock()
-	it := se.memTable.Get(key)
-	se.mu.RUnlock()
+	checkFunc := func() (y.ValueStruct, error) {
+		// Retrieve entry from MemTable
+		e.mu.RLock()
+		defer e.mu.RUnlock()
+		// fast negative check
+		if !e.bloom.Test(key) {
+			return y.ValueStruct{}, ErrKeyNotFound
+		}
+		it := e.memTable.get(key)
+		return it, nil
 
+	}
+
+	it, err := checkFunc()
+	if err != nil {
+		return nil, err
+	}
+
+	// if the mem table doesn't have this key associated action or log.
+	// directly go to the boltdb to fetch the same.
 	if it.Meta == OpNoop {
 		var result []byte
-		err := se.db.View(func(tx *bbolt.Tx) error {
-			b := tx.Bucket([]byte(se.namespace))
+		err := e.db.View(func(tx *bbolt.Tx) error {
+			b := tx.Bucket([]byte(e.namespace))
 			if b == nil {
-				return fmt.Errorf("bucket %s not found", se.namespace)
+				return fmt.Errorf("bucket %s not found", e.namespace)
 			}
 
 			v := b.Get(key)
@@ -173,8 +261,8 @@ func (se *Engine) Get(key []byte) ([]byte, error) {
 				return ErrKeyNotFound
 			}
 
-			// Correct way to copy the value
-			result = append([]byte{}, v...) // Makes a copy of `v`
+			// copy the value
+			result = append([]byte{}, v...)
 			return nil
 		})
 		if err != nil {
@@ -191,6 +279,7 @@ func (se *Engine) Get(key []byte) ([]byte, error) {
 
 	// Decode MemTable entry (ChunkPosition or Value)
 	chunkPos, value, err := decodeChunkPositionWithValue(it.Value)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode MemTable entry for key %s: %w", string(key), err)
 	}
@@ -199,20 +288,18 @@ func (se *Engine) Get(key []byte) ([]byte, error) {
 	if chunkPos == nil {
 		// Decompress data
 		data, err := decompressLZ4(value)
+
 		if err != nil {
 			return nil, fmt.Errorf("decompression failed for key %s: %w", string(key), err)
 		}
 
 		// Decode WAL Record
-		record, err := decodeWalRecord(data)
-		if err != nil {
-			return nil, fmt.Errorf("WAL decoding failed for key %s: %w", string(key), err)
-		}
+		record := decodeWalRecord(data)
 		return record.Value, nil
 	}
 
 	// Retrieve from WAL using ChunkPosition
-	walValue, err := se.wal.Read(chunkPos)
+	walValue, err := e.wal.Read(chunkPos)
 	if err != nil {
 		return nil, fmt.Errorf("WAL read failed for key %s: %w", string(key), err)
 	}
@@ -222,32 +309,59 @@ func (se *Engine) Get(key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("WAL decompression failed for key %s: %w", string(key), err)
 	}
 
-	record, err := decodeWalRecord(data)
-	if err != nil {
-		return nil, fmt.Errorf("WAL record decoding failed for key %s: %w", string(key), err)
-	}
+	record := decodeWalRecord(data)
 
 	return record.Value, nil
 }
 
-// decodeChunkPositionWithValue decodes a MemTable entry into either a ChunkPosition (WAL lookup) or a direct value.
-func decodeChunkPositionWithValue(data []byte) (*wal.ChunkPosition, []byte, error) {
-	if len(data) == 0 {
-		return nil, nil, ErrKeyNotFound
+// Close all the associated resource
+func (e *Engine) Close() error {
+	e.shutdown.Store(true)
+	close(e.queueChan)
+
+	var errs strings.Builder
+
+	_, err := e.wal.WriteAll()
+	if err != nil {
+		errs.WriteString(err.Error())
+		errs.WriteString("|")
 	}
 
-	flag := data[0] // First byte determines type
+	if err := e.wal.Sync(); err != nil {
+		errs.WriteString(err.Error())
+		errs.WriteString("|")
+	}
 
-	switch flag {
-	case 1:
-		// Direct value stored
-		return nil, data[1:], nil
-	case 0:
-		// Stored ChunkPosition (WAL lookup required)
-		chunkPos := wal.DecodeChunkPosition(data[1:])
+	if err := e.wal.Close(); err != nil {
+		errs.WriteString(err.Error())
+		errs.WriteString("|")
+	}
 
-		return chunkPos, nil, nil
-	default:
-		return nil, nil, fmt.Errorf("invalid MemTable entry flag: %d", flag)
+	if err := e.db.Close(); err != nil {
+		errs.WriteString(err.Error())
+		errs.WriteString("|")
+	}
+
+	if !waitWithTimeout(e.wg, 5*time.Second) {
+		slog.Error("Timeout reached! Some goroutines are still running")
+	}
+	if errs.Len() > 0 {
+		return errors.New(errs.String())
+	}
+	return nil
+}
+
+func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wg.Wait()
+	}()
+
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
 	}
 }

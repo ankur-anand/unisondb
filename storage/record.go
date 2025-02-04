@@ -1,9 +1,7 @@
 package storage
 
 import (
-	"bytes"
 	"encoding/binary"
-	"fmt"
 
 	"github.com/google/uuid"
 )
@@ -17,82 +15,60 @@ type walRecord struct {
 }
 
 func encodeWalRecord(record *walRecord) []byte {
-	buf := new(bytes.Buffer)
+	keySize := len(record.Key)
+	valueSize := len(record.Value)
+	totalSize := 1 + 16 + 4 + keySize + 4 + valueSize
 
-	// Write Operation Type (1 byte)
-	_ = buf.WriteByte(byte(record.Operation))
+	buf := make([]byte, totalSize)
+	index := 0
 
-	// Write BatchID only for batch-related operations
-	if record.BatchID != uuid.Nil {
-		batchIDBytes, _ := record.BatchID.MarshalBinary()
-		buf.Write(batchIDBytes)
-	}
+	buf[index] = byte(record.Operation)
+	index++
 
-	// Encode and write Key length & Key
-	keyLen := uint64(len(record.Key))
-	keyLenBuf := make([]byte, binary.MaxVarintLen64)
-	keyLenSize := binary.PutUvarint(keyLenBuf, keyLen)
-	buf.Write(keyLenBuf[:keyLenSize])
-	buf.Write(record.Key)
+	batchIDBytes, _ := record.BatchID.MarshalBinary()
+	copy(buf[index:index+16], batchIDBytes)
+	index += 16
 
-	// Encode and write Value length & Value (only if not batch marker)
-	if record.Operation == OpInsert {
-		valueLen := uint64(len(record.Value))
-		valueLenBuf := make([]byte, binary.MaxVarintLen64)
-		valueLenSize := binary.PutUvarint(valueLenBuf, valueLen)
-		buf.Write(valueLenBuf[:valueLenSize])
-		buf.Write(record.Value)
-	}
+	binary.LittleEndian.PutUint32(buf[index:index+4], uint32(keySize))
+	index += 4
+	copy(buf[index:index+keySize], record.Key)
+	index += keySize
 
-	return buf.Bytes()
+	binary.LittleEndian.PutUint32(buf[index:index+4], uint32(valueSize))
+	index += 4
+	copy(buf[index:], record.Value)
+
+	return buf
 }
 
 // decodeWalRecord deserializes bytes into a `walRecord` struct.
-func decodeWalRecord(data []byte) (*walRecord, error) {
-	buf := bytes.NewReader(data)
-	record := &walRecord{}
+func decodeWalRecord(buf []byte) *walRecord {
+	index := 0
 
-	// Read Operation Type (1 byte)
-	opType, err := buf.ReadByte()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read operation type: %w", err)
+	operation := LogOperation(buf[index])
+	index++
+
+	var batchID uuid.UUID
+	_ = batchID.UnmarshalBinary(buf[index : index+16])
+	index += 16
+
+	keySize := binary.LittleEndian.Uint32(buf[index : index+4])
+	index += 4
+
+	key := make([]byte, keySize)
+	copy(key, buf[index:index+int(keySize)])
+	index += int(keySize)
+
+	valueSize := binary.LittleEndian.Uint32(buf[index : index+4])
+	index += 4
+
+	value := make([]byte, valueSize)
+	copy(value, buf[index:])
+
+	return &walRecord{
+		Operation: operation,
+		Key:       key,
+		Value:     value,
+		BatchID:   batchID,
 	}
-	record.Operation = opType
-
-	// Read BatchID if operation is batch-related
-	if record.Operation == OpBatchStart || record.Operation == OpBatchCommit {
-		var batchIDBytes [16]byte
-		if _, err := buf.Read(batchIDBytes[:]); err != nil {
-			return nil, fmt.Errorf("failed to read BatchID: %w", err)
-		}
-		if err := record.BatchID.UnmarshalBinary(batchIDBytes[:]); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal BatchID: %w", err)
-		}
-	}
-
-	// Decode Key
-	keyLen, err := binary.ReadUvarint(buf)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode key length: %w", err)
-	}
-
-	record.Key = make([]byte, keyLen)
-	if _, err := buf.Read(record.Key); err != nil {
-		return nil, fmt.Errorf("failed to read key: %w", err)
-	}
-
-	// Decode Value for insert ops.
-	if record.Operation == OpInsert {
-		valueLen, err := binary.ReadUvarint(buf)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode value length: %w", err)
-		}
-
-		record.Value = make([]byte, valueLen)
-		if _, err := buf.Read(record.Value); err != nil {
-			return nil, fmt.Errorf("failed to read value: %w", err)
-		}
-	}
-
-	return record, nil
 }
