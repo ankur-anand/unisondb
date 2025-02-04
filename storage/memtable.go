@@ -18,6 +18,9 @@ var (
 	errArenaSizeWillExceed = errors.New("arena size will exceed the limit")
 )
 
+// Add a margin to avoid boundary issues, arena uses the same pool for itself.
+const arenaSafetyMargin = wal.KB
+
 // memTable hold the underlying skip list and
 // the last chunk position in the wal, associated
 // with this skip list
@@ -41,7 +44,7 @@ func newMemTable(size int64) *memTable {
 func (table *memTable) canPut(key []byte, val y.ValueStruct) bool {
 	return table.sList.MemSize()+
 		int64(len(y.KeyWithTs(key, 0)))+
-		int64(val.EncodedSize()) <= table.size
+		int64(val.EncodedSize())+arenaSafetyMargin <= table.size
 }
 
 func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.ChunkPosition) error {
@@ -151,8 +154,8 @@ func (e *Engine) handleFlush() {
 		if err != nil {
 			log.Fatal("Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
 		}
-		if e.callback != nil {
-			e.callback()
+		if e.Callback != nil {
+			e.Callback()
 		}
 		slog.Info("Flushed MemTable to BoltDB & Created WAL Checkpoint")
 	}

@@ -278,7 +278,7 @@ func TestFlush_Deletes(t *testing.T) {
 
 	walPos, err := walInstance.Write(data)
 	assert.NoError(t, err)
-	
+
 	// Store WAL ChunkPosition in MemTable
 	memTable.Put(y.KeyWithTs([]byte("delete_me"), 0), y.ValueStruct{
 		Meta:  OpDelete,
@@ -366,8 +366,9 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 		close(callSignal)
 	}
 	engine, err := NewStorageEngine(dir, "test_namespace", nil)
-	engine.callback = callBack
 	assert.NoError(t, err, "error creating engine instance")
+	engine.Callback = callBack
+
 	key := []byte("wal_key")
 	value := []byte("wal_value")
 
@@ -436,7 +437,7 @@ func TestProcessFlushQueue(t *testing.T) {
 		close(callSignal)
 	}
 	engine, err := NewStorageEngine(dir, "test_namespace", nil)
-	engine.callback = callBack
+	engine.Callback = callBack
 	assert.NoError(t, err, "error creating engine instance")
 	key := []byte("wal_key")
 	value := []byte("wal_value")
