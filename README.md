@@ -13,7 +13,7 @@ kvalchemy is a high-performance, replicated key-value store that blends the best
 
 ✅ Seamless multi-region scaling with rapid failover
 
-Why kvalchemy?
+## Why kvalchemy?
 
 Traditional KV stores force a trade-off:
 
@@ -21,7 +21,7 @@ Traditional KV stores force a trade-off:
 
 •	B+Trees (e.g., BoltDB) provide efficient lookups but struggle with high-speed inserts & replication.
 
-kvalchemy merges both worlds by:
+### kvalchemy merges both worlds by:
 
 •	Using Write-Ahead Logging (WAL) for durability & replication.
 
