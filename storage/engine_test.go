@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ankur-anand/kvreplicator/storage"
+	"github.com/ankur-anand/kvalchemy/storage"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/rosedblabs/wal"
 	"github.com/stretchr/testify/assert"
@@ -242,7 +242,7 @@ func TestArenaReplacementAndFlush(t *testing.T) {
 	})
 	err = engine.Close()
 	assert.NoError(t, err, "Failed to close engine")
-	
+
 	engine, err = storage.NewStorageEngine(baseDir, namespace, config)
 	assert.NoError(t, err)
 	assert.NotNil(t, engine)

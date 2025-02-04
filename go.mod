@@ -1,4 +1,4 @@
-module github.com/ankur-anand/kvreplicator
+module github.com/ankur-anand/kvalchemy
 
 go 1.23.2
 
