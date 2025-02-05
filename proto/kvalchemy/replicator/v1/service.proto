@@ -1,0 +1,35 @@
+syntax = "proto3";
+package kvalchemy.replicator.v1;
+
+option go_package = "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1";
+
+import "google/protobuf/timestamp.proto";
+
+service WALReplicationService {
+    rpc StreamWAL(StreamWALRequest) returns (stream StreamWALResponse);
+}
+
+message StreamWALRequest {
+  optional Metadata last_seen_metadata = 1; // Last applied WAL checkpoint
+}
+
+// Server's Response Message (Streaming)
+message StreamWALResponse {
+  repeated WALRecord wal_records = 1;   // A batch of WAL records
+  google.protobuf.Timestamp sent_at = 2; // Server timestamp when the batch was sent
+}
+
+// WAL Record Format
+message WALRecord {
+  Metadata metadata = 1;
+  bytes compressed_data = 2;        // Compressed WAL entry (LZ4)
+
+  bool is_chunked = 3;              // Is this part of a chunked WAL entry?
+  uint32 chunk_index = 4;           // Chunk number in the sequence
+  uint32 total_chunks = 5;          // Total chunks in this WAL entry
+}
+
+// Metadata for tracking WAL state
+message Metadata {
+  bytes record = 1;
+}
