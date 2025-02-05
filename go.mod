@@ -12,8 +12,8 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/rosedblabs/wal v1.3.8
 	github.com/stretchr/testify v1.10.0
-	go.etcd.io/bbolt v1.3.11
-	google.golang.org/grpc v1.56.3
+	go.etcd.io/bbolt v1.4.0
+	google.golang.org/grpc v1.70.0
 	google.golang.org/protobuf v1.36.4
 )
 
@@ -23,7 +23,6 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgraph-io/ristretto/v2 v2.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
