@@ -31,6 +31,7 @@ var (
 type Engine struct {
 	namespace             string
 	wal                   *wal.WAL
+	globalCounter         atomic.Uint64 // stores the global index.
 	db                    *bbolt.DB
 	queueChan             chan struct{}
 	flushQueue            *flusherQueue
@@ -156,7 +157,7 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 //
 // 5. Store the current Chunk Position in the variable.
 func (e *Engine) persistKeyValue(key []byte, value []byte, op LogOperation, batchID uuid.UUID) error {
-	record := &walRecord{
+	record := &WalRecord{
 		Operation: op,
 		Key:       key,
 		Value:     value,
@@ -164,7 +165,7 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op LogOperation, batc
 	}
 
 	// Encode and compress WAL record
-	encoded := encodeWalRecord(record)
+	encoded := EncodeWalRecord(record)
 	compressed, err := compressLZ4(encoded)
 
 	if err != nil {
@@ -199,7 +200,7 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op LogOperation, batc
 	return nil
 }
 
-// RecoveredEntriesCount keeps track of the number of WAL entries successfully recovered
+// RecoveredEntriesCount keeps track of the number of WAL entries successfully recovered.
 func (e *Engine) RecoveredEntriesCount() int {
 	return e.recoveredEntriesCount
 }
@@ -335,7 +336,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		}
 
 		// Decode WAL Record
-		record := decodeWalRecord(data)
+		record := DecodeWalRecord(data)
 		return record.Value, nil
 	}
 
@@ -350,7 +351,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("WAL decompression failed for key %s: %w", string(key), err)
 	}
 
-	record := decodeWalRecord(data)
+	record := DecodeWalRecord(data)
 
 	return record.Value, nil
 }

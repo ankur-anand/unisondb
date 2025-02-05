@@ -262,7 +262,7 @@ func processMemTableEntry(bucket *bbolt.Bucket, key []byte, entry y.ValueStruct,
 			return fmt.Errorf("failed to decompress MemTable entry for key %s: %w", string(key), err)
 		}
 
-		record := decodeWalRecord(data)
+		record := DecodeWalRecord(data)
 
 		return bucket.Put(record.Key, record.Value)
 	}
@@ -278,7 +278,7 @@ func processMemTableEntry(bucket *bbolt.Bucket, key []byte, entry y.ValueStruct,
 		return fmt.Errorf("failed to decompress WAL entry for key %s: %w", string(key), err)
 	}
 
-	record := decodeWalRecord(data)
+	record := DecodeWalRecord(data)
 
 	return bucket.Put(record.Key, record.Value)
 }

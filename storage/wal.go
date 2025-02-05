@@ -8,6 +8,9 @@ import (
 	"github.com/rosedblabs/wal"
 )
 
+// Ensure WAL implements the interface.
+var _ WalReader = (*wal.WAL)(nil)
+
 // WalReader defines an interface for reading Write-Ahead Log (WAL) entries.
 type WalReader interface {
 	NewReader() *wal.Reader
@@ -74,7 +77,7 @@ func (e *Engine) recoverWAL() (int, error) {
 		// build the mem-table,
 		// decode the data
 		recordCount++
-		record := decodeWalRecord(data)
+		record := DecodeWalRecord(data)
 
 		// Store in MemTable
 		if record.Operation == OpInsert || record.Operation == OpDelete {

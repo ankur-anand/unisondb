@@ -154,13 +154,13 @@ func TestFlush_Success(t *testing.T) {
 		value := []byte("value_" + strconv.Itoa(i))
 
 		// Encode and write WAL record
-		walRecord := walRecord{
+		walRecord := WalRecord{
 			Operation: OpInsert,
 			Key:       key,
 			Value:     value,
 		}
 
-		encoded := encodeWalRecord(&walRecord)
+		encoded := EncodeWalRecord(&walRecord)
 
 		// compress
 		data, err := compressLZ4(encoded)
@@ -265,12 +265,12 @@ func TestFlush_Deletes(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Encode and write WAL record
-	walRecord := walRecord{
+	walRecord := WalRecord{
 		Operation: OpDelete,
 		Key:       []byte("delete_me"),
 	}
 
-	encoded := encodeWalRecord(&walRecord)
+	encoded := EncodeWalRecord(&walRecord)
 
 	// compress
 	data, err := compressLZ4(encoded)
@@ -322,14 +322,14 @@ func TestFlush_WALLookup(t *testing.T) {
 
 	key := []byte("wal_key")
 	value := []byte("wal_value")
-	record := walRecord{
+	record := WalRecord{
 		Key:       key,
 		Value:     value,
 		Operation: OpInsert,
 	}
 
 	// encode
-	encoded := encodeWalRecord(&record)
+	encoded := EncodeWalRecord(&record)
 	// compress
 	data, err := compressLZ4(encoded)
 	assert.NoError(t, err)
@@ -374,13 +374,13 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 
 	table := newMemTable(200 * wal.KB)
 	// Encode and write WAL record
-	walRecord := walRecord{
+	walRecord := WalRecord{
 		Operation: OpInsert,
 		Key:       key,
 		Value:     value,
 	}
 
-	encoded := encodeWalRecord(&walRecord)
+	encoded := EncodeWalRecord(&walRecord)
 
 	// compress
 	data, err := compressLZ4(encoded)
@@ -444,13 +444,13 @@ func TestProcessFlushQueue(t *testing.T) {
 
 	table := newMemTable(200 * wal.KB)
 	// Encode and write WAL record
-	walRecord := walRecord{
+	walRecord := WalRecord{
 		Operation: OpInsert,
 		Key:       key,
 		Value:     value,
 	}
 
-	encoded := encodeWalRecord(&walRecord)
+	encoded := EncodeWalRecord(&walRecord)
 
 	// compress
 	data, err := compressLZ4(encoded)
