@@ -8,6 +8,18 @@ import (
 	"github.com/rosedblabs/wal"
 )
 
+// WalReader defines an interface for reading Write-Ahead Log (WAL) entries.
+type WalReader interface {
+	NewReader() *wal.Reader
+	NewReaderWithStart(startPos *wal.ChunkPosition) (*wal.Reader, error)
+}
+
+// NewWalReader returns a new instance of WalReader, allowing the caller to
+// access WAL logs for replication, recovery, or log processing.
+func (e *Engine) NewWalReader() WalReader {
+	return e.wal
+}
+
 // recoverWAL starts from the last stored sequence in BoltDB.
 func (e *Engine) recoverWAL() (int, error) {
 	slog.Info("Recovering WAL...", "namespace", e.namespace)
