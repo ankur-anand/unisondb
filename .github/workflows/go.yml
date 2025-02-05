@@ -23,7 +23,7 @@ jobs:
 
         # Step 7: Run golangci-lint to lint Go code
       - name: Run golangci-lint
-        run: go list -f "{{.Dir}}" ./... | grep -v proto | xargs golangci-lint run
+        run: golangci-lint run ./...
 
       - name: Run go test
         run: go test -v -race -covermode atomic $(go list ./... | grep -v  proto)
