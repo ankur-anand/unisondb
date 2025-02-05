@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/pierrec/lz4/v4"
 	"github.com/rosedblabs/wal"
@@ -116,4 +117,19 @@ func saveChunkPosition(db *bbolt.DB, pos *wal.ChunkPosition) error {
 	})
 
 	return err
+}
+
+func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wg.Wait()
+	}()
+
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }

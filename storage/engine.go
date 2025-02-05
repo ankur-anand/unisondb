@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -354,6 +355,57 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	return record.Value, nil
 }
 
+func (e *Engine) saveBloomFilter() error {
+	// Serialize Bloom Filter
+	var buf bytes.Buffer
+	e.mu.RLock()
+	_, err := e.bloom.WriteTo(&buf)
+	e.mu.RUnlock()
+	if err != nil {
+		return err
+	}
+
+	return e.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(walCheckPointBucket)
+
+		if bucket == nil {
+			return errors.New("walCheckPointBucket not found") // No checkpoint saved yet
+		}
+		// Save serialized Bloom Filter to BoltDB
+		return bucket.Put(bloomFilterKey, buf.Bytes())
+	})
+}
+
+func (e *Engine) loadBloomFilter() error {
+	var result []byte
+	err := e.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(walCheckPointBucket)
+		if bucket == nil {
+			return nil // No existing Bloom filter, create a new one
+		}
+
+		data := bucket.Get(bloomFilterKey)
+		if data == nil {
+			return ErrKeyNotFound
+		}
+
+		// copy the value
+		result = append([]byte{}, data...)
+		return nil
+	})
+
+	if len(result) != 0 {
+		// Deserialize Bloom Filter
+		buf := bytes.NewReader(result)
+		_, err = e.bloom.ReadFrom(buf)
+		if err != nil {
+			return fmt.Errorf("failed to deserialize bloom filter: %w", err)
+		}
+	}
+
+	return err
+}
+
 // Close all the associated resource.
 func (e *Engine) Close() error {
 	if e.shutdown.Load() {
@@ -398,19 +450,4 @@ func (e *Engine) Close() error {
 		return errors.New(errs.String())
 	}
 	return nil
-}
-
-func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		wg.Wait()
-	}()
-
-	select {
-	case <-done:
-		return true
-	case <-time.After(timeout):
-		return false
-	}
 }
