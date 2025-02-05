@@ -2,7 +2,6 @@ package storage
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -25,8 +24,8 @@ var LZ4WriterPool = sync.Pool{
 	},
 }
 
-// compressLZ4 compresses data using LZ4.
-func compressLZ4(data []byte) ([]byte, error) {
+// CompressLZ4 compresses data using LZ4.
+func CompressLZ4(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
 
 	writer := LZ4WriterPool.Get().(*lz4.Writer)
@@ -49,7 +48,7 @@ func compressLZ4(data []byte) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func decompressLZ4(data []byte) ([]byte, error) {
+func DecompressLZ4(data []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	reader := lz4.NewReader(bytes.NewReader(data))
 	_, err := buf.ReadFrom(reader)
@@ -81,36 +80,43 @@ func decodeChunkPositionWithValue(data []byte) (*wal.ChunkPosition, []byte, erro
 	}
 }
 
-// loadChunkPosition retrieves the WAL checkpoint from BoltDB.
+// LoadMetadata retrieves the WAL checkpoint from BoltDB.
 //
 //nolint:unused
-func loadChunkPosition(db *bbolt.DB) (*wal.ChunkPosition, error) {
-	var pos *wal.ChunkPosition
+func LoadMetadata(db *bbolt.DB) (Metadata, error) {
+	var metadata Metadata
 
 	err := db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(walCheckPointBucket)
 		if bucket == nil {
-			return errors.New("walCheckPointBucket not found") // No checkpoint saved yet
+			return ErrBucketNotFound
 		}
 
 		data := bucket.Get(walCheckPointKey)
-		pos = wal.DecodeChunkPosition(data)
+		if data == nil {
+			return ErrKeyNotFound
+		}
+		metadata = UnmarshalMetadata(data)
 
 		return nil
 	})
 
-	return pos, err
+	return metadata, err
 }
 
-// saveChunkPosition saves the WAL checkpoint to BoltDB.
+// SaveMetadata saves the WAL checkpoint to BoltDB.
 //
 //nolint:unused
-func saveChunkPosition(db *bbolt.DB, pos *wal.ChunkPosition) error {
-	value := pos.Encode()
+func SaveMetadata(db *bbolt.DB, pos *wal.ChunkPosition, index uint64) error {
+	metaData := Metadata{
+		Index: index,
+		Pos:   pos,
+	}
+	value := metaData.MarshalBinary()
 	err := db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(walCheckPointBucket)
 		if bucket == nil {
-			return errors.New("walCheckPointBucket not found") // No checkpoint saved yet
+			return ErrBucketNotFound
 		}
 
 		return bucket.Put(walCheckPointKey, value)

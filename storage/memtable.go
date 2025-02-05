@@ -29,6 +29,7 @@ const arenaSafetyMargin = wal.KB
 type memTable struct {
 	sList  *skl.Skiplist
 	pos    *wal.ChunkPosition
+	index  uint64
 	size   int64
 	kCount int
 }
@@ -48,13 +49,14 @@ func (table *memTable) canPut(key []byte, val y.ValueStruct) bool {
 		int64(val.EncodedSize())+arenaSafetyMargin <= table.size
 }
 
-func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.ChunkPosition) error {
+func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.ChunkPosition, index uint64) error {
 	if !table.canPut(key, val) {
 		return errArenaSizeWillExceed
 	}
 	table.sList.Put(y.KeyWithTs(key, 0), val)
 	table.pos = pos
 	table.kCount++
+	table.index = index
 	return nil
 }
 
@@ -156,7 +158,7 @@ func (e *Engine) handleFlush() {
 			log.Fatal("Failed to flushMemTable MemTable:", "namespace", e.namespace, "err", err)
 		}
 		// Create WAL checkpoint
-		err = saveChunkPosition(e.db, mt.pos)
+		err = SaveMetadata(e.db, mt.pos, mt.index)
 		if err != nil {
 			log.Fatal("Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
 		}
@@ -257,7 +259,7 @@ func processMemTableEntry(bucket *bbolt.Bucket, key []byte, entry y.ValueStruct,
 
 	// If value is directly in MemTable
 	if chunkPos == nil {
-		data, err := decompressLZ4(value)
+		data, err := DecompressLZ4(value)
 		if err != nil {
 			return fmt.Errorf("failed to decompress MemTable entry for key %s: %w", string(key), err)
 		}
@@ -273,7 +275,7 @@ func processMemTableEntry(bucket *bbolt.Bucket, key []byte, entry y.ValueStruct,
 		return fmt.Errorf("WAL read failed for key %s: %w", string(key), err)
 	}
 
-	data, err := decompressLZ4(walValue)
+	data, err := DecompressLZ4(walValue)
 	if err != nil {
 		return fmt.Errorf("failed to decompress WAL entry for key %s: %w", string(key), err)
 	}

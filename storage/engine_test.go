@@ -47,7 +47,7 @@ func TestPutGet(t *testing.T) {
 	// Put key-value pair
 	err = engine.Put(key, value)
 	assert.NoError(t, err, "Put operation should succeed")
-
+	assert.Equal(t, uint64(1), engine.LastSeq())
 	// Retrieve value
 	retrievedValue, err := engine.Get(key)
 	assert.NoError(t, err, "Get operation should succeed")
@@ -81,6 +81,7 @@ func TestDelete(t *testing.T) {
 	// Ensure key no longer exists
 	_, err = engine.Get(key)
 	assert.ErrorIs(t, err, storage.ErrKeyNotFound, "Deleted key should return key not found error")
+	assert.Equal(t, uint64(2), engine.LastSeq())
 }
 
 func TestConcurrentWrites(t *testing.T) {
@@ -120,6 +121,7 @@ func TestConcurrentWrites(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, value, retrievedValue, "Concurrent write mismatch")
 	}
+	assert.Equal(t, uint64(numOps), engine.LastSeq())
 }
 
 func TestPersistence(t *testing.T) {
@@ -261,4 +263,6 @@ func TestArenaReplacementAndFlush(t *testing.T) {
 		assert.NotNil(t, retrievedValue, "Retrieved value should not be nil")
 		assert.Equal(t, valueSize, len(retrievedValue), "Value length mismatch")
 	}
+
+	assert.Equal(t, uint64(4000), engine.LastSeq())
 }

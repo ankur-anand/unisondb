@@ -20,9 +20,16 @@ import (
 	"go.etcd.io/bbolt"
 )
 
+const (
+	dbFileName  = "db.bolt"
+	walDirName  = "wal"
+	pidLockName = "pid.lock"
+)
+
 var (
 	// ErrKeyNotFound is a sentinel error for missing keys.
 	ErrKeyNotFound      = errors.New("key not found")
+	ErrBucketNotFound   = errors.New("bucket not found")
 	ErrInCloseProcess   = errors.New("in-close process")
 	ErrDatabaseDirInUse = errors.New("pid.lock is held by another process")
 )
@@ -39,6 +46,8 @@ type Engine struct {
 	fileLock              *flock.Flock
 	recoveredEntriesCount int
 
+	startMetadata Metadata
+
 	// used in testing
 	Callback func()
 
@@ -54,8 +63,8 @@ type Engine struct {
 func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, error) {
 	// Define paths for WAL & BoltDB
 	nsDir := filepath.Join(baseDir, namespace)
-	walDir := filepath.Join(nsDir, "wal")
-	dbFile := filepath.Join(nsDir, "db.bolt")
+	walDir := filepath.Join(nsDir, walDirName)
+	dbFile := filepath.Join(nsDir, dbFileName)
 
 	if _, err := os.Stat(nsDir); err != nil {
 		if err := os.MkdirAll(nsDir, os.ModePerm); err != nil {
@@ -63,7 +72,7 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 		}
 	}
 
-	fileLock := flock.New(filepath.Join(nsDir, "pid.lock"))
+	fileLock := flock.New(filepath.Join(nsDir, pidLockName))
 	locked, err := fileLock.TryLock()
 	if err != nil {
 		return nil, err
@@ -85,18 +94,10 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 		return nil, err
 	}
 
-	// Create namespace bucket in BoltDB
-	err = db.Update(func(tx *bbolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte(namespace))
-		if err != nil {
-			return err
-		}
-		_, err = tx.CreateBucketIfNotExists(walCheckPointBucket)
-		return err
-	})
-	if err != nil {
+	if err := createMetadataBucket(db, namespace); err != nil {
 		return nil, err
 	}
+
 	config := sc
 	if config == nil {
 		config = DefaultConfig()
@@ -108,9 +109,10 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 		return nil, errors.New("arena size too small min size 2 KB")
 	}
 
-	memTable := newMemTable(config.ArenaSize)
+	mTable := newMemTable(config.ArenaSize)
 	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001) // 1M keys, 0.01% false positives
 	signal := make(chan struct{}, 2)
+
 	// Create storage engine
 	engine := &Engine{
 		namespace:     namespace,
@@ -120,7 +122,7 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 		queueChan:     signal,
 		storageConfig: *config,
 		fileLock:      fileLock,
-		memTable:      memTable,
+		memTable:      mTable,
 		bloom:         bloomFilter,
 		Callback:      func() {},
 		wg:            &sync.WaitGroup{},
@@ -128,20 +130,48 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 
 	// background task:
 	engine.processFlushQueue(engine.wg, signal)
-	// Recover WAL logs and bloom filter on startup
-	err = engine.loadBloomFilter()
-	if err != nil && !errors.Is(err, ErrKeyNotFound) {
+	if err := engine.loadMetaValues(); err != nil {
 		return nil, err
 	}
 
-	slog.Info("Recovering WAL...", "namespace", namespace)
-	count, err := engine.recoverWAL()
-	if err != nil {
-		slog.Error("WAL recovery failed", "err", err)
+	if err := engine.recoverWAL(engine.startMetadata, namespace); err != nil {
+		return nil, err
 	}
-	engine.recoveredEntriesCount = count
 
 	return engine, err
+}
+
+func createMetadataBucket(db *bbolt.DB, namespace string) error {
+	// Create namespace bucket in BoltDB
+	return db.Update(func(tx *bbolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte(namespace))
+		if err != nil {
+			return err
+		}
+		_, err = tx.CreateBucketIfNotExists(walCheckPointBucket)
+		return err
+	})
+}
+
+// loadMetaValues loads meta value that the engine stores.
+func (e *Engine) loadMetaValues() error {
+	// Load Global Counter
+	metadata, err := LoadMetadata(e.db)
+	if err != nil && !errors.Is(err, ErrKeyNotFound) {
+		return err
+	}
+
+	e.startMetadata = metadata
+	// store the global counter
+	e.globalCounter.Store(metadata.Index)
+
+	// Recover WAL logs and bloom filter on startup
+	err = e.loadBloomFilter()
+	if err != nil && !errors.Is(err, ErrKeyNotFound) {
+		return err
+	}
+
+	return nil
 }
 
 // persistKeyValue writes a key-value pair to WAL and MemTable, ensuring durability.
@@ -157,7 +187,9 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 //
 // 5. Store the current Chunk Position in the variable.
 func (e *Engine) persistKeyValue(key []byte, value []byte, op LogOperation, batchID uuid.UUID) error {
+	index := e.globalCounter.Add(1)
 	record := &WalRecord{
+		Index:     index,
 		Operation: op,
 		Key:       key,
 		Value:     value,
@@ -166,7 +198,7 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op LogOperation, batc
 
 	// Encode and compress WAL record
 	encoded := EncodeWalRecord(record)
-	compressed, err := compressLZ4(encoded)
+	compressed, err := CompressLZ4(encoded)
 
 	if err != nil {
 		return err
@@ -190,7 +222,7 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op LogOperation, batc
 		err := e.memTableWrite(key, y.ValueStruct{
 			Meta:  op,
 			Value: memValue,
-		}, chunkPos)
+		}, chunkPos, index)
 
 		if err != nil {
 			return err
@@ -213,11 +245,11 @@ func (e *Engine) MemTableSize() int {
 }
 
 // memTableWrite will write the provided key and value to the memTable.
-func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, chunkPos *wal.ChunkPosition) error {
+func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, chunkPos *wal.ChunkPosition, index uint64) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var err error
-	err = e.memTable.put(key, v, chunkPos)
+	err = e.memTable.put(key, v, chunkPos, index)
 	if err != nil {
 		if errors.Is(err, errArenaSizeWillExceed) {
 			// put the old table in the queue
@@ -229,7 +261,7 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, chunkPos *wal.ChunkP
 			default:
 				slog.Warn("queue signal channel full")
 			}
-			err = e.memTable.put(key, v, chunkPos)
+			err = e.memTable.put(key, v, chunkPos, index)
 			// :(
 			if err != nil {
 				return err
@@ -260,6 +292,11 @@ func (e *Engine) Delete(key []byte) error {
 		return ErrInCloseProcess
 	}
 	return e.persistKeyValue(key, nil, OpDelete, uuid.New())
+}
+
+// LastSeq return Latest Sequence Number of Index.
+func (e *Engine) LastSeq() uint64 {
+	return e.globalCounter.Load()
 }
 
 // Get retrieves a value from MemTable, WAL, or BoltDB.
@@ -329,7 +366,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	// value exists directly in MemTable
 	if chunkPos == nil {
 		// Decompress data
-		data, err := decompressLZ4(value)
+		data, err := DecompressLZ4(value)
 
 		if err != nil {
 			return nil, fmt.Errorf("decompression failed for key %s: %w", string(key), err)
@@ -346,7 +383,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("WAL read failed for key %s: %w", string(key), err)
 	}
 
-	data, err := decompressLZ4(walValue)
+	data, err := DecompressLZ4(walValue)
 	if err != nil {
 		return nil, fmt.Errorf("WAL decompression failed for key %s: %w", string(key), err)
 	}

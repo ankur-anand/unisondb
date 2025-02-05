@@ -19,38 +19,36 @@ type WalReader interface {
 
 // NewWalReader returns a new instance of WalReader, allowing the caller to
 // access WAL logs for replication, recovery, or log processing.
+//
+// nolint:ireturn
 func (e *Engine) NewWalReader() WalReader {
 	return e.wal
 }
 
 // recoverWAL starts from the last stored sequence in BoltDB.
-func (e *Engine) recoverWAL() (int, error) {
-	slog.Info("Recovering WAL...", "namespace", e.namespace)
-
-	chunkPosition, err := loadChunkPosition(e.db)
-	if err != nil {
-		return 0, err
-	}
-
+func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
+	slog.Info("Recovering WAL...", "namespace", namespace)
 	var reader *wal.Reader
+	var err error
 	ignoreFirstChunk := false
-	// if the chunkPosition is nil
+
+	// if the index is zero
 	// maybe in first run itself, we never crossed the arena limit, and it was never flushed.
 	// or the db file was new, somehow.
 	// in both the case try loading the entire wal.
-	if chunkPosition == nil {
-		slog.Info("WAL Chunk Position is nil. Loading the Complete WAL...")
+	if metadata.Index == 0 {
+		slog.Info("WAL Index Position is 0. Loading the Complete WAL...", "namespace", namespace)
 		reader = e.wal.NewReader()
 	}
 
-	if chunkPosition != nil {
+	if metadata.Index != 0 {
 		// recovery should happen from last chunk position + 1.
 		ignoreFirstChunk = true
-		slog.Info("Starting WAL replay from index ..", "segment", chunkPosition.SegmentId, "offset", chunkPosition.ChunkOffset)
+		slog.Info("Starting WAL replay from index ..", "index", metadata.Index, "segment", metadata.Pos.SegmentId, "offset", metadata.Pos.ChunkOffset, "namespace", namespace)
 
-		reader, err = e.wal.NewReaderWithStart(chunkPosition)
+		reader, err = e.wal.NewReaderWithStart(metadata.Pos)
 		if err != nil {
-			return 0, err
+			return err
 		}
 	}
 
@@ -68,9 +66,9 @@ func (e *Engine) recoverWAL() (int, error) {
 		}
 
 		// decompress the data
-		data, err := decompressLZ4(val)
+		data, err := DecompressLZ4(val)
 		if err != nil {
-			slog.Error("Skipping unreadable WAL entry:", "pos", pos, "err", err)
+			slog.Error("Skipping unreadable WAL entry:", "pos", pos, "err", err, "namespace", namespace)
 			continue
 		}
 
@@ -91,12 +89,14 @@ func (e *Engine) recoverWAL() (int, error) {
 			err = e.memTableWrite(record.Key, y.ValueStruct{
 				Meta:  record.Operation,
 				Value: memValue,
-			}, pos)
+			}, pos, e.globalCounter.Add(1))
 			if err != nil {
-				return recordCount, err
+				return err
 			}
 		}
 	}
-	slog.Info("WAL Recovery Completed", "namespace", e.namespace, "record-count", recordCount)
-	return recordCount, nil
+
+	slog.Info("WAL Recovery Completed", "namespace", namespace, "record-count", recordCount)
+	e.recoveredEntriesCount = recordCount
+	return nil
 }

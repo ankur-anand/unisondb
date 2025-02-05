@@ -50,7 +50,7 @@ type WalRecord struct {
 	BatchID   uuid.UUID    // Batch identifier for atomic commits
 }
 
-// EncodeWalRecord  serializes  record into bytes
+// EncodeWalRecord  serializes  record into bytes.
 func EncodeWalRecord(record *WalRecord) []byte {
 	keySize := len(record.Key)
 	valueSize := len(record.Value)

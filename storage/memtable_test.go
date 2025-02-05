@@ -85,7 +85,7 @@ func TestMemTable_PutAndGet(t *testing.T) {
 		t.Fatalf("expected canPut to return true for key %q", key)
 	}
 
-	err := table.put(key, val, pos)
+	err := table.put(key, val, pos, 1)
 	assert.NoError(t, err, "unexpected error on put")
 
 	gotVal := table.get(key)
@@ -111,7 +111,7 @@ func TestMemTable_CannotPut(t *testing.T) {
 	pos := &wal.ChunkPosition{SegmentId: 1}
 
 	// should not panic
-	err := table.put(key, val, pos)
+	err := table.put(key, val, pos, 1)
 	if !errors.Is(err, errArenaSizeWillExceed) {
 		t.Fatalf("expected error %q, got %v", errArenaSizeWillExceed, err)
 	}
@@ -163,7 +163,7 @@ func TestFlush_Success(t *testing.T) {
 		encoded := EncodeWalRecord(&walRecord)
 
 		// compress
-		data, err := compressLZ4(encoded)
+		data, err := CompressLZ4(encoded)
 		assert.NoError(t, err)
 
 		walPos, err := walInstance.Write(data)
@@ -273,7 +273,7 @@ func TestFlush_Deletes(t *testing.T) {
 	encoded := EncodeWalRecord(&walRecord)
 
 	// compress
-	data, err := compressLZ4(encoded)
+	data, err := CompressLZ4(encoded)
 	assert.NoError(t, err)
 
 	walPos, err := walInstance.Write(data)
@@ -331,7 +331,7 @@ func TestFlush_WALLookup(t *testing.T) {
 	// encode
 	encoded := EncodeWalRecord(&record)
 	// compress
-	data, err := compressLZ4(encoded)
+	data, err := CompressLZ4(encoded)
 	assert.NoError(t, err)
 	walPos, err := walInstance.Write(data)
 	assert.NoError(t, err)
@@ -375,6 +375,7 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 	table := newMemTable(200 * wal.KB)
 	// Encode and write WAL record
 	walRecord := WalRecord{
+		Index:     1,
 		Operation: OpInsert,
 		Key:       key,
 		Value:     value,
@@ -383,14 +384,14 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 	encoded := EncodeWalRecord(&walRecord)
 
 	// compress
-	data, err := compressLZ4(encoded)
+	data, err := CompressLZ4(encoded)
 	assert.NoError(t, err)
 	pos := &wal.ChunkPosition{SegmentId: 1}
 	// Store WAL ChunkPosition in MemTable
 	err = table.put(key, y.ValueStruct{
 		Meta:  0,
 		Value: append([]byte{1}, data...), // Storing WAL position
-	}, pos)
+	}, pos, 100)
 
 	assert.NoError(t, err, "error putting data")
 
@@ -423,10 +424,14 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 	close(signal)
 	wg.Wait()
 
-	position, err := loadChunkPosition(engine.db)
+	metadata, err := LoadMetadata(engine.db)
 	assert.NoError(t, err, "error loading chunk position")
-	if position.SegmentId != 1 {
-		t.Errorf("error loading chunk position, expected 1, got %d", position.SegmentId)
+	if metadata.Pos.SegmentId != 1 {
+		t.Errorf("error loading chunk position, expected 1, got %d", metadata.Pos.SegmentId)
+	}
+
+	if metadata.Index != 100 {
+		t.Errorf("error loading index position, expected 100, got %d", metadata.Index)
 	}
 }
 
@@ -453,14 +458,14 @@ func TestProcessFlushQueue(t *testing.T) {
 	encoded := EncodeWalRecord(&walRecord)
 
 	// compress
-	data, err := compressLZ4(encoded)
+	data, err := CompressLZ4(encoded)
 	assert.NoError(t, err)
 	pos := &wal.ChunkPosition{SegmentId: 1, ChunkOffset: 10}
 	// Store WAL ChunkPosition in MemTable
 	err = table.put(key, y.ValueStruct{
 		Meta:  0,
-		Value: append([]byte{1}, data...), // Storing WAL position
-	}, pos)
+		Value: append([]byte{1}, data...), // Storing WAL metadata
+	}, pos, 1)
 
 	assert.NoError(t, err, "error putting data")
 
@@ -497,9 +502,9 @@ func TestProcessFlushQueue(t *testing.T) {
 	wg.Wait()
 
 	// verify that the checkpoint has been created
-	position, err := loadChunkPosition(engine.db)
-	assert.NoError(t, err, "error loading chunk position")
-	if position.SegmentId != 1 && position.ChunkOffset != 10 {
-		t.Errorf("error loading chunk position, expected 10, got %d", position.ChunkOffset)
+	metadata, err := LoadMetadata(engine.db)
+	assert.NoError(t, err, "error loading chunk metadata")
+	if metadata.Pos.SegmentId != 1 && metadata.Pos.ChunkOffset != 10 {
+		t.Errorf("error loading chunk metadata, expected 10, got %d", metadata.Pos.ChunkOffset)
 	}
 }
