@@ -26,4 +26,4 @@ jobs:
         run: go list -f "{{.Dir}}" ./... | grep -v proto | xargs golangci-lint run
 
       - name: Run go test
-        run: go test -v -race -covermode atomic ./...
+        run: go test -v -race -covermode atomic $(go list ./... | grep -v  proto)
