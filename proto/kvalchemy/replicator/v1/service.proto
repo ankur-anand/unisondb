@@ -10,7 +10,7 @@ service WALReplicationService {
 }
 
 message StreamWALRequest {
-  optional Metadata last_seen_metadata = 1; // Last applied WAL checkpoint
+  optional bytes metadata = 2; // Last applied WAL checkpoint
 }
 
 // Server's Response Message (Streaming)
@@ -21,15 +21,13 @@ message StreamWALResponse {
 
 // WAL Record Format
 message WALRecord {
-  Metadata metadata = 1;
+  bytes metadata = 1;
   bytes compressed_data = 2;        // Compressed WAL entry (LZ4)
 
   bool is_chunked = 3;              // Is this part of a chunked WAL entry?
   uint32 chunk_index = 4;           // Chunk number in the sequence
-  uint32 total_chunks = 5;          // Total chunks in this WAL entry
+  string chunk_type = 5;            // start and end of chunk marker.
+
+  fixed32 checksum = 6;
 }
 
-// Metadata for tracking WAL state
-message Metadata {
-  bytes record = 1;
-}
