@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/dgraph-io/badger/v4/skl"
 	"github.com/dgraph-io/badger/v4/y"
@@ -153,25 +154,14 @@ func TestFlush_Success(t *testing.T) {
 		key := []byte("key_" + strconv.Itoa(i))
 		value := []byte("value_" + strconv.Itoa(i))
 
-		// Encode and write WAL record
-		walRecord := WalRecord{
-			Operation: OpInsert,
-			Key:       key,
-			Value:     value,
-		}
-
-		encoded := EncodeWalRecord(&walRecord)
-
-		// compress
-		data, err := CompressLZ4(encoded)
-		assert.NoError(t, err)
-
-		walPos, err := walInstance.Write(data)
+		record, err := FbEncode(uint64(i), key, value, wrecord.LogOperationOpInsert, nil)
+		assert.NoError(t, err, "failed to encode record")
+		walPos, err := walInstance.Write(record)
 		assert.NoError(t, err)
 
 		// Store WAL ChunkPosition in MemTable
 		memTable.Put(y.KeyWithTs(key, 0), y.ValueStruct{
-			Meta:  0,
+			Meta:  1,
 			Value: append([]byte{0}, walPos.Encode()...), // Storing WAL position
 		})
 	}
@@ -188,7 +178,9 @@ func TestFlush_Success(t *testing.T) {
 			key := []byte("key_" + strconv.Itoa(i))
 			val := bucket.Get(key)
 			assert.NotNil(t, val)
-			assert.Equal(t, []byte("value_"+strconv.Itoa(i)), val)
+			data, err := DecompressLZ4(val)
+			assert.NoError(t, err)
+			assert.Equal(t, []byte("value_"+strconv.Itoa(i)), data)
 		}
 		return nil
 	})
@@ -264,16 +256,7 @@ func TestFlush_Deletes(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	// Encode and write WAL record
-	walRecord := WalRecord{
-		Operation: OpDelete,
-		Key:       []byte("delete_me"),
-	}
-
-	encoded := EncodeWalRecord(&walRecord)
-
-	// compress
-	data, err := CompressLZ4(encoded)
+	data, err := FbEncode(1, []byte("delete_me"), nil, wrecord.LogOperationOpDelete, nil)
 	assert.NoError(t, err)
 
 	walPos, err := walInstance.Write(data)
@@ -281,7 +264,7 @@ func TestFlush_Deletes(t *testing.T) {
 
 	// Store WAL ChunkPosition in MemTable
 	memTable.Put(y.KeyWithTs([]byte("delete_me"), 0), y.ValueStruct{
-		Meta:  OpDelete,
+		Meta:  byte(wrecord.LogOperationOpDelete),
 		Value: append([]byte{0}, walPos.Encode()...), // Storing WAL position
 	})
 
@@ -322,16 +305,7 @@ func TestFlush_WALLookup(t *testing.T) {
 
 	key := []byte("wal_key")
 	value := []byte("wal_value")
-	record := WalRecord{
-		Key:       key,
-		Value:     value,
-		Operation: OpInsert,
-	}
-
-	// encode
-	encoded := EncodeWalRecord(&record)
-	// compress
-	data, err := CompressLZ4(encoded)
+	data, err := FbEncode(1, key, value, wrecord.LogOperationOpInsert, nil)
 	assert.NoError(t, err)
 	walPos, err := walInstance.Write(data)
 	assert.NoError(t, err)
@@ -353,7 +327,9 @@ func TestFlush_WALLookup(t *testing.T) {
 
 		val := bucket.Get([]byte("wal_key"))
 		assert.NotNil(t, val)
-		assert.Equal(t, []byte("wal_value"), val)
+		data, err := DecompressLZ4(val)
+		assert.NoError(t, err)
+		assert.Equal(t, []byte("wal_value"), data)
 		return nil
 	})
 	assert.NoError(t, err)
@@ -373,18 +349,8 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 	value := []byte("wal_value")
 
 	table := newMemTable(200 * wal.KB)
-	// Encode and write WAL record
-	walRecord := WalRecord{
-		Index:     1,
-		Operation: OpInsert,
-		Key:       key,
-		Value:     value,
-	}
 
-	encoded := EncodeWalRecord(&walRecord)
-
-	// compress
-	data, err := CompressLZ4(encoded)
+	data, err := FbEncode(1, key, value, wrecord.LogOperationOpInsert, nil)
 	assert.NoError(t, err)
 	pos := &wal.ChunkPosition{SegmentId: 1}
 	// Store WAL ChunkPosition in MemTable
@@ -413,8 +379,10 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 		bucket := tx.Bucket([]byte(engine.namespace))
 		assert.NotNil(t, bucket)
 
-		storedValue := bucket.Get(key)
-		assert.Equal(t, value, storedValue)
+		val := bucket.Get(key)
+		data, err := DecompressLZ4(val)
+		assert.NoError(t, err)
+		assert.Equal(t, []byte("wal_value"), data)
 
 		return nil
 	})
@@ -448,17 +416,9 @@ func TestProcessFlushQueue(t *testing.T) {
 	value := []byte("wal_value")
 
 	table := newMemTable(200 * wal.KB)
-	// Encode and write WAL record
-	walRecord := WalRecord{
-		Operation: OpInsert,
-		Key:       key,
-		Value:     value,
-	}
-
-	encoded := EncodeWalRecord(&walRecord)
 
 	// compress
-	data, err := CompressLZ4(encoded)
+	data, err := FbEncode(1, key, value, wrecord.LogOperationOpInsert, nil)
 	assert.NoError(t, err)
 	pos := &wal.ChunkPosition{SegmentId: 1, ChunkOffset: 10}
 	// Store WAL ChunkPosition in MemTable
@@ -490,8 +450,10 @@ func TestProcessFlushQueue(t *testing.T) {
 		bucket := tx.Bucket([]byte(engine.namespace))
 		assert.NotNil(t, bucket)
 
-		storedValue := bucket.Get(key)
-		assert.Equal(t, value, storedValue)
+		val := bucket.Get(key)
+		data, err := DecompressLZ4(val)
+		assert.NoError(t, err)
+		assert.Equal(t, []byte("wal_value"), data)
 
 		return nil
 	})

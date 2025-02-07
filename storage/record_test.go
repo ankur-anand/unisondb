@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/ankur-anand/kvalchemy/storage"
+	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/google/uuid"
 	"github.com/rosedblabs/wal"
 	"github.com/stretchr/testify/assert"
@@ -50,27 +51,21 @@ func TestUnmarshalMetadataHandlesInvalidData(t *testing.T) {
 
 func TestEncodeDecodeWalRecord(t *testing.T) {
 
-	originalRecord := storage.WalRecord{
-		Index:     123456789,
-		Operation: 1, // Example operation
-		Key:       []byte("test_key"),
-		Value:     []byte("test_value"),
-		BatchID:   uuid.New(),
-	}
+	BatchID, err := uuid.New().MarshalBinary()
+	assert.NoError(t, err)
 
-	encoded := storage.EncodeWalRecord(&originalRecord)
+	encoded, err := storage.FbEncode(123456789, []byte("test_key"), []byte("test_value"), wrecord.LogOperationOpInsert, BatchID)
+	assert.NoError(t, err)
 
-	expectedSize := 8 + 1 + 16 + 4 + len(originalRecord.Key) + 4 + len(originalRecord.Value)
-	assert.Equal(t, expectedSize, len(encoded), "Encoded WAL record size mismatch")
-
-	decodedRecord := storage.DecodeWalRecord(encoded)
-
+	record := wrecord.GetRootAsWalRecord(encoded, 0)
+	data, err := storage.DecompressLZ4(record.ValueBytes())
+	assert.NoError(t, err)
 	// Validate that all fields are correctly restored
-	assert.Equal(t, originalRecord.Index, decodedRecord.Index, "WAL Index mismatch")
-	assert.Equal(t, originalRecord.Operation, decodedRecord.Operation, "Operation mismatch")
-	assert.Equal(t, originalRecord.Key, decodedRecord.Key, "Key mismatch")
-	assert.Equal(t, originalRecord.Value, decodedRecord.Value, "Value mismatch")
-	assert.Equal(t, originalRecord.BatchID, decodedRecord.BatchID, "BatchID mismatch")
+	assert.Equal(t, uint64(123456789), record.Index(), "WAL Index mismatch")
+	assert.Equal(t, wrecord.LogOperationOpInsert, record.Operation(), "Operation mismatch")
+	assert.Equal(t, []byte("test_key"), record.KeyBytes(), "Key mismatch")
+	assert.Equal(t, []byte("test_value"), data, "Value mismatch")
+	assert.Equal(t, BatchID, record.BatchIdBytes(), "BatchID mismatch")
 }
 
 func TestDecodeWalRecordHandlesInvalidData(t *testing.T) {
@@ -83,5 +78,5 @@ func TestDecodeWalRecordHandlesInvalidData(t *testing.T) {
 	}()
 
 	// This should panic due to invalid input size
-	_ = storage.DecodeWalRecord(invalidData)
+	_ = wrecord.GetRootAsWalRecord(invalidData, 0)
 }

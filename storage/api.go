@@ -20,14 +20,3 @@ func newWALOptions(dirPath string) wal.Options {
 		BytesPerSync: defaultBytesPerSync,
 	}
 }
-
-// LogOperation represents the type of WAL operation.
-type LogOperation = byte
-
-const (
-	OpNoop        LogOperation = iota // Noop
-	OpInsert                          // Insert operation
-	OpDelete                          // Delete operation
-	OpBatchStart                      // OnBatchStart
-	OpBatchCommit                     // Marks batch commit
-)

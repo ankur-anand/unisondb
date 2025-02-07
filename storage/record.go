@@ -2,8 +2,10 @@ package storage
 
 import (
 	"encoding/binary"
+	"fmt"
 
-	"github.com/google/uuid"
+	"github.com/ankur-anand/kvalchemy/storage/wrecord"
+	flatbuffers "github.com/google/flatbuffers/go"
 	"github.com/rosedblabs/wal"
 )
 
@@ -41,77 +43,43 @@ func UnmarshalMetadata(data []byte) Metadata {
 	}
 }
 
-// WalRecord represents a WAL entry.
-type WalRecord struct {
-	Index     uint64       // index of the
-	Operation LogOperation // Operation type
-	Key       []byte       // Key in WAL
-	Value     []byte       // Value in WAL
-	BatchID   uuid.UUID    // Batch identifier for atomic commits
-}
+func FbEncode(index uint64, key []byte, value []byte, op wrecord.LogOperation, batchID []byte) ([]byte, error) {
+	initSize := 1 + len(key) + len(value)
+	builder := flatbuffers.NewBuilder(initSize)
 
-// EncodeWalRecord  serializes  record into bytes.
-func EncodeWalRecord(record *WalRecord) []byte {
-	keySize := len(record.Key)
-	valueSize := len(record.Value)
-	totalSize := 8 + 1 + 16 + 4 + keySize + 4 + valueSize
+	keyOffset := builder.CreateByteVector(key)
 
-	buf := make([]byte, totalSize)
-	index := 0
-
-	binary.LittleEndian.PutUint64(buf[index:index+8], record.Index)
-	index += 8
-
-	buf[index] = record.Operation
-	index++
-
-	batchIDBytes, _ := record.BatchID.MarshalBinary()
-	copy(buf[index:index+16], batchIDBytes)
-	index += 16
-
-	binary.LittleEndian.PutUint32(buf[index:index+4], uint32(keySize))
-	index += 4
-	copy(buf[index:index+keySize], record.Key)
-	index += keySize
-
-	binary.LittleEndian.PutUint32(buf[index:index+4], uint32(valueSize))
-	index += 4
-	copy(buf[index:], record.Value)
-
-	return buf
-}
-
-// DecodeWalRecord deserializes bytes into a `WalRecord` struct.
-func DecodeWalRecord(buf []byte) *WalRecord {
-	index := 0
-	logIndex := binary.LittleEndian.Uint64(buf[index : index+8])
-	index += 8
-
-	operation := buf[index]
-	index++
-
-	var batchID uuid.UUID
-	_ = batchID.UnmarshalBinary(buf[index : index+16])
-	index += 16
-
-	keySize := binary.LittleEndian.Uint32(buf[index : index+4])
-	index += 4
-
-	key := make([]byte, keySize)
-	copy(key, buf[index:index+int(keySize)])
-	index += int(keySize)
-
-	valueSize := binary.LittleEndian.Uint32(buf[index : index+4])
-	index += 4
-
-	value := make([]byte, valueSize)
-	copy(value, buf[index:])
-
-	return &WalRecord{
-		Index:     logIndex,
-		Operation: operation,
-		Key:       key,
-		Value:     value,
-		BatchID:   batchID,
+	// Ensure valueOffset is always valid
+	var valueOffset flatbuffers.UOffsetT
+	if len(value) > 0 {
+		compressValue, err := CompressLZ4(value)
+		if err != nil {
+			return nil, fmt.Errorf("compress lz4: %w", err)
+		}
+		valueOffset = builder.CreateByteVector(compressValue)
+	} else {
+		valueOffset = builder.CreateByteVector([]byte{}) // Assign an empty vector
 	}
+
+	// Ensure batchOffset is always valid
+	var batchOffset flatbuffers.UOffsetT
+	if len(batchID) > 0 {
+		batchOffset = builder.CreateByteVector(batchID)
+	} else {
+		batchOffset = builder.CreateByteVector([]byte{}) // Assign an empty vector
+	}
+
+	// Start building the WAL Record
+	wrecord.WalRecordStart(builder)
+	wrecord.WalRecordAddIndex(builder, index)
+	wrecord.WalRecordAddOperation(builder, op)
+	wrecord.WalRecordAddKey(builder, keyOffset)
+	wrecord.WalRecordAddValue(builder, valueOffset)
+	wrecord.WalRecordAddBatchId(builder, batchOffset)
+	walRecordOffset := wrecord.WalRecordEnd(builder)
+
+	// Finish FlatBuffer
+	builder.Finish(walRecordOffset)
+
+	return builder.FinishedBytes(), nil
 }

@@ -12,10 +12,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/gofrs/flock"
-	"github.com/google/uuid"
 	"github.com/rosedblabs/wal"
 	"go.etcd.io/bbolt"
 )
@@ -186,41 +186,33 @@ func (e *Engine) loadMetaValues() error {
 //   - Updates the Bloom filter for quick existence checks.
 //
 // 5. Store the current Chunk Position in the variable.
-func (e *Engine) persistKeyValue(key []byte, value []byte, op LogOperation, batchID uuid.UUID) error {
+func (e *Engine) persistKeyValue(key []byte, value []byte, op wrecord.LogOperation, batchID []byte) error {
 	index := e.globalCounter.Add(1)
-	record := &WalRecord{
-		Index:     index,
-		Operation: op,
-		Key:       key,
-		Value:     value,
-		BatchID:   batchID,
-	}
 
 	// Encode and compress WAL record
-	encoded := EncodeWalRecord(record)
-	compressed, err := CompressLZ4(encoded)
+	record, err := FbEncode(index, key, value, op, batchID)
 
 	if err != nil {
 		return err
 	}
 
 	// Write to WAL
-	chunkPos, err := e.wal.Write(compressed)
+	chunkPos, err := e.wal.Write(record)
 	if err != nil {
 		return err
 	}
 
 	// Store in MemTable
-	if op == OpInsert || op == OpDelete {
+	if op == wrecord.LogOperationOpInsert || op == wrecord.LogOperationOpDelete {
 		var memValue []byte
 		if int64(len(value)) <= e.storageConfig.ValueThreshold {
-			memValue = append([]byte{1}, compressed...) // Directly store small values
+			memValue = append([]byte{1}, record...) // Directly store small values
 		} else {
 			memValue = append([]byte{0}, chunkPos.Encode()...) // Store WAL reference
 		}
 
 		err := e.memTableWrite(key, y.ValueStruct{
-			Meta:  op,
+			Meta:  byte(op),
 			Value: memValue,
 		}, chunkPos, index)
 
@@ -283,7 +275,7 @@ func (e *Engine) Put(key, value []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	return e.persistKeyValue(key, value, OpInsert, uuid.New())
+	return e.persistKeyValue(key, value, wrecord.LogOperationOpInsert, nil)
 }
 
 // Delete removes a key and its value pair from WAL and MemTable.
@@ -291,7 +283,7 @@ func (e *Engine) Delete(key []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	return e.persistKeyValue(key, nil, OpDelete, uuid.New())
+	return e.persistKeyValue(key, nil, wrecord.LogOperationOpDelete, nil)
 }
 
 // LastSeq return Latest Sequence Number of Index.
@@ -327,7 +319,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 
 	// if the mem table doesn't have this key associated action or log.
 	// directly go to the boltdb to fetch the same.
-	if it.Meta == OpNoop {
+	if it.Meta == byte(wrecord.LogOperationOpNoop) {
 		var result []byte
 		err := e.db.View(func(tx *bbolt.Tx) error {
 			b := tx.Bucket([]byte(e.namespace))
@@ -352,7 +344,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	}
 
 	// key deleted
-	if it.Meta == OpDelete {
+	if it.Meta == byte(wrecord.LogOperationOpDelete) {
 		return nil, ErrKeyNotFound
 	}
 
@@ -365,16 +357,9 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 
 	// value exists directly in MemTable
 	if chunkPos == nil {
+		record := wrecord.GetRootAsWalRecord(value, 0)
 		// Decompress data
-		data, err := DecompressLZ4(value)
-
-		if err != nil {
-			return nil, fmt.Errorf("decompression failed for key %s: %w", string(key), err)
-		}
-
-		// Decode WAL Record
-		record := DecodeWalRecord(data)
-		return record.Value, nil
+		return DecompressLZ4(record.ValueBytes())
 	}
 
 	// Retrieve from WAL using ChunkPosition
@@ -383,14 +368,9 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("WAL read failed for key %s: %w", string(key), err)
 	}
 
-	data, err := DecompressLZ4(walValue)
-	if err != nil {
-		return nil, fmt.Errorf("WAL decompression failed for key %s: %w", string(key), err)
-	}
+	record := wrecord.GetRootAsWalRecord(walValue, 0)
 
-	record := DecodeWalRecord(data)
-
-	return record.Value, nil
+	return DecompressLZ4(record.ValueBytes())
 }
 
 func (e *Engine) saveBloomFilter() error {
