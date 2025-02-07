@@ -33,4 +33,7 @@ lint-check-deps:
 		go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.61.0;\
 	fi
 
+.PHONY: gen-fb
+gen-fb:
+	@flatc --go flatbuffer.fbs
 
