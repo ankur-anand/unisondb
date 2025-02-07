@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/dgraph-io/badger/v4/skl"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/rosedblabs/wal"
@@ -244,7 +245,7 @@ func flushMemTable(namespace string, currentTable *skl.Skiplist, db *bbolt.DB, w
 //nolint:unused
 func processMemTableEntry(bucket *bbolt.Bucket, key []byte, entry y.ValueStruct, wal *wal.WAL) error {
 	// Handle deletion
-	if entry.Meta == OpDelete {
+	if entry.Meta == byte(wrecord.LogOperationOpDelete) {
 		if err := bucket.Delete(key); err != nil {
 			return fmt.Errorf("failed to delete key %s: %w", string(key), err)
 		}
@@ -252,21 +253,15 @@ func processMemTableEntry(bucket *bbolt.Bucket, key []byte, entry y.ValueStruct,
 	}
 
 	// Decode entry (could be a direct value or ChunkPosition)
-	chunkPos, value, err := decodeChunkPositionWithValue(entry.Value)
+	chunkPos, data, err := decodeChunkPositionWithValue(entry.Value)
 	if err != nil {
 		return fmt.Errorf("failed to decode MemTable entry for key %s: %w", string(key), err)
 	}
 
 	// If value is directly in MemTable
 	if chunkPos == nil {
-		data, err := DecompressLZ4(value)
-		if err != nil {
-			return fmt.Errorf("failed to decompress MemTable entry for key %s: %w", string(key), err)
-		}
-
-		record := DecodeWalRecord(data)
-
-		return bucket.Put(record.Key, record.Value)
+		record := wrecord.GetRootAsWalRecord(data, 0)
+		return bucket.Put(record.KeyBytes(), record.ValueBytes())
 	}
 
 	// If value is in WAL (ChunkPosition)
@@ -275,12 +270,6 @@ func processMemTableEntry(bucket *bbolt.Bucket, key []byte, entry y.ValueStruct,
 		return fmt.Errorf("WAL read failed for key %s: %w", string(key), err)
 	}
 
-	data, err := DecompressLZ4(walValue)
-	if err != nil {
-		return fmt.Errorf("failed to decompress WAL entry for key %s: %w", string(key), err)
-	}
-
-	record := DecodeWalRecord(data)
-
-	return bucket.Put(record.Key, record.Value)
+	record := wrecord.GetRootAsWalRecord(walValue, 0)
+	return bucket.Put(record.KeyBytes(), record.ValueBytes())
 }

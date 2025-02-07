@@ -1,6 +1,7 @@
 package logchunk
 
 import (
+	"errors"
 	"fmt"
 	"hash/crc32"
 
@@ -60,10 +61,10 @@ func DetermineChunkType(start, end, totalSize int) string {
 	return "ChunkTypeMiddle"
 }
 
-// AssembleChunks reconstructs the original data from chunked WAL records
+// AssembleChunks reconstructs the original data from chunked WAL records.
 func AssembleChunks(chunks []*v1.WALRecord) ([]byte, error) {
 	if len(chunks) == 0 {
-		return nil, fmt.Errorf("no chunks provided")
+		return nil, errors.New("no chunks provided")
 	}
 
 	// Verify checksum
@@ -79,13 +80,13 @@ func AssembleChunks(chunks []*v1.WALRecord) ([]byte, error) {
 
 	// Validate full assembled data against checksum
 	if ComputeChecksum(data) != expectedChecksum {
-		return nil, fmt.Errorf("final checksum mismatch")
+		return nil, errors.New("final checksum mismatch")
 	}
 
 	return data, nil
 }
 
-// ComputeChecksum calculates CRC32 checksum
+// ComputeChecksum calculates CRC32 checksum.
 func ComputeChecksum(data []byte) uint32 {
 	return crc32.ChecksumIEEE(data)
 }

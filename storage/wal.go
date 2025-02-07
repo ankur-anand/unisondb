@@ -4,6 +4,7 @@ import (
 	"io"
 	"log/slog"
 
+	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/rosedblabs/wal"
 )
@@ -52,10 +53,14 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 		}
 	}
 
+	if reader == nil {
+		panic("can't recover from WAL reader")
+	}
+
 	recordCount := 0
 
 	for {
-		val, pos, err := reader.Next()
+		data, pos, err := reader.Next()
 		if err == io.EOF {
 			break
 		}
@@ -65,29 +70,20 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 			continue
 		}
 
-		// decompress the data
-		data, err := DecompressLZ4(val)
-		if err != nil {
-			slog.Error("Skipping unreadable WAL entry:", "pos", pos, "err", err, "namespace", namespace)
-			continue
-		}
-
-		// build the mem-table,
-		// decode the data
 		recordCount++
-		record := DecodeWalRecord(data)
+		record := wrecord.GetRootAsWalRecord(data, 0)
 
 		// Store in MemTable
-		if record.Operation == OpInsert || record.Operation == OpDelete {
+		if record.Operation() == wrecord.LogOperationOpInsert || record.Operation() == wrecord.LogOperationOpDelete {
 			var memValue []byte
-			if int64(len(val)) <= e.storageConfig.ValueThreshold {
-				memValue = append([]byte{1}, val...) // Directly store small values
+			if int64(len(data)) <= e.storageConfig.ValueThreshold {
+				memValue = append([]byte{1}, data...) // Directly store small values
 			} else {
 				memValue = append([]byte{0}, pos.Encode()...) // Store WAL reference
 			}
 
-			err = e.memTableWrite(record.Key, y.ValueStruct{
-				Meta:  record.Operation,
+			err = e.memTableWrite(record.KeyBytes(), y.ValueStruct{
+				Meta:  byte(record.Operation()),
 				Value: memValue,
 			}, pos, e.globalCounter.Add(1))
 			if err != nil {
