@@ -154,14 +154,21 @@ func TestFlush_Success(t *testing.T) {
 		key := []byte("key_" + strconv.Itoa(i))
 		value := []byte("value_" + strconv.Itoa(i))
 
-		record, err := FbEncode(uint64(i), key, value, wrecord.LogOperationOpInsert, nil)
+		record := walRecord{
+			index: uint64(i),
+			key:   key,
+			value: value,
+			op:    wrecord.LogOperationOpInsert,
+		}
+
+		encodedRecord, err := record.fbEncode()
 		assert.NoError(t, err, "failed to encode record")
-		walPos, err := walInstance.Write(record)
+		walPos, err := walInstance.Write(encodedRecord)
 		assert.NoError(t, err)
 
 		// Store WAL ChunkPosition in MemTable
 		memTable.Put(y.KeyWithTs(key, 0), y.ValueStruct{
-			Meta:  1,
+			Meta:  byte(wrecord.LogOperationOpInsert),
 			Value: append([]byte{0}, walPos.Encode()...), // Storing WAL position
 		})
 	}
@@ -256,7 +263,13 @@ func TestFlush_Deletes(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	data, err := FbEncode(1, []byte("delete_me"), nil, wrecord.LogOperationOpDelete, nil)
+	record := walRecord{
+		index: uint64(1),
+		key:   []byte("delete_me"),
+		op:    wrecord.LogOperationOpDelete,
+	}
+
+	data, err := record.fbEncode()
 	assert.NoError(t, err)
 
 	walPos, err := walInstance.Write(data)
@@ -305,7 +318,13 @@ func TestFlush_WALLookup(t *testing.T) {
 
 	key := []byte("wal_key")
 	value := []byte("wal_value")
-	data, err := FbEncode(1, key, value, wrecord.LogOperationOpInsert, nil)
+	record := walRecord{
+		index: 1,
+		key:   key,
+		value: value,
+		op:    wrecord.LogOperationOpInsert,
+	}
+	data, err := record.fbEncode()
 	assert.NoError(t, err)
 	walPos, err := walInstance.Write(data)
 	assert.NoError(t, err)
@@ -350,7 +369,13 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 
 	table := newMemTable(200 * wal.KB)
 
-	data, err := FbEncode(1, key, value, wrecord.LogOperationOpInsert, nil)
+	record := walRecord{
+		index: 1,
+		key:   key,
+		value: value,
+		op:    wrecord.LogOperationOpInsert,
+	}
+	data, err := record.fbEncode()
 	assert.NoError(t, err)
 	pos := &wal.ChunkPosition{SegmentId: 1}
 	// Store WAL ChunkPosition in MemTable
@@ -417,8 +442,14 @@ func TestProcessFlushQueue(t *testing.T) {
 
 	table := newMemTable(200 * wal.KB)
 
+	record := walRecord{
+		index: 1,
+		key:   key,
+		value: value,
+		op:    wrecord.LogOperationOpInsert,
+	}
 	// compress
-	data, err := FbEncode(1, key, value, wrecord.LogOperationOpInsert, nil)
+	data, err := record.fbEncode()
 	assert.NoError(t, err)
 	pos := &wal.ChunkPosition{SegmentId: 1, ChunkOffset: 10}
 	// Store WAL ChunkPosition in MemTable

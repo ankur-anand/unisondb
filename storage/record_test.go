@@ -56,7 +56,15 @@ func TestEncodeDecodeWalRecord(t *testing.T) {
 	BatchID, err := uuid.New().MarshalBinary()
 	assert.NoError(t, err)
 
-	encoded, err := FbEncode(123456789, []byte("test_key"), []byte("test_value"), wrecord.LogOperationOpInsert, BatchID)
+	wr := walRecord{
+		index:   123456789,
+		key:     []byte("test_key"),
+		value:   []byte("test_value"),
+		op:      wrecord.LogOperationOpInsert,
+		batchID: BatchID,
+	}
+
+	encoded, err := wr.fbEncode()
 	assert.NoError(t, err)
 
 	record := wrecord.GetRootAsWalRecord(encoded, 0)
