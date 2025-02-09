@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"hash/crc32"
 	"path/filepath"
 	"testing"
 
@@ -34,8 +35,9 @@ func TestInsertAndRetrieveFullValue(t *testing.T) {
 
 	key := []byte("test_key")
 	value := []byte("hello world")
-
-	err := insertIntoBoltDB(testNamespace, db, key, value)
+	compressed, err := CompressLZ4(value)
+	assert.NoError(t, err)
+	err = insertIntoBoltDB(testNamespace, db, key, compressed)
 	assert.NoError(t, err, "Failed to insert full value")
 
 	retrievedValue, err := retrieveFromBoltDB(testNamespace, db, key)
@@ -54,7 +56,16 @@ func TestInsertAndRetrieveChunkedValue(t *testing.T) {
 		[]byte("chunk_3"),
 	}
 
-	err := insertChunkIntoBoltDB(testNamespace, db, key, chunks)
+	compressed := make([][]byte, len(chunks))
+	var checksum uint32
+	for i := 0; i < len(chunks); i++ {
+		var err error
+		compressed[i], err = CompressLZ4(chunks[i])
+		checksum = crc32.Update(checksum, crc32.IEEETable, chunks[i])
+		assert.NoError(t, err, "Failed to compress chunk")
+	}
+
+	err := insertChunkIntoBoltDB(testNamespace, db, key, compressed, checksum)
 	assert.NoError(t, err, "Failed to insert chunked value")
 
 	retrievedValue, err := retrieveFromBoltDB(testNamespace, db, key)

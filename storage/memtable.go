@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -217,7 +218,6 @@ func flushMemTable(namespace string, currentTable *skl.Skiplist, db *bbolt.DB, w
 	}
 
 	for it.SeekToFirst(); it.Valid(); it.Next() {
-		
 		count++
 		key := y.ParseKey(it.Key())
 		entry := it.Value()
@@ -227,26 +227,20 @@ func flushMemTable(namespace string, currentTable *skl.Skiplist, db *bbolt.DB, w
 			continue
 		}
 
-		// Decode entry (could be a direct value or ChunkPosition)
-		chunkPos, data, err := decodeChunkPositionWithValue(entry.Value)
+		record, err := getWalRecord(entry, wal)
+
 		if err != nil {
-			return fmt.Errorf("failed to decode MemTable entry for key %s: %w", string(key), err)
+			return err
 		}
 
-		// If value is directly in MemTable
-		if chunkPos == nil {
-			record := wrecord.GetRootAsWalRecord(data, 0)
-			records = append(records, record)
+		if record.Operation() == wrecord.LogOperationOpBatchCommit {
+			err := flushBatchCommit(namespace, db, record, wal)
+			if err != nil {
+				return err
+			}
 			continue
 		}
 
-		// If value is in WAL (ChunkPosition)
-		walValue, err := wal.Read(chunkPos)
-		if err != nil {
-			return fmt.Errorf("WAL read failed for key %s: %w", string(key), err)
-		}
-
-		record := wrecord.GetRootAsWalRecord(walValue, 0)
 		records = append(records, record)
 		// Flush when batch size is reached
 		if len(deleteKeys) >= readBatchSize || len(records) >= readBatchSize {
@@ -257,6 +251,24 @@ func flushMemTable(namespace string, currentTable *skl.Skiplist, db *bbolt.DB, w
 	}
 
 	return processBatch()
+}
+
+func getWalRecord(entry y.ValueStruct, wal *wal.WAL) (*wrecord.WalRecord, error) {
+	chunkPos, value, err := decodeChunkPositionWithValue(entry.Value)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode chunk position: %w", err)
+	}
+
+	if chunkPos == nil {
+		return wrecord.GetRootAsWalRecord(value, 0), nil
+	}
+
+	walValue, err := wal.Read(chunkPos)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read WAL for chunk position: %w", err)
+	}
+
+	return wrecord.GetRootAsWalRecord(walValue, 0), nil
 }
 
 func flushDeletes(namespace string, db *bbolt.DB, keys [][]byte) error {
@@ -286,11 +298,86 @@ func flushRecords(namespace string, db *bbolt.DB, records []*wrecord.WalRecord) 
 		for _, record := range records {
 			key := record.KeyBytes()
 			value := record.ValueBytes()
-			err := bucket.Put(key, value)
+			// to indicate this is a full value, not chunked
+			storedValue := append([]byte{FullValueFlag}, value...)
+			err := bucket.Put(key, storedValue)
 			if err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+}
+
+func flushBatchCommit(namespace string, db *bbolt.DB, record *wrecord.WalRecord, wal *wal.WAL) error {
+	data, checksum, err := reconstructBatchValue(record, wal)
+	if err != nil {
+		return fmt.Errorf("failed to reconstruct batch value: %w", err)
+	}
+
+	return insertChunkIntoBoltDB(namespace, db, record.KeyBytes(), data, checksum)
+}
+
+func reconstructBatchValue(record *wrecord.WalRecord, wal *wal.WAL) ([][]byte, uint32, error) {
+	lastPos := record.LastBatchPosBytes()
+	if len(lastPos) == 0 {
+		return nil, 0, ErrRecordCorrupted
+	}
+
+	pos, err := decodeChunkPos(lastPos)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	sum, err := DecompressLZ4(record.ValueBytes())
+	if err != nil {
+		return nil, 0, err
+	}
+	checksum := unmarshalChecksum(sum)
+
+	data, err := readChunks(wal, pos)
+
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return data, checksum, nil
+}
+
+// readChunksFromWal from Wal without decompressing.
+func readChunks(w *wal.WAL, startPos *wal.ChunkPosition) ([][]byte, error) {
+	if startPos == nil {
+		return nil, ErrInternalError
+	}
+
+	var values [][]byte
+
+	nextPos := startPos
+
+	for {
+		// read the next pos data
+		record, err := w.Read(nextPos)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read WAL at position %+v: %w", nextPos, err)
+		}
+		wr := wrecord.GetRootAsWalRecord(record, 0)
+		value := wr.ValueBytes()
+
+		if wr.Operation() == wrecord.LogOperationOPBatchInsert {
+			values = append(values, value)
+		}
+
+		next := wr.LastBatchPosBytes()
+		// We hit the last record.
+		if next == nil {
+			break
+		}
+
+		nextPos = wal.DecodeChunkPosition(next)
+	}
+
+	// as the data-are read in reverse
+	slices.Reverse(values)
+
+	return values, nil
 }

@@ -345,30 +345,9 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, ErrKeyNotFound
 	}
 
-	// Decode MemTable entry (ChunkPosition or Value)
-	chunkPos, value, err := decodeChunkPositionWithValue(it.Value)
-
+	record, err := getWalRecord(it, e.wal)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode MemTable entry for key %s: %w", string(key), err)
-	}
-
-	var record *wrecord.WalRecord
-
-	switch chunkPos == nil {
-	case true:
-		record = wrecord.GetRootAsWalRecord(value, 0)
-	case false:
-		// Retrieve from WAL using ChunkPosition
-		walValue, err := e.wal.Read(chunkPos)
-		if err != nil {
-			return nil, fmt.Errorf("WAL read failed for key %s: %w", string(key), err)
-		}
-
-		record = wrecord.GetRootAsWalRecord(walValue, 0)
-	}
-
-	if record == nil {
-		return nil, ErrInternalError
+		return nil, err
 	}
 
 	if record.Operation() == wrecord.LogOperationOpBatchCommit {
@@ -430,23 +409,7 @@ func decodeChunkPos(data []byte) (pos *wal.ChunkPosition, err error) {
 
 // Fetch from BoltDB.
 func (e *Engine) getFromBoltDB(key []byte) ([]byte, error) {
-	var result []byte
-	err := e.db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(e.namespace))
-		if b == nil {
-			return fmt.Errorf("bucket %s not found", e.namespace)
-		}
-		v := b.Get(key)
-		if v == nil {
-			return ErrKeyNotFound
-		}
-		result = append([]byte{}, v...) // Copy value
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return result, nil
+	return retrieveFromBoltDB(e.namespace, e.db, key)
 }
 
 func (e *Engine) saveBloomFilter() error {

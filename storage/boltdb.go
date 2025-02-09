@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
 
 	"go.etcd.io/bbolt"
 )
@@ -26,16 +27,16 @@ func insertIntoBoltDB(namespace string, db *bbolt.DB, key, value []byte) error {
 		if b == nil {
 			return ErrBucketNotFound
 		}
-		// Prepend FullValueFlag to indicate this is a full value, not chunked
+		// indicate this is a full value, not chunked
 		storedValue := append([]byte{FullValueFlag}, value...)
 
-		// Store in BoltDB
 		return b.Put(key, storedValue)
 	})
 }
 
 // insertChunkIntoBoltDB stores a chunked key-value pair in BoltDB.
-func insertChunkIntoBoltDB(namespace string, db *bbolt.DB, key []byte, chunks [][]byte) error {
+func insertChunkIntoBoltDB(namespace string, db *bbolt.DB, key []byte, chunks [][]byte, checksum uint32) error {
+
 	return db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(namespace))
 		if b == nil {
@@ -43,9 +44,11 @@ func insertChunkIntoBoltDB(namespace string, db *bbolt.DB, key []byte, chunks []
 		}
 
 		chunkCount := uint32(len(chunks))
-		metaData := make([]byte, 5) // 1 byte for flag + 4 bytes for chunk count
+		// Metadata: 1 byte flag + 4 bytes chunk count + 4 bytes checksum
+		metaData := make([]byte, 9)
 		metaData[0] = ChunkedValueFlag
 		binary.LittleEndian.PutUint32(metaData[1:], chunkCount)
+		binary.LittleEndian.PutUint32(metaData[5:], checksum)
 
 		// chunk metadata
 		if err := b.Put(key, metaData); err != nil {
@@ -80,25 +83,45 @@ func retrieveFromBoltDB(namespace string, db *bbolt.DB, key []byte) ([]byte, err
 		}
 
 		flag := storedValue[0]
-		if flag == FullValueFlag {
-			value = make([]byte, len(storedValue)-1)
-			copy(value, storedValue[1:])
+		switch flag {
+		case FullValueFlag:
+
+			decompressed, err := DecompressLZ4(storedValue[1:])
+			if err != nil {
+				return err
+			}
+			value = make([]byte, len(decompressed))
+			copy(value, decompressed)
 			return nil
-		} else if flag == ChunkedValueFlag {
-			if len(storedValue) < 5 {
+
+		case ChunkedValueFlag:
+			if len(storedValue) < 9 {
 				return ErrInvalidChunkMetadata
 			}
 
-			chunkCount := binary.LittleEndian.Uint32(storedValue[1:])
+			chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
+			storedChecksum := binary.LittleEndian.Uint32(storedValue[5:9])
+			var calculatedChecksum uint32
+
 			fullValue := new(bytes.Buffer)
 
 			for i := 0; i < int(chunkCount); i++ {
 				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
+
 				chunkData := b.Get([]byte(chunkKey))
 				if chunkData == nil {
 					return fmt.Errorf("chunk %d missing", i)
 				}
-				fullValue.Write(chunkData)
+				decompressed, err := DecompressLZ4(chunkData)
+				if err != nil {
+					return err
+				}
+				calculatedChecksum = crc32.Update(calculatedChecksum, crc32.IEEETable, decompressed)
+				fullValue.Write(decompressed)
+			}
+			
+			if calculatedChecksum != storedChecksum {
+				return ErrRecordCorrupted
 			}
 
 			value = make([]byte, fullValue.Len())
