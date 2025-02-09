@@ -73,12 +73,11 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 			ignoreFirstChunk = false
 			continue
 		}
-
 		recordCount++
 		record := wrecord.GetRootAsWalRecord(data, 0)
 
 		// Store in MemTable
-		if record.Operation() == wrecord.LogOperationOpInsert || record.Operation() == wrecord.LogOperationOpDelete {
+		if isMemTableOperation(record.Operation()) {
 			var memValue []byte
 			if int64(len(data)) <= e.storageConfig.ValueThreshold {
 				memValue = append([]byte{1}, data...) // Directly store small values
@@ -99,6 +98,14 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 	slog.Info("WAL Recovery Completed", "namespace", namespace, "record-count", recordCount)
 	e.recoveredEntriesCount = recordCount
 	return nil
+}
+
+func isMemTableOperation(op wrecord.LogOperation) bool {
+	switch op {
+	case wrecord.LogOperationOpInsert, wrecord.LogOperationOpDelete, wrecord.LogOperationOpBatchCommit:
+		return true
+	}
+	return false
 }
 
 // readChunksFromWal from Wal reads the chunks value from the wal entries and return all the chunks value.
