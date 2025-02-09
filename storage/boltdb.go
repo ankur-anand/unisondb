@@ -3,6 +3,7 @@ package storage
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"go.etcd.io/bbolt"
@@ -11,6 +12,11 @@ import (
 const (
 	FullValueFlag    byte = 0
 	ChunkedValueFlag byte = 1
+)
+
+var (
+	ErrInvalidChunkMetadata = errors.New("invalid chunk metadata")
+	ErrInvalidDataFormat    = errors.New("invalid data format")
 )
 
 // insertIntoBoltDB stores a complete key-value pair in BoltDB.
@@ -70,19 +76,17 @@ func retrieveFromBoltDB(namespace string, db *bbolt.DB, key []byte) ([]byte, err
 
 		storedValue := b.Get(key)
 		if storedValue == nil {
-			return fmt.Errorf("key not found")
+			return ErrKeyNotFound
 		}
 
 		flag := storedValue[0]
 		if flag == FullValueFlag {
-
 			value = make([]byte, len(storedValue)-1)
 			copy(value, storedValue[1:])
 			return nil
 		} else if flag == ChunkedValueFlag {
-
 			if len(storedValue) < 5 {
-				return fmt.Errorf("invalid chunk metadata")
+				return ErrInvalidChunkMetadata
 			}
 
 			chunkCount := binary.LittleEndian.Uint32(storedValue[1:])
@@ -102,7 +106,7 @@ func retrieveFromBoltDB(namespace string, db *bbolt.DB, key []byte) ([]byte, err
 			return nil
 		}
 
-		return fmt.Errorf("unknown data format")
+		return ErrInvalidDataFormat
 	})
 
 	return value, err

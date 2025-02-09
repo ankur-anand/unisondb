@@ -44,7 +44,7 @@ func UnmarshalMetadata(data []byte) Metadata {
 	}
 }
 
-// walRecord
+// walRecord.
 type walRecord struct {
 	index uint64
 	key   []byte
@@ -52,7 +52,6 @@ type walRecord struct {
 	op    wrecord.LogOperation
 
 	batchID      []byte
-	chunked      bool
 	lastBatchPos *wal.ChunkPosition
 }
 
@@ -79,9 +78,12 @@ func (w *walRecord) fbEncode() ([]byte, error) {
 	var batchOffset flatbuffers.UOffsetT
 	var lastBatchPosOffset flatbuffers.UOffsetT
 
+	if w.lastBatchPos != nil {
+		lastBatchPosOffset = builder.CreateByteVector(w.lastBatchPos.Encode())
+	}
+
 	if len(w.batchID) > 0 {
 		batchOffset = builder.CreateByteVector(w.batchID)
-		lastBatchPosOffset = builder.CreateByteVector(w.lastBatchPos.Encode())
 	} else {
 		batchOffset = builder.CreateByteVector([]byte{}) // Assign an empty vector
 	}
@@ -96,7 +98,6 @@ func (w *walRecord) fbEncode() ([]byte, error) {
 	wrecord.WalRecordAddValue(builder, valueOffset)
 	wrecord.WalRecordAddBatchId(builder, batchOffset)
 	wrecord.WalRecordAddRecordChecksum(builder, checksum)
-	wrecord.WalRecordAddIsChunked(builder, w.chunked)
 	wrecord.WalRecordAddLastBatchPos(builder, lastBatchPosOffset)
 
 	walRecordOffset := wrecord.WalRecordEnd(builder)
@@ -105,7 +106,6 @@ func (w *walRecord) fbEncode() ([]byte, error) {
 	builder.Finish(walRecordOffset)
 
 	return builder.FinishedBytes(), nil
-
 }
 
 func FbEncode(index uint64, key []byte, value []byte, op wrecord.LogOperation, batchID []byte) ([]byte, error) {

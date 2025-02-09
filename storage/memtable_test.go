@@ -56,8 +56,8 @@ func TestFlusherQueue(t *testing.T) {
 		})
 
 		enq.enqueue(memTable{
-			sList: memTables[i].memTable,
-			pos:   nil,
+			sList:       memTables[i].memTable,
+			currentPost: nil,
 		})
 	}
 
@@ -96,8 +96,8 @@ func TestMemTable_PutAndGet(t *testing.T) {
 	}
 
 	// Verify that the table's WAL position was updated.
-	if table.pos != pos {
-		t.Errorf("expected table pos to be %+v, got %+v", pos, table.pos)
+	if table.currentPost != pos {
+		t.Errorf("expected table currentPost to be %+v, got %+v", pos, table.currentPost)
 	}
 }
 

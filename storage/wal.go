@@ -1,8 +1,11 @@
 package storage
 
 import (
+	"bytes"
+	"hash/crc32"
 	"io"
 	"log/slog"
+	"slices"
 
 	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/dgraph-io/badger/v4/y"
@@ -95,4 +98,87 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 	slog.Info("WAL Recovery Completed", "namespace", namespace, "record-count", recordCount)
 	e.recoveredEntriesCount = recordCount
 	return nil
+}
+
+// readChunksFromWal from Wal reads the chunks value from the wal entries and return all the chunks value.
+func readChunksFromWal(w *wal.WAL, startPos *wal.ChunkPosition) ([][]byte, error) {
+
+	record, err := w.Read(startPos)
+	if err != nil {
+		return nil, err
+	}
+
+	// get the checksums, and next post
+	wr := wrecord.GetRootAsWalRecord(record, 0)
+	startID := wr.BatchIdBytes()
+	sumBytes, err := DecompressLZ4(wr.ValueBytes())
+	if err != nil {
+		return nil, err
+	}
+
+	completeChecksum := unmarshalChecksum(sumBytes)
+
+	var calculatedChecksum uint32
+
+	next := wr.LastBatchPosBytes()
+	if next == nil {
+		return nil, ErrRecordCorrupted
+	}
+
+	nextPos := wal.DecodeChunkPosition(next)
+
+	var decompressValues [][]byte
+
+	for {
+		// read the next pos data
+		record, err := w.Read(nextPos)
+		if err != nil {
+			return nil, err
+		}
+		wr := wrecord.GetRootAsWalRecord(record, 0)
+		value := wr.ValueBytes()
+		id := wr.BatchIdBytes()
+		checksum := wr.RecordChecksum()
+
+		if wr.Operation() != wrecord.LogOperationOPBatchInsert && wr.Operation() != wrecord.LogOperationOpBatchStart {
+			return nil, ErrRecordCorrupted
+		}
+
+		if !bytes.Equal(startID, id) {
+			return nil, ErrRecordCorrupted
+		}
+
+		if wr.Operation() == wrecord.LogOperationOPBatchInsert {
+			decompressed, err := DecompressLZ4(value)
+			if err != nil {
+				return nil, ErrRecordCorrupted
+			}
+
+			if crc32.ChecksumIEEE(decompressed) != checksum {
+				return nil, ErrRecordCorrupted
+			}
+
+			decompressValues = append(decompressValues, decompressed)
+		}
+
+		next := wr.LastBatchPosBytes()
+		// We hit the last record.
+		if next == nil {
+			break
+		}
+
+		nextPos = wal.DecodeChunkPosition(next)
+	}
+
+	// as the data-are read in reverse
+	slices.Reverse(decompressValues)
+	for i := 0; i < len(decompressValues); i++ {
+		calculatedChecksum = crc32.Update(calculatedChecksum, crc32.IEEETable, decompressValues[i])
+	}
+
+	if calculatedChecksum != completeChecksum {
+		return nil, ErrRecordCorrupted
+	}
+
+	return decompressValues, nil
 }

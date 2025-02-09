@@ -11,7 +11,8 @@ const (
 	LogOperationOpInsert      LogOperation = 1
 	LogOperationOpDelete      LogOperation = 2
 	LogOperationOpBatchStart  LogOperation = 3
-	LogOperationOpBatchCommit LogOperation = 4
+	LogOperationOPBatchInsert LogOperation = 4
+	LogOperationOpBatchCommit LogOperation = 5
 )
 
 var EnumNamesLogOperation = map[LogOperation]string{
@@ -19,6 +20,7 @@ var EnumNamesLogOperation = map[LogOperation]string{
 	LogOperationOpInsert:      "OpInsert",
 	LogOperationOpDelete:      "OpDelete",
 	LogOperationOpBatchStart:  "OpBatchStart",
+	LogOperationOPBatchInsert: "OPBatchInsert",
 	LogOperationOpBatchCommit: "OpBatchCommit",
 }
 
@@ -27,6 +29,7 @@ var EnumValuesLogOperation = map[string]LogOperation{
 	"OpInsert":      LogOperationOpInsert,
 	"OpDelete":      LogOperationOpDelete,
 	"OpBatchStart":  LogOperationOpBatchStart,
+	"OPBatchInsert": LogOperationOPBatchInsert,
 	"OpBatchCommit": LogOperationOpBatchCommit,
 }
 

@@ -19,6 +19,11 @@ var (
 	errArenaSizeWillExceed = errors.New("arena size will exceed the limit")
 )
 
+var (
+	directValuePrefix  = []byte{1} // Marks values stored directly in memory
+	walReferencePrefix = []byte{0} // Marks values stored as a reference in WAL
+)
+
 // Add a margin to avoid boundary issues, arena uses the same pool for itself.
 const arenaSafetyMargin = wal.KB
 
@@ -28,11 +33,12 @@ const arenaSafetyMargin = wal.KB
 //
 //nolint:unused
 type memTable struct {
-	sList  *skl.Skiplist
-	pos    *wal.ChunkPosition
-	index  uint64
-	size   int64
-	kCount int
+	sList       *skl.Skiplist
+	currentPost *wal.ChunkPosition
+	firstPos    *wal.ChunkPosition
+	index       uint64
+	size        int64
+	kCount      int
 }
 
 func newMemTable(size int64) *memTable {
@@ -55,7 +61,10 @@ func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.ChunkPosition
 		return errArenaSizeWillExceed
 	}
 	table.sList.Put(y.KeyWithTs(key, 0), val)
-	table.pos = pos
+	if table.firstPos == nil {
+		table.firstPos = pos
+	}
+	table.currentPost = pos
 	table.kCount++
 	table.index = index
 	return nil
@@ -70,9 +79,9 @@ func (table *memTable) keysCount() int {
 }
 
 //nolint:unused
-type flushNode struct {
+type flushQueue struct {
 	mTable *memTable
-	next   *flushNode
+	next   *flushQueue
 }
 
 // flusherQueue holds all the pending mem table that needs to be flushed to persistence store.
@@ -81,7 +90,7 @@ type flushNode struct {
 //nolint:unused
 type flusherQueue struct {
 	mu         sync.Mutex
-	head, tail *flushNode
+	head, tail *flushQueue
 	signal     chan struct{}
 }
 
@@ -96,7 +105,7 @@ func newFlusherQueue(signal chan struct{}) *flusherQueue {
 func (fq *flusherQueue) enqueue(m memTable) {
 	fq.mu.Lock()
 	defer fq.mu.Unlock()
-	node := &flushNode{mTable: &m}
+	node := &flushQueue{mTable: &m}
 	if fq.tail != nil {
 		fq.tail.next = node
 	}
@@ -159,7 +168,7 @@ func (e *Engine) handleFlush() {
 			log.Fatal("Failed to flushMemTable MemTable:", "namespace", e.namespace, "err", err)
 		}
 		// Create WAL checkpoint
-		err = SaveMetadata(e.db, mt.pos, mt.index)
+		err = SaveMetadata(e.db, mt.currentPost, mt.index)
 		if err != nil {
 			log.Fatal("Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
 		}

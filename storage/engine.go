@@ -32,6 +32,7 @@ var (
 	ErrBucketNotFound   = errors.New("bucket not found")
 	ErrInCloseProcess   = errors.New("in-close process")
 	ErrDatabaseDirInUse = errors.New("pid.lock is held by another process")
+	ErrRecordCorrupted  = errors.New("record corrupted")
 )
 
 // Engine manages WAL, MemTable (SkipList), and BoltDB for a given namespace.
@@ -189,28 +190,41 @@ func (e *Engine) loadMetaValues() error {
 func (e *Engine) persistKeyValue(key []byte, value []byte, op wrecord.LogOperation, batchID []byte) error {
 	index := e.globalCounter.Add(1)
 
-	// Encode and compress WAL record
-	record, err := FbEncode(index, key, value, op, batchID)
+	record := walRecord{
+		index:   index,
+		key:     key,
+		value:   value,
+		op:      op,
+		batchID: batchID,
+	}
+
+	encoded, err := record.fbEncode()
 
 	if err != nil {
 		return err
 	}
 
 	// Write to WAL
-	chunkPos, err := e.wal.Write(record)
+	chunkPos, err := e.wal.Write(encoded)
 	if err != nil {
 		return err
 	}
 
-	// Store in MemTable
-	if op == wrecord.LogOperationOpInsert || op == wrecord.LogOperationOpDelete {
-		var memValue []byte
-		if int64(len(value)) <= e.storageConfig.ValueThreshold {
-			memValue = append([]byte{1}, record...) // Directly store small values
-		} else {
-			memValue = append([]byte{0}, chunkPos.Encode()...) // Store WAL reference
-		}
+	var memValue []byte
 
+	switch op {
+	case wrecord.LogOperationOpBatchCommit:
+		memValue = append(directValuePrefix, encoded...)
+
+	case wrecord.LogOperationOpInsert, wrecord.LogOperationOpDelete:
+		if int64(len(value)) <= e.storageConfig.ValueThreshold {
+			memValue = append(directValuePrefix, encoded...) // Store directly
+		} else {
+			memValue = append(walReferencePrefix, chunkPos.Encode()...) // Store reference
+		}
+	}
+
+	if len(memValue) > 0 {
 		err := e.memTableWrite(key, y.ValueStruct{
 			Meta:  byte(op),
 			Value: memValue,
@@ -320,27 +334,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	// if the mem table doesn't have this key associated action or log.
 	// directly go to the boltdb to fetch the same.
 	if it.Meta == byte(wrecord.LogOperationOpNoop) {
-		var result []byte
-		err := e.db.View(func(tx *bbolt.Tx) error {
-			b := tx.Bucket([]byte(e.namespace))
-			if b == nil {
-				return fmt.Errorf("bucket %s not found", e.namespace)
-			}
-
-			v := b.Get(key)
-			if v == nil {
-				return ErrKeyNotFound
-			}
-
-			// copy the value
-			result = append([]byte{}, v...)
-			return nil
-		})
-		if err != nil {
-			return nil, err
-		}
-
-		return result, nil
+		return e.getFromBoltDB(key)
 	}
 
 	// key deleted
@@ -371,6 +365,27 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	record := wrecord.GetRootAsWalRecord(walValue, 0)
 
 	return DecompressLZ4(record.ValueBytes())
+}
+
+// Fetch from BoltDB
+func (e *Engine) getFromBoltDB(key []byte) ([]byte, error) {
+	var result []byte
+	err := e.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(e.namespace))
+		if b == nil {
+			return fmt.Errorf("bucket %s not found", e.namespace)
+		}
+		v := b.Get(key)
+		if v == nil {
+			return ErrKeyNotFound
+		}
+		result = append([]byte{}, v...) // Copy value
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (e *Engine) saveBloomFilter() error {

@@ -88,11 +88,10 @@ func TestWalRecordFbEncode(t *testing.T) {
 
 	t.Run("normal_ops", func(t *testing.T) {
 		record := &walRecord{
-			index:   1,
-			key:     []byte("test-key"),
-			value:   []byte("test-value"),
-			op:      wrecord.LogOperationOpInsert,
-			chunked: false,
+			index: 1,
+			key:   []byte("test-key"),
+			value: []byte("test-value"),
+			op:    wrecord.LogOperationOpInsert,
 		}
 
 		encoded, err := record.fbEncode()
@@ -107,7 +106,6 @@ func TestWalRecordFbEncode(t *testing.T) {
 			value:   []byte{},
 			op:      wrecord.LogOperationOpInsert,
 			batchID: []byte{},
-			chunked: false,
 		}
 
 		encoded, err := record.fbEncode()
@@ -124,7 +122,6 @@ func TestWalRecordFbEncode(t *testing.T) {
 			value:   []byte(largeValue),
 			op:      wrecord.LogOperationOpInsert,
 			batchID: []byte("batch-456"),
-			chunked: true,
 			lastBatchPos: &wal.ChunkPosition{
 				SegmentId:   2,
 				ChunkOffset: 100,
@@ -140,7 +137,6 @@ func TestWalRecordFbEncode(t *testing.T) {
 		calculatedChecksum := crc32.ChecksumIEEE(record.value)
 		wr := wrecord.GetRootAsWalRecord(encoded, 0)
 		assert.Equal(t, wr.ValueBytes(), compressed, "Value should be compressed")
-		assert.True(t, wr.IsChunked(), "chunked should be true")
 		assert.Equal(t, wr.BatchIdBytes(), []byte("batch-456"), "BatchId should be batch-456")
 		assert.Equal(t, wr.RecordChecksum(), calculatedChecksum, "Checksum should be calculated")
 		assert.Equal(t, wr.LastBatchPosBytes(), record.lastBatchPos.Encode(), "last batch post should match")
