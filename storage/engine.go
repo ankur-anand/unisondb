@@ -33,6 +33,7 @@ var (
 	ErrInCloseProcess   = errors.New("in-close process")
 	ErrDatabaseDirInUse = errors.New("pid.lock is held by another process")
 	ErrRecordCorrupted  = errors.New("record corrupted")
+	ErrInternalError    = errors.New("internal error")
 )
 
 // Engine manages WAL, MemTable (SkipList), and BoltDB for a given namespace.
@@ -349,20 +350,24 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to decode MemTable entry for key %s: %w", string(key), err)
 	}
 
-	// value exists directly in MemTable
-	if chunkPos == nil {
-		record := wrecord.GetRootAsWalRecord(value, 0)
-		// Decompress data
-		return DecompressLZ4(record.ValueBytes())
+	var record *wrecord.WalRecord
+
+	switch chunkPos == nil {
+	case true:
+		record = wrecord.GetRootAsWalRecord(value, 0)
+	case false:
+		// Retrieve from WAL using ChunkPosition
+		walValue, err := e.wal.Read(chunkPos)
+		if err != nil {
+			return nil, fmt.Errorf("WAL read failed for key %s: %w", string(key), err)
+		}
+
+		record = wrecord.GetRootAsWalRecord(walValue, 0)
 	}
 
-	// Retrieve from WAL using ChunkPosition
-	walValue, err := e.wal.Read(chunkPos)
-	if err != nil {
-		return nil, fmt.Errorf("WAL read failed for key %s: %w", string(key), err)
+	if record == nil {
+		return nil, ErrInternalError
 	}
-
-	record := wrecord.GetRootAsWalRecord(walValue, 0)
 
 	return DecompressLZ4(record.ValueBytes())
 }
