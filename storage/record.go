@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 
 	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	flatbuffers "github.com/google/flatbuffers/go"
@@ -41,6 +42,70 @@ func UnmarshalMetadata(data []byte) Metadata {
 		Index: index,
 		Pos:   pos,
 	}
+}
+
+// walRecord
+type walRecord struct {
+	index uint64
+	key   []byte
+	value []byte
+	op    wrecord.LogOperation
+
+	batchID      []byte
+	chunked      bool
+	lastBatchPos *wal.ChunkPosition
+}
+
+func (w *walRecord) fbEncode() ([]byte, error) {
+	initSize := 1 + len(w.key) + len(w.value)
+	builder := flatbuffers.NewBuilder(initSize)
+
+	keyOffset := builder.CreateByteVector(w.key)
+
+	// Ensure valueOffset is always valid
+	var valueOffset flatbuffers.UOffsetT
+
+	if len(w.value) > 0 {
+		compressValue, err := CompressLZ4(w.value)
+		if err != nil {
+			return nil, fmt.Errorf("compress lz4: %w", err)
+		}
+		valueOffset = builder.CreateByteVector(compressValue)
+	} else {
+		valueOffset = builder.CreateByteVector([]byte{}) // Assign an empty vector
+	}
+
+	// Ensure batchOffset is always valid
+	var batchOffset flatbuffers.UOffsetT
+	var lastBatchPosOffset flatbuffers.UOffsetT
+
+	if len(w.batchID) > 0 {
+		batchOffset = builder.CreateByteVector(w.batchID)
+		lastBatchPosOffset = builder.CreateByteVector(w.lastBatchPos.Encode())
+	} else {
+		batchOffset = builder.CreateByteVector([]byte{}) // Assign an empty vector
+	}
+
+	checksum := crc32.ChecksumIEEE(w.value)
+
+	// Start building the WAL Record
+	wrecord.WalRecordStart(builder)
+	wrecord.WalRecordAddIndex(builder, w.index)
+	wrecord.WalRecordAddOperation(builder, w.op)
+	wrecord.WalRecordAddKey(builder, keyOffset)
+	wrecord.WalRecordAddValue(builder, valueOffset)
+	wrecord.WalRecordAddBatchId(builder, batchOffset)
+	wrecord.WalRecordAddRecordChecksum(builder, checksum)
+	wrecord.WalRecordAddIsChunked(builder, w.chunked)
+	wrecord.WalRecordAddLastBatchPos(builder, lastBatchPosOffset)
+
+	walRecordOffset := wrecord.WalRecordEnd(builder)
+
+	// Finish FlatBuffer
+	builder.Finish(walRecordOffset)
+
+	return builder.FinishedBytes(), nil
+
 }
 
 func FbEncode(index uint64, key []byte, value []byte, op wrecord.LogOperation, batchID []byte) ([]byte, error) {
