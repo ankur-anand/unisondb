@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -17,6 +18,11 @@ import (
 
 var (
 	errArenaSizeWillExceed = errors.New("arena size will exceed the limit")
+
+	directValuePrefix  = []byte{1} // Marks values stored directly in memory
+	walReferencePrefix = []byte{0} // Marks values stored as a reference in WAL
+
+	readBatchSize = 20
 )
 
 // Add a margin to avoid boundary issues, arena uses the same pool for itself.
@@ -28,11 +34,12 @@ const arenaSafetyMargin = wal.KB
 //
 //nolint:unused
 type memTable struct {
-	sList  *skl.Skiplist
-	pos    *wal.ChunkPosition
-	index  uint64
-	size   int64
-	kCount int
+	sList       *skl.Skiplist
+	currentPost *wal.ChunkPosition
+	firstPos    *wal.ChunkPosition
+	index       uint64
+	size        int64
+	kCount      int
 }
 
 func newMemTable(size int64) *memTable {
@@ -55,7 +62,10 @@ func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.ChunkPosition
 		return errArenaSizeWillExceed
 	}
 	table.sList.Put(y.KeyWithTs(key, 0), val)
-	table.pos = pos
+	if table.firstPos == nil {
+		table.firstPos = pos
+	}
+	table.currentPost = pos
 	table.kCount++
 	table.index = index
 	return nil
@@ -70,9 +80,9 @@ func (table *memTable) keysCount() int {
 }
 
 //nolint:unused
-type flushNode struct {
+type flushQueue struct {
 	mTable *memTable
-	next   *flushNode
+	next   *flushQueue
 }
 
 // flusherQueue holds all the pending mem table that needs to be flushed to persistence store.
@@ -81,7 +91,7 @@ type flushNode struct {
 //nolint:unused
 type flusherQueue struct {
 	mu         sync.Mutex
-	head, tail *flushNode
+	head, tail *flushQueue
 	signal     chan struct{}
 }
 
@@ -96,7 +106,7 @@ func newFlusherQueue(signal chan struct{}) *flusherQueue {
 func (fq *flusherQueue) enqueue(m memTable) {
 	fq.mu.Lock()
 	defer fq.mu.Unlock()
-	node := &flushNode{mTable: &m}
+	node := &flushQueue{mTable: &m}
 	if fq.tail != nil {
 		fq.tail.next = node
 	}
@@ -159,7 +169,7 @@ func (e *Engine) handleFlush() {
 			log.Fatal("Failed to flushMemTable MemTable:", "namespace", e.namespace, "err", err)
 		}
 		// Create WAL checkpoint
-		err = SaveMetadata(e.db, mt.pos, mt.index)
+		err = SaveMetadata(e.db, mt.currentPost, mt.index)
 		if err != nil {
 			log.Fatal("Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
 		}
@@ -180,19 +190,6 @@ func (e *Engine) handleFlush() {
 func flushMemTable(namespace string, currentTable *skl.Skiplist, db *bbolt.DB, wal *wal.WAL) error {
 	slog.Info("Flushing MemTable to BoltDB...", "namespace", namespace)
 
-	tx, err := db.Begin(true)
-	if err != nil {
-		return err
-	}
-	defer func(tx *bbolt.Tx) {
-		_ = tx.Rollback()
-	}(tx)
-
-	bucket := tx.Bucket([]byte(namespace))
-	if bucket == nil {
-		return errors.New("bucket not found")
-	}
-
 	// Create an iterator for the MemTable
 	it := currentTable.NewIterator()
 	defer func(it *skl.Iterator) {
@@ -200,76 +197,187 @@ func flushMemTable(namespace string, currentTable *skl.Skiplist, db *bbolt.DB, w
 	}(it)
 
 	count := 0
-	keysProcessed := false
+
+	var records []*wrecord.WalRecord
+	var deleteKeys [][]byte
+
+	processBatch := func() error {
+		if len(deleteKeys) > 0 {
+			if err := flushDeletes(namespace, db, deleteKeys); err != nil {
+				return err
+			}
+			deleteKeys = nil
+		}
+		if len(records) > 0 {
+			if err := flushRecords(namespace, db, records); err != nil {
+				return err
+			}
+			records = nil
+		}
+		return nil
+	}
 
 	for it.SeekToFirst(); it.Valid(); it.Next() {
 		count++
 		key := y.ParseKey(it.Key())
 		entry := it.Value()
-		keysProcessed = true
-		err := processMemTableEntry(bucket, key, entry, wal)
-		if err != nil {
-			slog.Error("Skipping entry due to error:", "namespace", namespace, "err", err)
+
+		if entry.Meta == byte(wrecord.LogOperationOpDelete) {
+			deleteKeys = append(deleteKeys, key)
 			continue
 		}
 
-		// Batch writes every 100 keys
-		if count%100 == 0 {
-			if err := tx.Commit(); err != nil {
-				return err
-			}
+		record, err := getWalRecord(entry, wal)
 
-			tx, err = db.Begin(true)
+		if err != nil {
+			return err
+		}
+
+		if record.Operation() == wrecord.LogOperationOpBatchCommit {
+			err := flushBatchCommit(namespace, db, record, wal)
 			if err != nil {
 				return err
 			}
-			bucket = tx.Bucket([]byte(namespace))
-			if bucket == nil {
-				return errors.New("bucket not found")
+			continue
+		}
+
+		records = append(records, record)
+		// Flush when batch size is reached
+		if len(deleteKeys) >= readBatchSize || len(records) >= readBatchSize {
+			if err := processBatch(); err != nil {
+				return err
 			}
 		}
 	}
 
-	// **Ensure final commit for remaining keys**
-	if keysProcessed {
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-	}
-
-	return err
+	return processBatch()
 }
 
-// processMemTableEntry handles a single MemTable entry and writes it to BoltDB.
-//
-//nolint:unused
-func processMemTableEntry(bucket *bbolt.Bucket, key []byte, entry y.ValueStruct, wal *wal.WAL) error {
-	// Handle deletion
-	if entry.Meta == byte(wrecord.LogOperationOpDelete) {
-		if err := bucket.Delete(key); err != nil {
-			return fmt.Errorf("failed to delete key %s: %w", string(key), err)
-		}
-		return nil
-	}
-
-	// Decode entry (could be a direct value or ChunkPosition)
-	chunkPos, data, err := decodeChunkPositionWithValue(entry.Value)
+func getWalRecord(entry y.ValueStruct, wal *wal.WAL) (*wrecord.WalRecord, error) {
+	chunkPos, value, err := decodeChunkPositionWithValue(entry.Value)
 	if err != nil {
-		return fmt.Errorf("failed to decode MemTable entry for key %s: %w", string(key), err)
+		return nil, fmt.Errorf("failed to decode chunk position: %w", err)
 	}
 
-	// If value is directly in MemTable
 	if chunkPos == nil {
-		record := wrecord.GetRootAsWalRecord(data, 0)
-		return bucket.Put(record.KeyBytes(), record.ValueBytes())
+		return wrecord.GetRootAsWalRecord(value, 0), nil
 	}
 
-	// If value is in WAL (ChunkPosition)
 	walValue, err := wal.Read(chunkPos)
 	if err != nil {
-		return fmt.Errorf("WAL read failed for key %s: %w", string(key), err)
+		return nil, fmt.Errorf("failed to read WAL for chunk position: %w", err)
 	}
 
-	record := wrecord.GetRootAsWalRecord(walValue, 0)
-	return bucket.Put(record.KeyBytes(), record.ValueBytes())
+	return wrecord.GetRootAsWalRecord(walValue, 0), nil
+}
+
+func flushDeletes(namespace string, db *bbolt.DB, keys [][]byte) error {
+	return db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(namespace))
+		if bucket == nil {
+			return ErrBucketNotFound
+		}
+
+		for _, key := range keys {
+			err := bucket.Delete(key)
+			if err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
+
+func flushRecords(namespace string, db *bbolt.DB, records []*wrecord.WalRecord) error {
+	return db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(namespace))
+		if bucket == nil {
+			return ErrBucketNotFound
+		}
+		for _, record := range records {
+			key := record.KeyBytes()
+			value := record.ValueBytes()
+			// to indicate this is a full value, not chunked
+			storedValue := append([]byte{FullValueFlag}, value...)
+			err := bucket.Put(key, storedValue)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func flushBatchCommit(namespace string, db *bbolt.DB, record *wrecord.WalRecord, wal *wal.WAL) error {
+	data, checksum, err := reconstructBatchValue(record, wal)
+	if err != nil {
+		return fmt.Errorf("failed to reconstruct batch value: %w", err)
+	}
+
+	return insertChunkIntoBoltDB(namespace, db, record.KeyBytes(), data, checksum)
+}
+
+func reconstructBatchValue(record *wrecord.WalRecord, wal *wal.WAL) ([][]byte, uint32, error) {
+	lastPos := record.LastBatchPosBytes()
+	if len(lastPos) == 0 {
+		return nil, 0, ErrRecordCorrupted
+	}
+
+	pos, err := decodeChunkPos(lastPos)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	sum, err := DecompressLZ4(record.ValueBytes())
+	if err != nil {
+		return nil, 0, err
+	}
+	checksum := unmarshalChecksum(sum)
+
+	data, err := readChunks(wal, pos)
+
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return data, checksum, nil
+}
+
+// readChunksFromWal from Wal without decompressing.
+func readChunks(w *wal.WAL, startPos *wal.ChunkPosition) ([][]byte, error) {
+	if startPos == nil {
+		return nil, ErrInternalError
+	}
+
+	var values [][]byte
+
+	nextPos := startPos
+
+	for {
+		// read the next pos data
+		record, err := w.Read(nextPos)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read WAL at position %+v: %w", nextPos, err)
+		}
+		wr := wrecord.GetRootAsWalRecord(record, 0)
+		value := wr.ValueBytes()
+
+		if wr.Operation() == wrecord.LogOperationOPBatchInsert {
+			values = append(values, value)
+		}
+
+		next := wr.LastBatchPosBytes()
+		// We hit the last record.
+		if next == nil {
+			break
+		}
+
+		nextPos = wal.DecodeChunkPosition(next)
+	}
+
+	// as the data-are read in reverse
+	slices.Reverse(values)
+
+	return values, nil
 }

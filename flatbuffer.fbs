@@ -1,4 +1,4 @@
-// FlatBuffer schema for Write-Ahead Log (WAL) records
+// FlatBuffer schema for Write-Ahead Log (WAL) records with chunked support and checksums
 namespace storage.wrecord;
 
 enum LogOperation : ubyte {
@@ -6,7 +6,8 @@ enum LogOperation : ubyte {
   OpInsert = 1,
   OpDelete = 2,
   OpBatchStart = 3,
-  OpBatchCommit = 4
+  OPBatchInsert = 4,
+  OpBatchCommit = 5,
 }
 
 table WalRecord {
@@ -15,7 +16,10 @@ table WalRecord {
 
   key: [ubyte] (required);
   value: [ubyte];
+  record_checksum: uint32;
+
   batch_id: [ubyte];
+  last_batch_pos: [ubyte]; // If batched, position of the batch in WAL
 }
 
 root_type WalRecord;

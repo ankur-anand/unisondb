@@ -3,6 +3,8 @@ package storage
 import (
 	"bytes"
 	"errors"
+	"hash/crc32"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -56,8 +58,8 @@ func TestFlusherQueue(t *testing.T) {
 		})
 
 		enq.enqueue(memTable{
-			sList: memTables[i].memTable,
-			pos:   nil,
+			sList:       memTables[i].memTable,
+			currentPost: nil,
 		})
 	}
 
@@ -96,8 +98,8 @@ func TestMemTable_PutAndGet(t *testing.T) {
 	}
 
 	// Verify that the table's WAL position was updated.
-	if table.pos != pos {
-		t.Errorf("expected table pos to be %+v, got %+v", pos, table.pos)
+	if table.currentPost != pos {
+		t.Errorf("expected table currentPost to be %+v, got %+v", pos, table.currentPost)
 	}
 }
 
@@ -154,14 +156,21 @@ func TestFlush_Success(t *testing.T) {
 		key := []byte("key_" + strconv.Itoa(i))
 		value := []byte("value_" + strconv.Itoa(i))
 
-		record, err := FbEncode(uint64(i), key, value, wrecord.LogOperationOpInsert, nil)
+		record := walRecord{
+			index: uint64(i),
+			key:   key,
+			value: value,
+			op:    wrecord.LogOperationOpInsert,
+		}
+
+		encodedRecord, err := record.fbEncode()
 		assert.NoError(t, err, "failed to encode record")
-		walPos, err := walInstance.Write(record)
+		walPos, err := walInstance.Write(encodedRecord)
 		assert.NoError(t, err)
 
 		// Store WAL ChunkPosition in MemTable
 		memTable.Put(y.KeyWithTs(key, 0), y.ValueStruct{
-			Meta:  1,
+			Meta:  byte(wrecord.LogOperationOpInsert),
 			Value: append([]byte{0}, walPos.Encode()...), // Storing WAL position
 		})
 	}
@@ -170,20 +179,14 @@ func TestFlush_Success(t *testing.T) {
 	assert.NoError(t, err)
 
 	// **Verify
-	err = db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte("test_namespace"))
-		assert.NotNil(t, bucket)
+	for i := 0; i < 150; i++ {
+		key := []byte("key_" + strconv.Itoa(i))
+		val, err := retrieveFromBoltDB("test_namespace", db, key)
+		assert.NoError(t, err)
+		assert.NotNil(t, val)
+		assert.Equal(t, []byte("value_"+strconv.Itoa(i)), val)
+	}
 
-		for i := 0; i < 150; i++ {
-			key := []byte("key_" + strconv.Itoa(i))
-			val := bucket.Get(key)
-			assert.NotNil(t, val)
-			data, err := DecompressLZ4(val)
-			assert.NoError(t, err)
-			assert.Equal(t, []byte("value_"+strconv.Itoa(i)), data)
-		}
-		return nil
-	})
 	assert.NoError(t, err)
 }
 
@@ -256,7 +259,13 @@ func TestFlush_Deletes(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	data, err := FbEncode(1, []byte("delete_me"), nil, wrecord.LogOperationOpDelete, nil)
+	record := walRecord{
+		index: uint64(1),
+		key:   []byte("delete_me"),
+		op:    wrecord.LogOperationOpDelete,
+	}
+
+	data, err := record.fbEncode()
 	assert.NoError(t, err)
 
 	walPos, err := walInstance.Write(data)
@@ -305,7 +314,13 @@ func TestFlush_WALLookup(t *testing.T) {
 
 	key := []byte("wal_key")
 	value := []byte("wal_value")
-	data, err := FbEncode(1, key, value, wrecord.LogOperationOpInsert, nil)
+	record := walRecord{
+		index: 1,
+		key:   key,
+		value: value,
+		op:    wrecord.LogOperationOpInsert,
+	}
+	data, err := record.fbEncode()
 	assert.NoError(t, err)
 	walPos, err := walInstance.Write(data)
 	assert.NoError(t, err)
@@ -321,18 +336,9 @@ func TestFlush_WALLookup(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify the key is stored correctly in BoltDB
-	err = db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte("test_namespace"))
-		assert.NotNil(t, bucket)
-
-		val := bucket.Get([]byte("wal_key"))
-		assert.NotNil(t, val)
-		data, err := DecompressLZ4(val)
-		assert.NoError(t, err)
-		assert.Equal(t, []byte("wal_value"), data)
-		return nil
-	})
+	val, err := retrieveFromBoltDB("test_namespace", db, key)
 	assert.NoError(t, err)
+	assert.Equal(t, []byte("wal_value"), val)
 }
 
 func TestProcessFlushQueue_WithTimer(t *testing.T) {
@@ -350,7 +356,13 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 
 	table := newMemTable(200 * wal.KB)
 
-	data, err := FbEncode(1, key, value, wrecord.LogOperationOpInsert, nil)
+	record := walRecord{
+		index: 1,
+		key:   key,
+		value: value,
+		op:    wrecord.LogOperationOpInsert,
+	}
+	data, err := record.fbEncode()
 	assert.NoError(t, err)
 	pos := &wal.ChunkPosition{SegmentId: 1}
 	// Store WAL ChunkPosition in MemTable
@@ -374,19 +386,9 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 		t.Errorf("processFlushQueue timeout")
 	}
 
-	// Verify that the key is now in BoltDB
-	err = engine.db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(engine.namespace))
-		assert.NotNil(t, bucket)
-
-		val := bucket.Get(key)
-		data, err := DecompressLZ4(val)
-		assert.NoError(t, err)
-		assert.Equal(t, []byte("wal_value"), data)
-
-		return nil
-	})
+	val, err := retrieveFromBoltDB(engine.namespace, engine.db, key)
 	assert.NoError(t, err)
+	assert.Equal(t, []byte("wal_value"), val)
 
 	// Cleanup
 	close(signal)
@@ -417,8 +419,14 @@ func TestProcessFlushQueue(t *testing.T) {
 
 	table := newMemTable(200 * wal.KB)
 
+	record := walRecord{
+		index: 1,
+		key:   key,
+		value: value,
+		op:    wrecord.LogOperationOpInsert,
+	}
 	// compress
-	data, err := FbEncode(1, key, value, wrecord.LogOperationOpInsert, nil)
+	data, err := record.fbEncode()
 	assert.NoError(t, err)
 	pos := &wal.ChunkPosition{SegmentId: 1, ChunkOffset: 10}
 	// Store WAL ChunkPosition in MemTable
@@ -446,18 +454,9 @@ func TestProcessFlushQueue(t *testing.T) {
 	}
 
 	// Verify that the key is now in BoltDB
-	err = engine.db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(engine.namespace))
-		assert.NotNil(t, bucket)
-
-		val := bucket.Get(key)
-		data, err := DecompressLZ4(val)
-		assert.NoError(t, err)
-		assert.Equal(t, []byte("wal_value"), data)
-
-		return nil
-	})
+	val, err := retrieveFromBoltDB(engine.namespace, engine.db, key)
 	assert.NoError(t, err)
+	assert.Equal(t, []byte("wal_value"), val)
 
 	// Cleanup
 	close(signal)
@@ -469,4 +468,106 @@ func TestProcessFlushQueue(t *testing.T) {
 	if metadata.Pos.SegmentId != 1 && metadata.Pos.ChunkOffset != 10 {
 		t.Errorf("error loading chunk metadata, expected 10, got %d", metadata.Pos.ChunkOffset)
 	}
+}
+
+func TestChunkFlush_Persistent(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_put_get"
+
+	callSignal := make(chan struct{})
+	callBack := func() {
+		close(callSignal)
+	}
+
+	engine, err := NewStorageEngine(baseDir, namespace, nil)
+	assert.NoError(t, err)
+	engine.Callback = callBack
+	defer func(engine *Engine) {
+		err := engine.Close()
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	}(engine)
+
+	key := []byte("test_key")
+	value := []byte(gofakeit.Sentence(100))
+
+	// Put key-value pair
+	err = engine.Put(key, value)
+	assert.NoError(t, err, "Put operation should succeed")
+	assert.Equal(t, uint64(1), engine.LastSeq())
+	// Retrieve value
+	retrievedValue, err := engine.Get(key)
+	assert.NoError(t, err, "Get operation should succeed")
+	assert.Equal(t, value, retrievedValue, "Retrieved value should match the inserted value")
+	batchKey := []byte(gofakeit.Name())
+
+	var batchValues []string
+	fullValue := new(bytes.Buffer)
+
+	for i := 0; i < 10; i++ {
+		batchValues = append(batchValues, gofakeit.Sentence(5))
+		fullValue.Write([]byte(batchValues[i]))
+	}
+
+	// open a batch writer:
+	batch, err := engine.NewBatch(batchKey)
+	assert.NoError(t, err, "NewBatch operation should succeed")
+	assert.NotNil(t, batch, "NewBatch operation should succeed")
+
+	var checksum uint32
+	for _, batchValue := range batchValues {
+		err := batch.Put([]byte(batchValue))
+		checksum = crc32.Update(checksum, crc32.IEEETable, []byte(batchValue))
+		assert.NoError(t, err, "NewBatch operation should succeed")
+	}
+
+	// get value without commit
+	// write should not be visible for now.
+	got, err := engine.Get(batchKey)
+	assert.ErrorIs(t, err, ErrKeyNotFound, "Key not Found Error should be present.")
+	assert.Nil(t, got, "Get operation should succeed")
+
+	err = batch.Commit()
+	assert.NoError(t, err, "Commit operation should succeed")
+
+	// get value without commit
+	// write should not be visible for now.
+	got, err = engine.Get(batchKey)
+	assert.NoError(t, err, "Get operation should succeed")
+	assert.NotNil(t, got, "Get operation should succeed")
+	assert.Equal(t, got, fullValue.Bytes(), "Retrieved value should match the inserted value")
+
+	// flush the memtable.
+	engine.mu.Lock()
+	// put the old table in the queue
+	oldTable := engine.memTable
+	engine.memTable = newMemTable(engine.storageConfig.ArenaSize)
+	engine.flushQueue.enqueue(*oldTable)
+	select {
+	case engine.queueChan <- struct{}{}:
+	default:
+		slog.Warn("queue signal channel full")
+	}
+	engine.mu.Unlock()
+
+	signal := make(chan struct{})
+	var wg sync.WaitGroup
+
+	engine.processFlushQueue(&wg, signal)
+
+	// Trigger
+	signal <- struct{}{}
+
+	select {
+	case <-callSignal:
+	case <-time.After(time.Second * 10):
+		t.Errorf("processFlushQueue timeout")
+	}
+
+	got, err = engine.Get(batchKey)
+	assert.NoError(t, err, "Get operation should succeed")
+	assert.NotNil(t, got, "Get operation should succeed")
+	assert.Equal(t, got, fullValue.Bytes(), "Retrieved value should match the inserted value")
+
 }
