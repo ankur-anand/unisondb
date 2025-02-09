@@ -107,6 +107,7 @@ func (b *Batch) Put(value []byte) error {
 
 	b.lastPos = chunkPos
 	// Update the rolling checksum
+
 	b.checksum = crc32.Update(b.checksum, crc32.IEEETable, value)
 	return nil
 }
@@ -117,7 +118,7 @@ func (b *Batch) Commit() error {
 		return b.err
 	}
 
-	return b.engine.persistKeyValue(b.key, marshalChecksum(b.checksum), wrecord.LogOperationOpBatchCommit, b.batchID)
+	return b.engine.persistKeyValue(b.key, marshalChecksum(b.checksum), wrecord.LogOperationOpBatchCommit, b.batchID, b.lastPos)
 }
 
 func marshalChecksum(checksum uint32) []byte {

@@ -111,10 +111,10 @@ func TestWALChunkRead(t *testing.T) {
 	encoded, err = record.fbEncode()
 	assert.NoError(t, err)
 
-	chunkPos, err = walI.Write(encoded)
+	_, err = walI.Write(encoded)
 	assert.NoError(t, err)
 
-	gotChunks, err := readChunksFromWal(walI, chunkPos)
+	gotChunks, err := readChunksFromWal(walI, chunkPos, id, checksum)
 	assert.NoError(t, err)
 	assert.Equal(t, len(chunks), len(gotChunks))
 	for i, chunk := range gotChunks {

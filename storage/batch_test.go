@@ -1,7 +1,7 @@
 package storage_test
 
 import (
-	"encoding/binary"
+	"bytes"
 	"hash/crc32"
 	"testing"
 
@@ -38,8 +38,11 @@ func TestBatch_PutGet(t *testing.T) {
 	batchKey := []byte(gofakeit.Name())
 
 	var batchValues []string
+	fullValue := new(bytes.Buffer)
+
 	for i := 0; i < 10; i++ {
-		batchValues = append(batchValues, gofakeit.Sentence(50))
+		batchValues = append(batchValues, gofakeit.Sentence(5))
+		fullValue.Write([]byte(batchValues[i]))
 	}
 
 	// open a batch writer:
@@ -68,12 +71,5 @@ func TestBatch_PutGet(t *testing.T) {
 	got, err = engine.Get(batchKey)
 	assert.NoError(t, err, "Get operation should succeed")
 	assert.NotNil(t, got, "Get operation should succeed")
-	assert.Equal(t, unmarshalChecksum(got), checksum, "Get operation should match the inserted value")
-}
-
-func unmarshalChecksum(data []byte) uint32 {
-	if len(data) < 4 {
-		return 0
-	}
-	return binary.LittleEndian.Uint32(data)
+	assert.Equal(t, got, fullValue.Bytes(), "Retrieved value should match the inserted value")
 }

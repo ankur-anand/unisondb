@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -188,15 +189,16 @@ func (e *Engine) loadMetaValues() error {
 //   - Updates the Bloom filter for quick existence checks.
 //
 // 5. Store the current Chunk Position in the variable.
-func (e *Engine) persistKeyValue(key []byte, value []byte, op wrecord.LogOperation, batchID []byte) error {
+func (e *Engine) persistKeyValue(key []byte, value []byte, op wrecord.LogOperation, batchID []byte, pos *wal.ChunkPosition) error {
 	index := e.globalCounter.Add(1)
 
 	record := walRecord{
-		index:   index,
-		key:     key,
-		value:   value,
-		op:      op,
-		batchID: batchID,
+		index:        index,
+		key:          key,
+		value:        value,
+		op:           op,
+		batchID:      batchID,
+		lastBatchPos: pos,
 	}
 
 	encoded, err := record.fbEncode()
@@ -290,7 +292,7 @@ func (e *Engine) Put(key, value []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	return e.persistKeyValue(key, value, wrecord.LogOperationOpInsert, nil)
+	return e.persistKeyValue(key, value, wrecord.LogOperationOpInsert, nil, nil)
 }
 
 // Delete removes a key and its value pair from WAL and MemTable.
@@ -298,7 +300,7 @@ func (e *Engine) Delete(key []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	return e.persistKeyValue(key, nil, wrecord.LogOperationOpDelete, nil)
+	return e.persistKeyValue(key, nil, wrecord.LogOperationOpDelete, nil, nil)
 }
 
 // LastSeq return Latest Sequence Number of Index.
@@ -369,10 +371,64 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, ErrInternalError
 	}
 
-	return DecompressLZ4(record.ValueBytes())
+	if record.Operation() == wrecord.LogOperationOpBatchCommit {
+		return e.reconstructBatchValue(key, record)
+	}
+
+	decompressed, err := DecompressLZ4(record.ValueBytes())
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to decompress value for key %s: %w", string(key), err)
+	}
+
+	if crc32.ChecksumIEEE(decompressed) != record.RecordChecksum() {
+		return nil, ErrRecordCorrupted
+	}
+
+	return decompressed, nil
 }
 
-// Fetch from BoltDB
+func (e *Engine) reconstructBatchValue(key []byte, record *wrecord.WalRecord) ([]byte, error) {
+	lastPos := record.LastBatchPosBytes()
+	if len(lastPos) == 0 {
+		return nil, ErrRecordCorrupted
+	}
+
+	pos, err := decodeChunkPos(lastPos)
+	if err != nil {
+		return nil, fmt.Errorf("WAL read failed for key %s: %w", string(key), err)
+	}
+
+	sum, err := DecompressLZ4(record.ValueBytes())
+	if err != nil {
+		return nil, fmt.Errorf("WAL read failed for key %s: %w", string(key), err)
+	}
+	checksum := unmarshalChecksum(sum)
+
+	data, err := readChunksFromWal(e.wal, pos, record.BatchIdBytes(), checksum)
+	if err != nil {
+		return nil, err
+	}
+
+	fullValue := new(bytes.Buffer)
+	for _, d := range data {
+		fullValue.Write(d)
+	}
+	return fullValue.Bytes(), nil
+}
+
+func decodeChunkPos(data []byte) (pos *wal.ChunkPosition, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("decode ChunkPosition: Panic recovered %v", r)
+		}
+	}()
+	pos = wal.DecodeChunkPosition(data)
+
+	return
+}
+
+// Fetch from BoltDB.
 func (e *Engine) getFromBoltDB(key []byte) ([]byte, error) {
 	var result []byte
 	err := e.db.View(func(tx *bbolt.Tx) error {

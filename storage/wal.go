@@ -2,6 +2,7 @@ package storage
 
 import (
 	"bytes"
+	"fmt"
 	"hash/crc32"
 	"io"
 	"log/slog"
@@ -64,7 +65,7 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 
 	for {
 		data, pos, err := reader.Next()
-		if err == io.EOF {
+		if err == io.EOF || pos == nil {
 			break
 		}
 
@@ -101,39 +102,20 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 }
 
 // readChunksFromWal from Wal reads the chunks value from the wal entries and return all the chunks value.
-func readChunksFromWal(w *wal.WAL, startPos *wal.ChunkPosition) ([][]byte, error) {
-
-	record, err := w.Read(startPos)
-	if err != nil {
-		return nil, err
+func readChunksFromWal(w *wal.WAL, startPos *wal.ChunkPosition, startID []byte, completeChecksum uint32) ([][]byte, error) {
+	if startPos == nil {
+		return nil, ErrInternalError
 	}
-
-	// get the checksums, and next post
-	wr := wrecord.GetRootAsWalRecord(record, 0)
-	startID := wr.BatchIdBytes()
-	sumBytes, err := DecompressLZ4(wr.ValueBytes())
-	if err != nil {
-		return nil, err
-	}
-
-	completeChecksum := unmarshalChecksum(sumBytes)
-
-	var calculatedChecksum uint32
-
-	next := wr.LastBatchPosBytes()
-	if next == nil {
-		return nil, ErrRecordCorrupted
-	}
-
-	nextPos := wal.DecodeChunkPosition(next)
 
 	var decompressValues [][]byte
+	var calculatedChecksum uint32
+	nextPos := startPos
 
 	for {
 		// read the next pos data
 		record, err := w.Read(nextPos)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to read WAL at position %+v: %w", nextPos, err)
 		}
 		wr := wrecord.GetRootAsWalRecord(record, 0)
 		value := wr.ValueBytes()
@@ -141,21 +123,24 @@ func readChunksFromWal(w *wal.WAL, startPos *wal.ChunkPosition) ([][]byte, error
 		checksum := wr.RecordChecksum()
 
 		if wr.Operation() != wrecord.LogOperationOPBatchInsert && wr.Operation() != wrecord.LogOperationOpBatchStart {
-			return nil, ErrRecordCorrupted
+			return nil, fmt.Errorf("unexpected WAL operation %d at position %+v: %w", wr.Operation(), nextPos, ErrRecordCorrupted)
 		}
 
 		if !bytes.Equal(startID, id) {
-			return nil, ErrRecordCorrupted
+			return nil, fmt.Errorf("mismatched batch ID at position %+v: expected %x, got %x: %w", nextPos, startID, id, ErrRecordCorrupted)
 		}
 
 		if wr.Operation() == wrecord.LogOperationOPBatchInsert {
 			decompressed, err := DecompressLZ4(value)
 			if err != nil {
-				return nil, ErrRecordCorrupted
+				return nil, fmt.Errorf("failed to decompress WAL value at position %+v: %w", nextPos, ErrRecordCorrupted)
 			}
 
 			if crc32.ChecksumIEEE(decompressed) != checksum {
-				return nil, ErrRecordCorrupted
+				return nil, fmt.Errorf(
+					"checksum mismatch at position %+v: expected %d, got %d: %w",
+					nextPos, checksum, crc32.ChecksumIEEE(decompressed), ErrRecordCorrupted,
+				)
 			}
 
 			decompressValues = append(decompressValues, decompressed)
@@ -172,12 +157,16 @@ func readChunksFromWal(w *wal.WAL, startPos *wal.ChunkPosition) ([][]byte, error
 
 	// as the data-are read in reverse
 	slices.Reverse(decompressValues)
+
 	for i := 0; i < len(decompressValues); i++ {
 		calculatedChecksum = crc32.Update(calculatedChecksum, crc32.IEEETable, decompressValues[i])
 	}
 
 	if calculatedChecksum != completeChecksum {
-		return nil, ErrRecordCorrupted
+		return nil, fmt.Errorf(
+			"final checksum mismatch: expected %d, got %d: %w",
+			completeChecksum, calculatedChecksum, ErrRecordCorrupted,
+		)
 	}
 
 	return decompressValues, nil
