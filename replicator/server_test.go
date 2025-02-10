@@ -216,7 +216,8 @@ func TestServer_StreamWAL(t *testing.T) {
 	assert.NoError(t, err, "failed to create grpc client")
 	client := v1.NewWALReplicationServiceClient(conn)
 
-	go func() {
+	errGroup.Go(func() error {
+
 		ticker := time.NewTicker(10 * time.Millisecond)
 		defer ticker.Stop()
 		timer := time.NewTimer(150 * time.Millisecond)
@@ -234,10 +235,10 @@ func TestServer_StreamWAL(t *testing.T) {
 				err = engines[nameSpaces[0]].Put(key, data)
 				assert.NoError(t, err)
 			case <-timer.C:
-				return
+				return nil
 			}
 		}
-	}()
+	})
 
 	t.Run("wal-replication", func(t *testing.T) {
 		md := metadata.Pairs("x-namespace", nameSpaces[0])
