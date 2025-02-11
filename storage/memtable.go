@@ -38,7 +38,7 @@ type memTable struct {
 	currentPost *wal.ChunkPosition
 	size        int64
 	opsCount    int
-	batchFound  bool
+	bytesStored int
 }
 
 func newMemTable(size int64) *memTable {
@@ -64,6 +64,7 @@ func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.ChunkPosition
 
 	table.currentPost = pos
 	table.opsCount++
+	table.bytesStored = table.bytesStored + len(key) + len(val.Value)
 	return nil
 }
 
@@ -160,6 +161,7 @@ func (e *Engine) processFlushQueue(wg *sync.WaitGroup, signal chan struct{}) {
 func (e *Engine) handleFlush() {
 	mt := e.flushQueue.dequeue()
 	if mt != nil && !mt.sList.Empty() {
+		startTime := time.Now()
 		recordProcessed, err := flushMemTable(e.namespace, mt.sList, e.db, e.wal)
 		if err != nil {
 			log.Fatal("Failed to flushMemTable MemTable:", "namespace", e.namespace, "err", err)
@@ -176,7 +178,9 @@ func (e *Engine) handleFlush() {
 		if e.Callback != nil {
 			e.Callback()
 		}
-		slog.Info("Flushed MemTable to BoltDB & Created WAL Checkpoint", "records_processed", recordProcessed)
+		slog.Info("Flushed MemTable to BoltDB & Created WAL Checkpoint",
+			"ops_flushed", recordProcessed, "namespace", e.namespace,
+			"duration", time.Since(startTime), "bytes_flushed", mt.bytesStored)
 	}
 }
 
@@ -184,7 +188,7 @@ func (e *Engine) handleFlush() {
 //
 //nolint:unused
 func flushMemTable(namespace string, currentTable *skl.Skiplist, db *bbolt.DB, wal *wal.WAL) (int, error) {
-	slog.Info("Flushing MemTable to BoltDB...", "namespace", namespace)
+	slog.Debug("Flushing MemTable to BoltDB...", "namespace", namespace)
 
 	// Create an iterator for the MemTable
 	it := currentTable.NewIterator()
