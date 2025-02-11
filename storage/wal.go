@@ -37,7 +37,7 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 	var err error
 	ignoreFirstChunk := false
 
-	// if the index is zero
+	// if the hlc is zero
 	// maybe in first run itself, we never crossed the arena limit, and it was never flushed.
 	// or the db file was new, somehow.
 	// in both the case try loading the entire wal.
@@ -49,7 +49,7 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 	if metadata.Index != 0 {
 		// recovery should happen from last chunk position + 1.
 		ignoreFirstChunk = true
-		slog.Info("Starting WAL replay from index ..", "index", metadata.Index, "segment", metadata.Pos.SegmentId, "offset", metadata.Pos.ChunkOffset, "namespace", namespace)
+		slog.Info("Starting WAL replay from hlc ..", "hlc", metadata.Index, "segment", metadata.Pos.SegmentId, "offset", metadata.Pos.ChunkOffset, "namespace", namespace)
 
 		reader, err = e.wal.NewReaderWithStart(metadata.Pos)
 		if err != nil {

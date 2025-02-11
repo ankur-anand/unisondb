@@ -11,7 +11,7 @@ import (
 )
 
 // Metadata represents a checkpoint in the Write-Ahead Log (WAL).
-// It encodes the last known WAL sequence index (`Index`) and the corresponding
+// It encodes the last known WAL sequence hlc (`Index`) and the corresponding
 // chunk position (`Pos`) within the segment file. This is primarily used for
 // recovery and replication tracking.
 type Metadata struct {
@@ -46,7 +46,7 @@ func UnmarshalMetadata(data []byte) Metadata {
 
 // walRecord.
 type walRecord struct {
-	index uint64
+	hlc   uint64
 	key   []byte
 	value []byte
 	op    wrecord.LogOperation
@@ -92,7 +92,7 @@ func (w *walRecord) fbEncode() ([]byte, error) {
 
 	// Start building the WAL Record
 	wrecord.WalRecordStart(builder)
-	wrecord.WalRecordAddIndex(builder, w.index)
+	wrecord.WalRecordAddHlc(builder, w.hlc)
 	wrecord.WalRecordAddOperation(builder, w.op)
 	wrecord.WalRecordAddKey(builder, keyOffset)
 	wrecord.WalRecordAddValue(builder, valueOffset)

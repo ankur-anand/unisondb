@@ -41,7 +41,7 @@ var (
 type Engine struct {
 	namespace             string
 	wal                   *wal.WAL
-	globalCounter         atomic.Uint64 // stores the global index.
+	globalCounter         atomic.Uint64 // stores the global hlc.
 	db                    *bbolt.DB
 	queueChan             chan struct{}
 	flushQueue            *flusherQueue
@@ -193,7 +193,7 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op wrecord.LogOperati
 	index := e.globalCounter.Add(1)
 
 	record := walRecord{
-		index:        index,
+		hlc:          index,
 		key:          key,
 		value:        value,
 		op:           op,

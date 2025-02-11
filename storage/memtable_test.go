@@ -157,7 +157,7 @@ func TestFlush_Success(t *testing.T) {
 		value := []byte("value_" + strconv.Itoa(i))
 
 		record := walRecord{
-			index: uint64(i),
+			hlc:   uint64(i),
 			key:   key,
 			value: value,
 			op:    wrecord.LogOperationOpInsert,
@@ -260,9 +260,9 @@ func TestFlush_Deletes(t *testing.T) {
 	assert.NoError(t, err)
 
 	record := walRecord{
-		index: uint64(1),
-		key:   []byte("delete_me"),
-		op:    wrecord.LogOperationOpDelete,
+		hlc: uint64(1),
+		key: []byte("delete_me"),
+		op:  wrecord.LogOperationOpDelete,
 	}
 
 	data, err := record.fbEncode()
@@ -315,7 +315,7 @@ func TestFlush_WALLookup(t *testing.T) {
 	key := []byte("wal_key")
 	value := []byte("wal_value")
 	record := walRecord{
-		index: 1,
+		hlc:   1,
 		key:   key,
 		value: value,
 		op:    wrecord.LogOperationOpInsert,
@@ -357,7 +357,7 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 	table := newMemTable(200 * wal.KB)
 
 	record := walRecord{
-		index: 1,
+		hlc:   1,
 		key:   key,
 		value: value,
 		op:    wrecord.LogOperationOpInsert,
@@ -401,7 +401,7 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 	}
 
 	if metadata.Index != 100 {
-		t.Errorf("error loading index position, expected 100, got %d", metadata.Index)
+		t.Errorf("error loading hlc position, expected 100, got %d", metadata.Index)
 	}
 }
 
@@ -420,7 +420,7 @@ func TestProcessFlushQueue(t *testing.T) {
 	table := newMemTable(200 * wal.KB)
 
 	record := walRecord{
-		index: 1,
+		hlc:   1,
 		key:   key,
 		value: value,
 		op:    wrecord.LogOperationOpInsert,

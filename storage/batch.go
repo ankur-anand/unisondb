@@ -33,7 +33,7 @@ func (e *Engine) NewBatch(key []byte) (*Batch, error) {
 
 	// start the batch marker in wal
 	record := walRecord{
-		index:        index,
+		hlc:          index,
 		key:          key,
 		value:        nil,
 		op:           wrecord.LogOperationOpBatchStart,
@@ -81,7 +81,7 @@ func (b *Batch) Put(value []byte) error {
 	index := b.engine.globalCounter.Add(1)
 
 	record := &walRecord{
-		index:        index,
+		hlc:          index,
 		key:          b.key,
 		value:        value,
 		op:           wrecord.LogOperationOPBatchInsert,
