@@ -62,7 +62,7 @@ func TestWALChunkRead(t *testing.T) {
 	// insert a batch start marker.
 	// start the batch marker in wal
 	record := walRecord{
-		index:        1,
+		hlc:          1,
 		key:          key,
 		value:        nil,
 		op:           wrecord.LogOperationOpBatchStart,
@@ -85,7 +85,7 @@ func TestWALChunkRead(t *testing.T) {
 		chunks = append(chunks, chunk)
 		checksum = crc32.Update(checksum, crc32.IEEETable, chunk)
 		record := walRecord{
-			index:        uint64(i),
+			hlc:          uint64(i),
 			key:          key,
 			value:        chunk,
 			op:           wrecord.LogOperationOPBatchInsert,
@@ -101,7 +101,7 @@ func TestWALChunkRead(t *testing.T) {
 
 	// commit
 	record = walRecord{
-		index:        10,
+		hlc:          10,
 		key:          key,
 		value:        marshalChecksum(checksum),
 		op:           wrecord.LogOperationOpBatchCommit,

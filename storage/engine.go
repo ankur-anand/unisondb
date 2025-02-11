@@ -39,9 +39,12 @@ var (
 
 // Engine manages WAL, MemTable (SkipList), and BoltDB for a given namespace.
 type Engine struct {
-	namespace             string
-	wal                   *wal.WAL
-	globalCounter         atomic.Uint64 // stores the global index.
+	namespace string
+	wal       *wal.WAL
+	// stores the global counter for Hybrid logical clock.
+	// it's not the index of wal.
+	globalCounter         atomic.Uint64
+	opsFlushedCounter     atomic.Uint64 // total ops flushed to BoltDB.
 	db                    *bbolt.DB
 	queueChan             chan struct{}
 	flushQueue            *flusherQueue
@@ -166,8 +169,8 @@ func (e *Engine) loadMetaValues() error {
 
 	e.startMetadata = metadata
 	// store the global counter
-	e.globalCounter.Store(metadata.Index)
-
+	e.globalCounter.Store(metadata.RecordProcessed)
+	e.opsFlushedCounter.Store(metadata.RecordProcessed)
 	// Recover WAL logs and bloom filter on startup
 	err = e.loadBloomFilter()
 	if err != nil && !errors.Is(err, ErrKeyNotFound) {
@@ -190,10 +193,9 @@ func (e *Engine) loadMetaValues() error {
 //
 // 5. Store the current Chunk Position in the variable.
 func (e *Engine) persistKeyValue(key []byte, value []byte, op wrecord.LogOperation, batchID []byte, pos *wal.ChunkPosition) error {
-	index := e.globalCounter.Add(1)
-
+	hlc := HLCNow(e.globalCounter.Add(1))
 	record := walRecord{
-		index:        index,
+		hlc:          hlc,
 		key:          key,
 		value:        value,
 		op:           op,
@@ -231,7 +233,7 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op wrecord.LogOperati
 		err := e.memTableWrite(key, y.ValueStruct{
 			Meta:  byte(op),
 			Value: memValue,
-		}, chunkPos, index)
+		}, chunkPos)
 
 		if err != nil {
 			return err
@@ -254,11 +256,11 @@ func (e *Engine) MemTableSize() int {
 }
 
 // memTableWrite will write the provided key and value to the memTable.
-func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, chunkPos *wal.ChunkPosition, index uint64) error {
+func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, chunkPos *wal.ChunkPosition) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	var err error
-	err = e.memTable.put(key, v, chunkPos, index)
+	err = e.memTable.put(key, v, chunkPos)
 	if err != nil {
 		if errors.Is(err, errArenaSizeWillExceed) {
 			// put the old table in the queue
@@ -270,7 +272,7 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, chunkPos *wal.ChunkP
 			default:
 				slog.Warn("queue signal channel full")
 			}
-			err = e.memTable.put(key, v, chunkPos, index)
+			err = e.memTable.put(key, v, chunkPos)
 			// :(
 			if err != nil {
 				return err
@@ -303,9 +305,14 @@ func (e *Engine) Delete(key []byte) error {
 	return e.persistKeyValue(key, nil, wrecord.LogOperationOpDelete, nil, nil)
 }
 
-// LastSeq return Latest Sequence Number of Index.
-func (e *Engine) LastSeq() uint64 {
+// TotalOpsReceived return total number of Put and Del operation received.
+func (e *Engine) TotalOpsReceived() uint64 {
 	return e.globalCounter.Load()
+}
+
+// TotalOpsFlushed return total number of Put and Del operation flushed to BoltDB.
+func (e *Engine) TotalOpsFlushed() uint64 {
+	return e.opsFlushedCounter.Load()
 }
 
 // Get retrieves a value from MemTable, WAL, or BoltDB.

@@ -14,7 +14,7 @@ import (
 
 func TestMetadataMarshalUnmarshal(t *testing.T) {
 	originalMetadata := Metadata{
-		Index: 123456789,
+		RecordProcessed: 123456789,
 		Pos: &wal.ChunkPosition{
 			SegmentId:   5,
 			BlockNumber: 10,
@@ -30,7 +30,7 @@ func TestMetadataMarshalUnmarshal(t *testing.T) {
 
 	decodedMetadata := UnmarshalMetadata(encoded)
 
-	assert.Equal(t, originalMetadata.Index, decodedMetadata.Index, "WAL Index mismatch after unmarshaling")
+	assert.Equal(t, originalMetadata.RecordProcessed, decodedMetadata.RecordProcessed, "WAL RecordProcessed mismatch after unmarshaling")
 
 	assert.Equal(t, originalMetadata.Pos.SegmentId, decodedMetadata.Pos.SegmentId, "SegmentId mismatch")
 	assert.Equal(t, originalMetadata.Pos.BlockNumber, decodedMetadata.Pos.BlockNumber, "BlockNumber mismatch")
@@ -57,7 +57,7 @@ func TestEncodeDecodeWalRecord(t *testing.T) {
 	assert.NoError(t, err)
 
 	wr := walRecord{
-		index:   123456789,
+		hlc:     123456789,
 		key:     []byte("test_key"),
 		value:   []byte("test_value"),
 		op:      wrecord.LogOperationOpInsert,
@@ -71,7 +71,7 @@ func TestEncodeDecodeWalRecord(t *testing.T) {
 	data, err := DecompressLZ4(record.ValueBytes())
 	assert.NoError(t, err)
 	// Validate that all fields are correctly restored
-	assert.Equal(t, uint64(123456789), record.Index(), "WAL Index mismatch")
+	assert.Equal(t, uint64(123456789), record.Hlc(), "WAL RecordProcessed mismatch")
 	assert.Equal(t, wrecord.LogOperationOpInsert, record.Operation(), "Operation mismatch")
 	assert.Equal(t, []byte("test_key"), record.KeyBytes(), "Key mismatch")
 	assert.Equal(t, []byte("test_value"), data, "Value mismatch")
@@ -96,7 +96,7 @@ func TestWalRecordFbEncode(t *testing.T) {
 
 	t.Run("normal_ops", func(t *testing.T) {
 		record := &walRecord{
-			index: 1,
+			hlc:   1,
 			key:   []byte("test-key"),
 			value: []byte("test-value"),
 			op:    wrecord.LogOperationOpInsert,
@@ -109,7 +109,7 @@ func TestWalRecordFbEncode(t *testing.T) {
 
 	t.Run("empty_kv", func(t *testing.T) {
 		record := &walRecord{
-			index:   2,
+			hlc:     2,
 			key:     []byte{},
 			value:   []byte{},
 			op:      wrecord.LogOperationOpInsert,
@@ -125,7 +125,7 @@ func TestWalRecordFbEncode(t *testing.T) {
 		largeValue := gofakeit.LetterN(1024) // Generate a large value
 
 		record := &walRecord{
-			index:   3,
+			hlc:     3,
 			key:     []byte("large-key"),
 			value:   []byte(largeValue),
 			op:      wrecord.LogOperationOpInsert,

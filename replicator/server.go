@@ -57,7 +57,7 @@ func (s *WalReplicatorServer) StreamWAL(request *v1.StreamWALRequest, g grpc.Ser
 	wr := engine.NewWalReader()
 	var reader *wal.Reader
 	var rErr error
-	if meta.Index == 0 {
+	if meta.RecordProcessed == 0 {
 		reader = wr.NewReader()
 	} else {
 		reader, rErr = wr.NewReaderWithStart(meta.Pos)

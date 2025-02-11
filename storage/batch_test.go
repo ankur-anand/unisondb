@@ -29,7 +29,7 @@ func TestBatch_PutGet(t *testing.T) {
 	// Put key-value pair
 	err = engine.Put(key, value)
 	assert.NoError(t, err, "Put operation should succeed")
-	assert.Equal(t, uint64(1), engine.LastSeq())
+	assert.Equal(t, uint64(1), engine.TotalOpsReceived())
 	// Retrieve value
 	retrievedValue, err := engine.Get(key)
 	assert.NoError(t, err, "Get operation should succeed")

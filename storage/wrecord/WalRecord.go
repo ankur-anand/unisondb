@@ -41,7 +41,7 @@ func (rcv *WalRecord) Table() flatbuffers.Table {
 	return rcv._tab
 }
 
-func (rcv *WalRecord) Index() uint64 {
+func (rcv *WalRecord) Hlc() uint64 {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(4))
 	if o != 0 {
 		return rcv._tab.GetUint64(o + rcv._tab.Pos)
@@ -49,7 +49,7 @@ func (rcv *WalRecord) Index() uint64 {
 	return 0
 }
 
-func (rcv *WalRecord) MutateIndex(n uint64) bool {
+func (rcv *WalRecord) MutateHlc(n uint64) bool {
 	return rcv._tab.MutateUint64Slot(4, n)
 }
 
@@ -216,8 +216,8 @@ func (rcv *WalRecord) MutateLastBatchPos(j int, n byte) bool {
 func WalRecordStart(builder *flatbuffers.Builder) {
 	builder.StartObject(7)
 }
-func WalRecordAddIndex(builder *flatbuffers.Builder, index uint64) {
-	builder.PrependUint64Slot(0, index, 0)
+func WalRecordAddHlc(builder *flatbuffers.Builder, hlc uint64) {
+	builder.PrependUint64Slot(0, hlc, 0)
 }
 func WalRecordAddOperation(builder *flatbuffers.Builder, operation LogOperation) {
 	builder.PrependByteSlot(1, byte(operation), 0)

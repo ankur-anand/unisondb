@@ -36,10 +36,9 @@ const arenaSafetyMargin = wal.KB
 type memTable struct {
 	sList       *skl.Skiplist
 	currentPost *wal.ChunkPosition
-	firstPos    *wal.ChunkPosition
-	index       uint64
 	size        int64
-	kCount      int
+	opsCount    int
+	batchFound  bool
 }
 
 func newMemTable(size int64) *memTable {
@@ -57,26 +56,23 @@ func (table *memTable) canPut(key []byte, val y.ValueStruct) bool {
 		int64(val.EncodedSize())+arenaSafetyMargin <= table.size
 }
 
-func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.ChunkPosition, index uint64) error {
+func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.ChunkPosition) error {
 	if !table.canPut(key, val) {
 		return errArenaSizeWillExceed
 	}
-	table.sList.Put(y.KeyWithTs(key, 0), val)
-	if table.firstPos == nil {
-		table.firstPos = pos
-	}
+	table.sList.Put(y.KeyWithTs(key, uint64(time.Now().UnixNano())), val)
+
 	table.currentPost = pos
-	table.kCount++
-	table.index = index
+	table.opsCount++
 	return nil
 }
 
 func (table *memTable) get(key []byte) y.ValueStruct {
-	return table.sList.Get(y.KeyWithTs(key, 0))
+	return table.sList.Get(y.KeyWithTs(key, uint64(time.Now().UnixNano())))
 }
 
 func (table *memTable) keysCount() int {
-	return table.kCount
+	return table.opsCount
 }
 
 //nolint:unused
@@ -164,12 +160,12 @@ func (e *Engine) processFlushQueue(wg *sync.WaitGroup, signal chan struct{}) {
 func (e *Engine) handleFlush() {
 	mt := e.flushQueue.dequeue()
 	if mt != nil && !mt.sList.Empty() {
-		err := flushMemTable(e.namespace, mt.sList, e.db, e.wal)
+		recordProcessed, err := flushMemTable(e.namespace, mt.sList, e.db, e.wal)
 		if err != nil {
 			log.Fatal("Failed to flushMemTable MemTable:", "namespace", e.namespace, "err", err)
 		}
 		// Create WAL checkpoint
-		err = SaveMetadata(e.db, mt.currentPost, mt.index)
+		err = SaveMetadata(e.db, mt.currentPost, e.opsFlushedCounter.Add(uint64(recordProcessed)))
 		if err != nil {
 			log.Fatal("Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
 		}
@@ -180,14 +176,14 @@ func (e *Engine) handleFlush() {
 		if e.Callback != nil {
 			e.Callback()
 		}
-		slog.Info("Flushed MemTable to BoltDB & Created WAL Checkpoint")
+		slog.Info("Flushed MemTable to BoltDB & Created WAL Checkpoint", "records_processed", recordProcessed)
 	}
 }
 
 // flushMemTable writes all entries from MemTable to BoltDB.
 //
 //nolint:unused
-func flushMemTable(namespace string, currentTable *skl.Skiplist, db *bbolt.DB, wal *wal.WAL) error {
+func flushMemTable(namespace string, currentTable *skl.Skiplist, db *bbolt.DB, wal *wal.WAL) (int, error) {
 	slog.Info("Flushing MemTable to BoltDB...", "namespace", namespace)
 
 	// Create an iterator for the MemTable
@@ -230,14 +226,16 @@ func flushMemTable(namespace string, currentTable *skl.Skiplist, db *bbolt.DB, w
 		record, err := getWalRecord(entry, wal)
 
 		if err != nil {
-			return err
+			return 0, err
 		}
 
 		if record.Operation() == wrecord.LogOperationOpBatchCommit {
-			err := flushBatchCommit(namespace, db, record, wal)
+			n, err := flushBatchCommit(namespace, db, record, wal)
 			if err != nil {
-				return err
+				return 0, err
 			}
+			count += n // total number of batch record
+			count++    // one for batch start marker that was not part of the record.
 			continue
 		}
 
@@ -245,12 +243,12 @@ func flushMemTable(namespace string, currentTable *skl.Skiplist, db *bbolt.DB, w
 		// Flush when batch size is reached
 		if len(deleteKeys) >= readBatchSize || len(records) >= readBatchSize {
 			if err := processBatch(); err != nil {
-				return err
+				return 0, err
 			}
 		}
 	}
 
-	return processBatch()
+	return count, processBatch()
 }
 
 func getWalRecord(entry y.ValueStruct, wal *wal.WAL) (*wrecord.WalRecord, error) {
@@ -309,13 +307,14 @@ func flushRecords(namespace string, db *bbolt.DB, records []*wrecord.WalRecord) 
 	})
 }
 
-func flushBatchCommit(namespace string, db *bbolt.DB, record *wrecord.WalRecord, wal *wal.WAL) error {
+// flushBatchCommit returns the number of batch record that was inserted.
+func flushBatchCommit(namespace string, db *bbolt.DB, record *wrecord.WalRecord, wal *wal.WAL) (int, error) {
 	data, checksum, err := reconstructBatchValue(record, wal)
 	if err != nil {
-		return fmt.Errorf("failed to reconstruct batch value: %w", err)
+		return 0, fmt.Errorf("failed to reconstruct batch value: %w", err)
 	}
 
-	return insertChunkIntoBoltDB(namespace, db, record.KeyBytes(), data, checksum)
+	return len(data), insertChunkIntoBoltDB(namespace, db, record.KeyBytes(), data, checksum)
 }
 
 func reconstructBatchValue(record *wrecord.WalRecord, wal *wal.WAL) ([][]byte, uint32, error) {

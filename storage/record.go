@@ -11,12 +11,11 @@ import (
 )
 
 // Metadata represents a checkpoint in the Write-Ahead Log (WAL).
-// It encodes the last known WAL sequence index (`Index`) and the corresponding
-// chunk position (`Pos`) within the segment file. This is primarily used for
+// It encodes the last known chunk position (`Pos`) within the segment file. This is primarily used for
 // recovery and replication tracking.
 type Metadata struct {
-	Index uint64             // (monotonic, for ordering)
-	Pos   *wal.ChunkPosition // Position of the last written chunk in WAL
+	RecordProcessed uint64             // (monotonic)
+	Pos             *wal.ChunkPosition // Position of the last written chunk in WAL
 }
 
 // MarshalBinary encodes a Metadata struct to a byte slice.
@@ -24,7 +23,7 @@ func (m *Metadata) MarshalBinary() []byte {
 	// Encode the chunk position
 	encodedPos := m.Pos.Encode()
 	result := make([]byte, len(encodedPos)+8)
-	binary.LittleEndian.PutUint64(result, m.Index)
+	binary.LittleEndian.PutUint64(result, m.RecordProcessed)
 
 	copy(result[8:], encodedPos)
 
@@ -39,14 +38,14 @@ func UnmarshalMetadata(data []byte) Metadata {
 	pos := wal.DecodeChunkPosition(data[8:])
 
 	return Metadata{
-		Index: index,
-		Pos:   pos,
+		RecordProcessed: index,
+		Pos:             pos,
 	}
 }
 
 // walRecord.
 type walRecord struct {
-	index uint64
+	hlc   uint64
 	key   []byte
 	value []byte
 	op    wrecord.LogOperation
@@ -92,7 +91,7 @@ func (w *walRecord) fbEncode() ([]byte, error) {
 
 	// Start building the WAL Record
 	wrecord.WalRecordStart(builder)
-	wrecord.WalRecordAddIndex(builder, w.index)
+	wrecord.WalRecordAddHlc(builder, w.hlc)
 	wrecord.WalRecordAddOperation(builder, w.op)
 	wrecord.WalRecordAddKey(builder, keyOffset)
 	wrecord.WalRecordAddValue(builder, valueOffset)
