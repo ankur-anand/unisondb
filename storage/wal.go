@@ -69,8 +69,10 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 	for {
 		data, pos, err := reader.Next()
 		if err == io.EOF || pos == nil {
-			fmt.Println(DecodeHLC(wrecord.GetRootAsWalRecord(lastRecord, 0).Hlc()))
-			fmt.Println("emd")
+			if lastRecord != nil {
+				fmt.Println(DecodeHLC(wrecord.GetRootAsWalRecord(lastRecord, 0).Hlc()))
+				fmt.Println("emd")
+			}
 
 			break
 		}
@@ -81,6 +83,7 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 		}
 
 		recordCount++
+		e.globalCounter.Add(1)
 		lastRecord = data
 		record := wrecord.GetRootAsWalRecord(data, 0)
 		fmt.Println(DecodeHLC(record.Hlc()))
@@ -101,7 +104,6 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 			if err != nil {
 				return err
 			}
-			e.globalCounter.Add(1)
 		}
 	}
 
