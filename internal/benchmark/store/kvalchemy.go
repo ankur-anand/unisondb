@@ -1,6 +1,9 @@
 package store
 
-import "github.com/ankur-anand/kvalchemy/storage"
+import (
+	"github.com/ankur-anand/kvalchemy/storage"
+	"github.com/rosedblabs/wal"
+)
 
 type KVAlchemy struct {
 	namespace string
@@ -8,6 +11,8 @@ type KVAlchemy struct {
 }
 
 func NewKVAlchemy(dir, namespace string) (*KVAlchemy, error) {
+	cfg := storage.DefaultConfig()
+	cfg.ValueThreshold = 100 * wal.KB
 	engine, err := storage.NewStorageEngine(dir, namespace, nil)
 	return &KVAlchemy{
 		namespace: namespace,
