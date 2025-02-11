@@ -270,7 +270,7 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, chunkPos *wal.ChunkP
 			select {
 			case e.queueChan <- struct{}{}:
 			default:
-				slog.Warn("queue signal channel full")
+				slog.Debug("queue signal channel full")
 			}
 			err = e.memTable.put(key, v, chunkPos)
 			// :(
@@ -475,6 +475,7 @@ func (e *Engine) Close() error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
+	slog.Info("engine: closing", "namespace", e.namespace, "ops_received", e.globalCounter.Load(), "ops_flushed", e.opsFlushedCounter.Load())
 	e.shutdown.Store(true)
 	close(e.queueChan)
 

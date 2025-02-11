@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/dgraph-io/badger/v4/y"
@@ -32,6 +33,7 @@ func (e *Engine) NewWalReader() WalReader {
 
 // recoverWAL starts from the last stored sequence in BoltDB.
 func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
+	startTime := time.Now()
 	slog.Info("Recovering WAL...", "namespace", namespace)
 	var reader *wal.Reader
 	var err error
@@ -96,7 +98,7 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 		}
 	}
 
-	slog.Info("WAL Recovery Completed", "namespace", namespace, "record-count", recordCount)
+	slog.Info("WAL Recovery Completed", "namespace", namespace, "record_recovered", recordCount, "duration", time.Since(startTime))
 	e.recoveredEntriesCount = recordCount
 	return nil
 }
