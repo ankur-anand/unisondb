@@ -22,8 +22,8 @@ func DefaultConfig() *StorageConfig {
 	return &StorageConfig{
 		BytesPerSync:   1 * wal.MB,   // 1MB
 		SegmentSize:    16 * wal.MB,  // 16MB
-		ValueThreshold: 2 * wal.KB,   // Store small values in MemTable
-		ArenaSize:      100 * wal.KB, // Default Arena Size
+		ValueThreshold: 100 * wal.KB, // Store small values in MemTable
+		ArenaSize:      1 * wal.MB,   // Default Arena Size
 	}
 }
 
