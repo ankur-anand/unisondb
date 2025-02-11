@@ -88,7 +88,7 @@ func TestMemTable_PutAndGet(t *testing.T) {
 		t.Fatalf("expected canPut to return true for key %q", key)
 	}
 
-	err := table.put(key, val, pos, 1)
+	err := table.put(key, val, pos)
 	assert.NoError(t, err, "unexpected error on put")
 
 	gotVal := table.get(key)
@@ -114,7 +114,7 @@ func TestMemTable_CannotPut(t *testing.T) {
 	pos := &wal.ChunkPosition{SegmentId: 1}
 
 	// should not panic
-	err := table.put(key, val, pos, 1)
+	err := table.put(key, val, pos)
 	if !errors.Is(err, errArenaSizeWillExceed) {
 		t.Fatalf("expected error %q, got %v", errArenaSizeWillExceed, err)
 	}
@@ -175,7 +175,7 @@ func TestFlush_Success(t *testing.T) {
 		})
 	}
 
-	err = flushMemTable("test_namespace", memTable, db, walInstance)
+	_, err = flushMemTable("test_namespace", memTable, db, walInstance)
 	assert.NoError(t, err)
 
 	// **Verify
@@ -212,7 +212,7 @@ func TestFlush_EmptyMemTable(t *testing.T) {
 	assert.NoError(t, err)
 	defer walInstance.Close()
 
-	err = flushMemTable("test_namespace", memTable, db, walInstance)
+	_, err = flushMemTable("test_namespace", memTable, db, walInstance)
 	assert.NoError(t, err)
 }
 
@@ -277,7 +277,7 @@ func TestFlush_Deletes(t *testing.T) {
 		Value: append([]byte{0}, walPos.Encode()...), // Storing WAL position
 	})
 
-	err = flushMemTable("test_namespace", memTable, db, walInstance)
+	_, err = flushMemTable("test_namespace", memTable, db, walInstance)
 	assert.NoError(t, err)
 
 	// Verify key is deleted from BoltDB
@@ -332,7 +332,7 @@ func TestFlush_WALLookup(t *testing.T) {
 	})
 
 	// Execute flushMemTable function
-	err = flushMemTable("test_namespace", memTable, db, walInstance)
+	_, err = flushMemTable("test_namespace", memTable, db, walInstance)
 	assert.NoError(t, err)
 
 	// Verify the key is stored correctly in BoltDB
@@ -369,7 +369,7 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 	err = table.put(key, y.ValueStruct{
 		Meta:  0,
 		Value: append([]byte{1}, data...), // Storing WAL position
-	}, pos, 100)
+	}, pos)
 
 	assert.NoError(t, err, "error putting data")
 
@@ -400,8 +400,8 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 		t.Errorf("error loading chunk position, expected 1, got %d", metadata.Pos.SegmentId)
 	}
 
-	if metadata.Index != 100 {
-		t.Errorf("error loading hlc position, expected 100, got %d", metadata.Index)
+	if metadata.RecordProcessed != 1 {
+		t.Errorf("error loading hlc position, expected 100, got %d", metadata.RecordProcessed)
 	}
 }
 
@@ -433,7 +433,7 @@ func TestProcessFlushQueue(t *testing.T) {
 	err = table.put(key, y.ValueStruct{
 		Meta:  0,
 		Value: append([]byte{1}, data...), // Storing WAL metadata
-	}, pos, 1)
+	}, pos)
 
 	assert.NoError(t, err, "error putting data")
 
@@ -495,7 +495,7 @@ func TestChunkFlush_Persistent(t *testing.T) {
 	// Put key-value pair
 	err = engine.Put(key, value)
 	assert.NoError(t, err, "Put operation should succeed")
-	assert.Equal(t, uint64(1), engine.LastSeq())
+	assert.Equal(t, uint64(1), engine.TotalOpsReceived())
 	// Retrieve value
 	retrievedValue, err := engine.Get(key)
 	assert.NoError(t, err, "Get operation should succeed")

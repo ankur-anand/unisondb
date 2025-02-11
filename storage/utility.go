@@ -109,8 +109,8 @@ func LoadMetadata(db *bbolt.DB) (Metadata, error) {
 //nolint:unused
 func SaveMetadata(db *bbolt.DB, pos *wal.ChunkPosition, index uint64) error {
 	metaData := Metadata{
-		Index: index,
-		Pos:   pos,
+		RecordProcessed: index,
+		Pos:             pos,
 	}
 	value := metaData.MarshalBinary()
 	err := db.Update(func(tx *bbolt.Tx) error {

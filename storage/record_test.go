@@ -14,7 +14,7 @@ import (
 
 func TestMetadataMarshalUnmarshal(t *testing.T) {
 	originalMetadata := Metadata{
-		Index: 123456789,
+		RecordProcessed: 123456789,
 		Pos: &wal.ChunkPosition{
 			SegmentId:   5,
 			BlockNumber: 10,
@@ -30,7 +30,7 @@ func TestMetadataMarshalUnmarshal(t *testing.T) {
 
 	decodedMetadata := UnmarshalMetadata(encoded)
 
-	assert.Equal(t, originalMetadata.Index, decodedMetadata.Index, "WAL Index mismatch after unmarshaling")
+	assert.Equal(t, originalMetadata.RecordProcessed, decodedMetadata.RecordProcessed, "WAL RecordProcessed mismatch after unmarshaling")
 
 	assert.Equal(t, originalMetadata.Pos.SegmentId, decodedMetadata.Pos.SegmentId, "SegmentId mismatch")
 	assert.Equal(t, originalMetadata.Pos.BlockNumber, decodedMetadata.Pos.BlockNumber, "BlockNumber mismatch")
@@ -71,7 +71,7 @@ func TestEncodeDecodeWalRecord(t *testing.T) {
 	data, err := DecompressLZ4(record.ValueBytes())
 	assert.NoError(t, err)
 	// Validate that all fields are correctly restored
-	assert.Equal(t, uint64(123456789), record.Hlc(), "WAL Index mismatch")
+	assert.Equal(t, uint64(123456789), record.Hlc(), "WAL RecordProcessed mismatch")
 	assert.Equal(t, wrecord.LogOperationOpInsert, record.Operation(), "Operation mismatch")
 	assert.Equal(t, []byte("test_key"), record.KeyBytes(), "Key mismatch")
 	assert.Equal(t, []byte("test_value"), data, "Value mismatch")

@@ -36,7 +36,6 @@ func insertIntoBoltDB(namespace string, db *bbolt.DB, key, value []byte) error {
 
 // insertChunkIntoBoltDB stores a chunked key-value pair in BoltDB.
 func insertChunkIntoBoltDB(namespace string, db *bbolt.DB, key []byte, chunks [][]byte, checksum uint32) error {
-
 	return db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(namespace))
 		if b == nil {
@@ -119,7 +118,7 @@ func retrieveFromBoltDB(namespace string, db *bbolt.DB, key []byte) ([]byte, err
 				calculatedChecksum = crc32.Update(calculatedChecksum, crc32.IEEETable, decompressed)
 				fullValue.Write(decompressed)
 			}
-			
+
 			if calculatedChecksum != storedChecksum {
 				return ErrRecordCorrupted
 			}

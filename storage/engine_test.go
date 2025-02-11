@@ -49,7 +49,7 @@ func TestPutGet(t *testing.T) {
 	// Put key-value pair
 	err = engine.Put(key, value)
 	assert.NoError(t, err, "Put operation should succeed")
-	assert.Equal(t, uint64(1), engine.LastSeq())
+	assert.Equal(t, uint64(1), engine.TotalOpsReceived())
 	// Retrieve value
 	retrievedValue, err := engine.Get(key)
 	assert.NoError(t, err, "Get operation should succeed")
@@ -83,7 +83,7 @@ func TestDelete(t *testing.T) {
 	// Ensure key no longer exists
 	_, err = engine.Get(key)
 	assert.ErrorIs(t, err, storage.ErrKeyNotFound, "Deleted key should return key not found error")
-	assert.Equal(t, uint64(2), engine.LastSeq())
+	assert.Equal(t, uint64(2), engine.TotalOpsReceived())
 }
 
 func TestConcurrentWrites(t *testing.T) {
@@ -123,7 +123,7 @@ func TestConcurrentWrites(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, value, retrievedValue, "Concurrent write mismatch")
 	}
-	assert.Equal(t, uint64(numOps), engine.LastSeq())
+	assert.Equal(t, uint64(numOps), engine.TotalOpsReceived())
 }
 
 func TestPersistence(t *testing.T) {
@@ -230,9 +230,11 @@ func TestArenaReplacementAndFlush(t *testing.T) {
 	keyPrefix := "flush_test_key_"
 
 	value := []byte(gofakeit.LetterN(uint(valueSize)))
+	//kv := make(map[string][]byte)
+
 	for i := 0; i < 4000; i++ {
 		key := []byte(fmt.Sprintf("%s%d", keyPrefix, i))
-
+		//keys
 		err := engine.Put(key, value)
 		assert.NoError(t, err, "Put operation should not fail")
 
@@ -294,7 +296,7 @@ func TestArenaReplacementAndFlush(t *testing.T) {
 	}
 
 	// 5000 ops, for keys, + 1 batch start + 1 batch commit.
-	assert.Equal(t, uint64(5002), engine.LastSeq())
+	assert.Equal(t, uint64(5002), engine.TotalOpsReceived())
 
 	value, err = engine.Get(batchKey)
 	assert.NoError(t, err, "Get operation should succeed")
@@ -411,8 +413,8 @@ func TestArenaReplacement_Uncommited_batch(t *testing.T) {
 		assert.GreaterOrEqual(t, len(retrievedValue), valueSize, "Value length mismatch")
 	}
 
-	// 5000 ops, for keys, + 1 batch start + (not 1 batch commit.)
-	assert.Equal(t, uint64(5001), engine.LastSeq())
+	// 4000 ops, for keys, > As Batch is not Commited, (1 batch start + (not 1 batch commit.) not included)
+	assert.Equal(t, uint64(4000), engine.TotalOpsReceived())
 
 	value, err = engine.Get(batchKey)
 	assert.ErrorIs(t, err, storage.ErrKeyNotFound, "Get operation should not succeed")
