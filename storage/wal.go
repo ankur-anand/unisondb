@@ -86,8 +86,7 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 		e.globalCounter.Add(1)
 		lastRecord = data
 		record := wrecord.GetRootAsWalRecord(data, 0)
-		fmt.Println(DecodeHLC(record.Hlc()))
-		fmt.Println(record.Operation(), "here")
+	
 		// Store in MemTable
 		if isMemTableOperation(record.Operation()) {
 			var memValue []byte
