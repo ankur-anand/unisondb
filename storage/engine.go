@@ -40,11 +40,7 @@ var (
 // Engine manages WAL, MemTable (SkipList), and BoltDB for a given namespace.
 type Engine struct {
 	namespace string
-	wal       *wal.WAL
-	// stores the global counter for Hybrid logical clock.
-	// it's not the index of wal.
-	globalCounter         atomic.Uint64
-	opsFlushedCounter     atomic.Uint64 // total ops flushed to BoltDB.
+
 	db                    *bbolt.DB
 	queueChan             chan struct{}
 	flushQueue            *flusherQueue
@@ -56,11 +52,15 @@ type Engine struct {
 
 	// used in testing
 	Callback func()
+	// stores the global counter for Hybrid logical clock.
+	// it's not the index of wal.
+	globalCounter     atomic.Uint64
+	opsFlushedCounter atomic.Uint64 // total ops flushed to BoltDB.
 
 	shutdown atomic.Bool
 	wg       *sync.WaitGroup
-	// protect the mem table and bloom filter
 	mu       sync.RWMutex
+	wal      *wal.WAL
 	bloom    *bloom.BloomFilter
 	memTable *memTable
 }
