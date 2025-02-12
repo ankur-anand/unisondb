@@ -20,10 +20,10 @@ type StorageConfig struct {
 // DefaultConfig returns the default configuration values.
 func DefaultConfig() *StorageConfig {
 	return &StorageConfig{
-		BytesPerSync:   1 * wal.MB,   // 1MB
-		SegmentSize:    16 * wal.MB,  // 16MB
-		ValueThreshold: 2 * wal.KB,   // Store small values in MemTable
-		ArenaSize:      100 * wal.KB, // Default Arena Size
+		BytesPerSync:   1 * wal.MB,  // 1MB
+		SegmentSize:    16 * wal.MB, // 16MB
+		ValueThreshold: 2 * wal.KB,  // Store small values in MemTable
+		ArenaSize:      1 * wal.MB,  // Default Arena Size
 	}
 }
 

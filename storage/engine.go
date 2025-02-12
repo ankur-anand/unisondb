@@ -208,7 +208,8 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op wrecord.LogOperati
 	if err != nil {
 		return err
 	}
-
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	// Write to WAL
 	chunkPos, err := e.wal.Write(encoded)
 	if err != nil {
@@ -257,8 +258,6 @@ func (e *Engine) MemTableSize() int {
 
 // memTableWrite will write the provided key and value to the memTable.
 func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, chunkPos *wal.ChunkPosition) error {
-	e.mu.Lock()
-	defer e.mu.Unlock()
 	var err error
 	err = e.memTable.put(key, v, chunkPos)
 	if err != nil {

@@ -34,7 +34,7 @@ func (e *Engine) NewWalReader() WalReader {
 // recoverWAL starts from the last stored sequence in BoltDB.
 func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 	startTime := time.Now()
-	slog.Info("Recovering WAL...", "namespace", namespace)
+	slog.Info("Recovering WAL...", "namespace", namespace, "counter", e.globalCounter.Load(), "ops-saved", e.opsFlushedCounter.Load())
 	var reader *wal.Reader
 	var err error
 	ignoreFirstChunk := false
@@ -75,7 +75,10 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 			ignoreFirstChunk = false
 			continue
 		}
+
 		recordCount++
+		e.globalCounter.Add(1)
+
 		record := wrecord.GetRootAsWalRecord(data, 0)
 
 		// Store in MemTable
@@ -94,11 +97,10 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 			if err != nil {
 				return err
 			}
-			e.globalCounter.Add(1)
 		}
 	}
 
-	slog.Info("WAL Recovery Completed", "namespace", namespace, "record_recovered", recordCount, "duration", time.Since(startTime))
+	slog.Info("WAL Recovery Completed", "namespace", namespace, "record_recovered", recordCount, "duration", time.Since(startTime), "counter", e.globalCounter.Load(), "ops-saved", e.opsFlushedCounter.Load())
 	e.recoveredEntriesCount = recordCount
 	return nil
 }
