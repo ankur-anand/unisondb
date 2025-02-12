@@ -65,15 +65,9 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 
 	recordCount := 0
 
-	var lastRecord []byte
 	for {
 		data, pos, err := reader.Next()
 		if err == io.EOF || pos == nil {
-			if lastRecord != nil {
-				fmt.Println(DecodeHLC(wrecord.GetRootAsWalRecord(lastRecord, 0).Hlc()))
-				fmt.Println("emd")
-			}
-
 			break
 		}
 
@@ -84,9 +78,9 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 
 		recordCount++
 		e.globalCounter.Add(1)
-		lastRecord = data
+
 		record := wrecord.GetRootAsWalRecord(data, 0)
-	
+
 		// Store in MemTable
 		if isMemTableOperation(record.Operation()) {
 			var memValue []byte
