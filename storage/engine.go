@@ -31,11 +31,40 @@ var (
 	// ErrKeyNotFound is a sentinel error for missing keys.
 	ErrKeyNotFound      = errors.New("key not found")
 	ErrBucketNotFound   = errors.New("bucket not found")
-	ErrInCloseProcess   = errors.New("in-close process")
+	ErrInCloseProcess   = errors.New("in-Close process")
 	ErrDatabaseDirInUse = errors.New("pid.lock is held by another process")
 	ErrRecordCorrupted  = errors.New("record corrupted")
 	ErrInternalError    = errors.New("internal error")
 )
+
+// BtreeWriter defines the interface for interacting with a B-tree based storage
+// for setting individual values, chunks and many value at once.
+type BtreeWriter interface {
+	// Set associates a value with a key within a specific namespace.
+	Set(namespace string, key []byte, value []byte) error
+	// SetMany associates multiple values with corresponding keys within a namespace.
+	SetMany(namespace string, keys [][]byte, values [][]byte) error
+	// SetChunks stores a value that has been split into chunks, associating them with a single key.
+	SetChunks(namespace string, key []byte, chunks [][]byte, checksum uint32) error
+	// Delete deletes a value with a key within a specific namespace.
+	Delete(namespace string, key []byte) error
+	// DeleteMany delete multiple values with corresponding keys within a namespace.
+	DeleteMany(namespace string, keys [][]byte) error
+}
+
+// BtreeReader defines the interface for interacting with a B-tree based storage
+// for getting individual values, chunks and many value at once.
+type BtreeReader interface {
+	// Get retrieves a value associated with a key within a specific namespace.
+	Get(namespace string, key []byte) ([]byte, error)
+}
+
+// BTreeStore combines the BtreeWriter and BtreeReader interfaces
+type BTreeStore interface {
+	BtreeWriter
+	BtreeReader
+	Close() error
+}
 
 // Engine manages WAL, MemTable (SkipList), and BoltDB for a given namespace.
 type Engine struct {
