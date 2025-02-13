@@ -541,8 +541,8 @@ func TestChunkFlush_Persistent(t *testing.T) {
 	// flush the memtable.
 	engine.mu.Lock()
 	// put the old table in the queue
-	oldTable := engine.memTable
-	engine.memTable = newMemTable(engine.storageConfig.ArenaSize)
+	oldTable := engine.currentMemTable
+	engine.currentMemTable = newMemTable(engine.storageConfig.ArenaSize)
 	engine.flushQueue.enqueue(*oldTable)
 	select {
 	case engine.queueChan <- struct{}{}:

@@ -178,6 +178,10 @@ func (e *Engine) handleFlush() {
 		if e.Callback != nil {
 			e.Callback()
 		}
+		e.mu.Lock()
+		// Remove it from the list
+		e.sealedMemTables = e.sealedMemTables[1:]
+		e.mu.Unlock()
 		slog.Info("Flushed MemTable to BoltDB & Created WAL Checkpoint",
 			"ops_flushed", recordProcessed, "namespace", e.namespace,
 			"duration", time.Since(startTime), "bytes_flushed", mt.bytesStored)

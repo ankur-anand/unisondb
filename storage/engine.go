@@ -57,12 +57,13 @@ type Engine struct {
 	globalCounter     atomic.Uint64
 	opsFlushedCounter atomic.Uint64 // total ops flushed to BoltDB.
 
-	shutdown atomic.Bool
-	wg       *sync.WaitGroup
-	mu       sync.RWMutex
-	wal      *wal.WAL
-	bloom    *bloom.BloomFilter
-	memTable *memTable
+	shutdown        atomic.Bool
+	wg              *sync.WaitGroup
+	mu              sync.RWMutex
+	wal             *wal.WAL
+	bloom           *bloom.BloomFilter
+	currentMemTable *memTable
+	sealedMemTables []*memTable
 }
 
 // NewStorageEngine initializes WAL, MemTable, and BoltDB.
@@ -121,17 +122,17 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 
 	// Create storage engine
 	engine := &Engine{
-		namespace:     namespace,
-		wal:           w,
-		db:            db,
-		flushQueue:    newFlusherQueue(signal),
-		queueChan:     signal,
-		storageConfig: *config,
-		fileLock:      fileLock,
-		memTable:      mTable,
-		bloom:         bloomFilter,
-		Callback:      func() {},
-		wg:            &sync.WaitGroup{},
+		namespace:       namespace,
+		wal:             w,
+		db:              db,
+		flushQueue:      newFlusherQueue(signal),
+		queueChan:       signal,
+		storageConfig:   *config,
+		fileLock:        fileLock,
+		currentMemTable: mTable,
+		bloom:           bloomFilter,
+		Callback:        func() {},
+		wg:              &sync.WaitGroup{},
 	}
 
 	// background task:
@@ -253,25 +254,26 @@ func (e *Engine) RecoveredEntriesCount() int {
 func (e *Engine) MemTableSize() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.memTable.keysCount()
+	return e.currentMemTable.keysCount()
 }
 
 // memTableWrite will write the provided key and value to the memTable.
 func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, chunkPos *wal.ChunkPosition) error {
 	var err error
-	err = e.memTable.put(key, v, chunkPos)
+	err = e.currentMemTable.put(key, v, chunkPos)
 	if err != nil {
 		if errors.Is(err, errArenaSizeWillExceed) {
 			// put the old table in the queue
-			oldTable := e.memTable
-			e.memTable = newMemTable(e.storageConfig.ArenaSize)
+			oldTable := e.currentMemTable
+			e.currentMemTable = newMemTable(e.storageConfig.ArenaSize)
 			e.flushQueue.enqueue(*oldTable)
+			e.sealedMemTables = append(e.sealedMemTables, oldTable)
 			select {
 			case e.queueChan <- struct{}{}:
 			default:
 				slog.Debug("queue signal channel full")
 			}
-			err = e.memTable.put(key, v, chunkPos)
+			err = e.currentMemTable.put(key, v, chunkPos)
 			// :(
 			if err != nil {
 				return err
@@ -331,7 +333,14 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		if !e.bloom.Test(key) {
 			return y.ValueStruct{}, ErrKeyNotFound
 		}
-		it := e.memTable.get(key)
+		it := e.currentMemTable.get(key)
+		if it.Meta == byte(wrecord.LogOperationOpNoop) {
+			for i := len(e.sealedMemTables) - 1; i >= 0; i-- {
+				if val := e.sealedMemTables[i].get(key); val.Meta != byte(wrecord.LogOperationOpNoop) {
+					return val, nil
+				}
+			}
+		}
 		return it, nil
 	}
 

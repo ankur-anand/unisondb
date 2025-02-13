@@ -188,7 +188,7 @@ func TestArenaReplacementAndFlush(t *testing.T) {
 
 	config := &storage.StorageConfig{
 		ArenaSize: 100 * wal.KB,
-		// **Small threshold for direct memTable storage
+		// **Small threshold for direct currentMemTable storage
 		// So arena could store large number of values.
 		ValueThreshold: 50,
 	}
@@ -311,7 +311,7 @@ func TestArenaReplacement_Uncommited_batch(t *testing.T) {
 
 	config := &storage.StorageConfig{
 		ArenaSize: 100 * wal.KB,
-		// **Small threshold for direct memTable storage
+		// **Small threshold for direct currentMemTable storage
 		// So arena could store large number of values.
 		ValueThreshold: 50,
 	}
