@@ -12,6 +12,7 @@ import (
 	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/dgraph-io/badger/v4/skl"
 	"github.com/dgraph-io/badger/v4/y"
+	"github.com/dustin/go-humanize"
 	"github.com/rosedblabs/wal"
 )
 
@@ -140,7 +141,7 @@ func (e *Engine) handleFlush() {
 		e.mu.Unlock()
 		slog.Info("Flushed MemTable to BoltDB & Created WAL Checkpoint",
 			"ops_flushed", recordProcessed, "namespace", e.namespace,
-			"duration", time.Since(startTime), "bytes_flushed", mt.bytesStored)
+			"duration", time.Since(startTime), "bytes_flushed", humanize.Bytes(uint64(mt.bytesStored)))
 	}
 }
 
