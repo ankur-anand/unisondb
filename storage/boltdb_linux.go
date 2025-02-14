@@ -5,6 +5,7 @@ package storage
 import (
 	"bufio"
 	"io"
+	"syscall"
 
 	"go.etcd.io/bbolt"
 )
