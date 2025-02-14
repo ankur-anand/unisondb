@@ -202,13 +202,13 @@ func (table *memTable) flush() (int, error) {
 
 func (table *memTable) processBatch(setKeys, setValues, deleteKeys *[][]byte) error {
 	if len(*deleteKeys) > 0 {
-		if err := table.db.DeleteMany(table.namespace, *deleteKeys); err != nil {
+		if err := table.db.DeleteMany(*deleteKeys); err != nil {
 			return err
 		}
 		*deleteKeys = nil
 	}
 	if len(*setKeys) > 0 {
-		if err := table.db.SetMany(table.namespace, *setKeys, *setValues); err != nil {
+		if err := table.db.SetMany(*setKeys, *setValues); err != nil {
 			return err
 		}
 		*setKeys = nil
@@ -243,7 +243,7 @@ func (table *memTable) flushBatchCommit(record *wrecord.WalRecord) (int, error) 
 		return 0, fmt.Errorf("failed to reconstruct batch value: %w", err)
 	}
 
-	return len(data), table.db.SetChunks(table.namespace, record.KeyBytes(), data, checksum)
+	return len(data), table.db.SetChunks(record.KeyBytes(), data, checksum)
 }
 
 func (table *memTable) readCompleteBatch(record *wrecord.WalRecord) ([][]byte, uint32, error) {

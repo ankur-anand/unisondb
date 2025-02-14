@@ -41,16 +41,16 @@ var (
 // BtreeWriter defines the interface for interacting with a B-tree based storage
 // for setting individual values, chunks and many value at once.
 type BtreeWriter interface {
-	// Set associates a value with a key within a specific namespace.
-	Set(namespace string, key []byte, value []byte) error
-	// SetMany associates multiple values with corresponding keys within a namespace.
-	SetMany(namespace string, keys [][]byte, values [][]byte) error
+	// Set associates a value with a key.
+	Set(key []byte, value []byte) error
+	// SetMany associates multiple values with corresponding keys.
+	SetMany(keys [][]byte, values [][]byte) error
 	// SetChunks stores a value that has been split into chunks, associating them with a single key.
-	SetChunks(namespace string, key []byte, chunks [][]byte, checksum uint32) error
-	// Delete deletes a value with a key within a specific namespace.
-	Delete(namespace string, key []byte) error
-	// DeleteMany delete multiple values with corresponding keys within a namespace.
-	DeleteMany(namespace string, keys [][]byte) error
+	SetChunks(key []byte, chunks [][]byte, checksum uint32) error
+	// Delete deletes a value with a key.
+	Delete(key []byte) error
+	// DeleteMany delete multiple values with corresponding keys.
+	DeleteMany(keys [][]byte) error
 
 	StoreMetadata(key []byte, value []byte) error
 }
@@ -58,8 +58,8 @@ type BtreeWriter interface {
 // BtreeReader defines the interface for interacting with a B-tree based storage
 // for getting individual values, chunks and many value at once.
 type BtreeReader interface {
-	// Get retrieves a value associated with a key within a specific namespace.
-	Get(namespace string, key []byte) ([]byte, error)
+	// Get retrieves a value associated with a key.
+	Get(key []byte) ([]byte, error)
 	// SnapShot writes the complete database to the provided io writer.
 	SnapShot(w io.Writer) error
 	RetrieveMetadata(key []byte) ([]byte, error)
@@ -132,7 +132,7 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 	var bTreeStore BTreeStore
 	switch config.DBEngine {
 	case BoltDBEngine, "": // or even default.
-		db, err := newBoltdb(dbFile)
+		db, err := newBoltdb(dbFile, namespace)
 		if err != nil {
 			return nil, err
 		}
@@ -401,7 +401,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	// if the mem table doesn't have this key associated action or log.
 	// directly go to the boltdb to fetch the same.
 	if it.Meta == byte(wrecord.LogOperationOpNoop) {
-		return e.bTreeStore.Get(e.namespace, key)
+		return e.bTreeStore.Get(key)
 	}
 
 	// key deleted

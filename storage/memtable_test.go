@@ -24,7 +24,7 @@ func setupMemTable(t *testing.T, capacity int64) *memTable {
 
 	dbFile := filepath.Join(dir, "test_flush.db")
 
-	db, err := newBoltdb(dbFile)
+	db, err := newBoltdb(dbFile, testNamespace)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		db.Close()
@@ -136,7 +136,7 @@ func TestFlush_Success(t *testing.T) {
 	// **Verify
 	for i := 0; i < 150; i++ {
 		key := []byte("key_" + strconv.Itoa(i))
-		val, err := mmTable.db.Get(testNamespace, key)
+		val, err := mmTable.db.Get(key)
 		assert.NoError(t, err)
 		assert.NotNil(t, val)
 		assert.Equal(t, []byte("value_"+strconv.Itoa(i)), val)
@@ -158,7 +158,7 @@ func TestFlush_Deletes(t *testing.T) {
 	key := []byte("delete_me")
 	value := []byte(gofakeit.LetterN(100))
 	// Create namespace bucket and insert keys
-	err := mmTable.db.Set(testNamespace, key, value)
+	err := mmTable.db.Set(key, value)
 	assert.NoError(t, err)
 
 	record := walRecord{
@@ -184,7 +184,7 @@ func TestFlush_Deletes(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify key is deleted from BoltDB
-	val, err := mmTable.db.Get(testNamespace, key)
+	val, err := mmTable.db.Get(key)
 	assert.ErrorIs(t, err, ErrKeyNotFound)
 	assert.Nil(t, val)
 }
@@ -218,7 +218,7 @@ func TestFlush_WALLookup(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify the key is stored correctly in BoltDB
-	val, err := mmTable.db.Get(testNamespace, key)
+	val, err := mmTable.db.Get(key)
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("wal_value"), val)
 }
@@ -269,7 +269,7 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 		t.Errorf("processFlushQueue timeout")
 	}
 
-	val, err := engine.bTreeStore.Get(testNamespace, key)
+	val, err := engine.bTreeStore.Get(key)
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("wal_value"), val)
 
@@ -332,7 +332,7 @@ func TestProcessHandleFlush(t *testing.T) {
 	}
 
 	// Verify that the key is now in BoltDB
-	val, err := engine.bTreeStore.Get(testNamespace, key)
+	val, err := engine.bTreeStore.Get(key)
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("wal_value"), val)
 

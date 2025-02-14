@@ -26,12 +26,12 @@ type boltdb struct {
 	namespace []byte
 }
 
-func newBoltdb(path string) (*boltdb, error) {
+func newBoltdb(path string, ns string) (*boltdb, error) {
 	db, err := bbolt.Open(path, 0600, nil)
 	if err != nil {
 		return nil, err
 	}
-	return &boltdb{db: db}, nil
+	return &boltdb{db: db, namespace: []byte(ns)}, nil
 }
 
 func (b *boltdb) Close() error {
@@ -39,9 +39,9 @@ func (b *boltdb) Close() error {
 }
 
 // Set associates a value with a key within a specific namespace.
-func (b *boltdb) Set(namespace string, key []byte, value []byte) error {
+func (b *boltdb) Set(key []byte, value []byte) error {
 	return b.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(namespace))
+		b := tx.Bucket(b.namespace)
 		if b == nil {
 			return ErrBucketNotFound
 		}
@@ -53,9 +53,9 @@ func (b *boltdb) Set(namespace string, key []byte, value []byte) error {
 }
 
 // SetMany associates multiple values with corresponding keys within a namespace.
-func (b *boltdb) SetMany(namespace string, keys [][]byte, value [][]byte) error {
+func (b *boltdb) SetMany(keys [][]byte, value [][]byte) error {
 	return b.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(namespace))
+		b := tx.Bucket(b.namespace)
 		if b == nil {
 			return ErrBucketNotFound
 		}
@@ -73,9 +73,9 @@ func (b *boltdb) SetMany(namespace string, keys [][]byte, value [][]byte) error 
 }
 
 // SetChunks stores a value that has been split into chunks, associating them with a single key.
-func (b *boltdb) SetChunks(namespace string, key []byte, chunks [][]byte, checksum uint32) error {
+func (b *boltdb) SetChunks(key []byte, chunks [][]byte, checksum uint32) error {
 	return b.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(namespace))
+		b := tx.Bucket(b.namespace)
 		if b == nil {
 			return ErrBucketNotFound
 		}
@@ -105,9 +105,9 @@ func (b *boltdb) SetChunks(namespace string, key []byte, chunks [][]byte, checks
 }
 
 // Delete deletes a value with a key within a specific namespace.
-func (b *boltdb) Delete(namespace string, key []byte) error {
+func (b *boltdb) Delete(key []byte) error {
 	return b.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(namespace))
+		b := tx.Bucket(b.namespace)
 		if b == nil {
 			return ErrBucketNotFound
 		}
@@ -145,9 +145,9 @@ func (b *boltdb) Delete(namespace string, key []byte) error {
 }
 
 // DeleteMany delete multiple values with corresponding keys within a namespace.
-func (b *boltdb) DeleteMany(namespace string, keys [][]byte) error {
+func (b *boltdb) DeleteMany(keys [][]byte) error {
 	return b.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(namespace))
+		b := tx.Bucket(b.namespace)
 		if b == nil {
 			return ErrBucketNotFound
 		}
@@ -185,11 +185,11 @@ func (b *boltdb) DeleteMany(namespace string, keys [][]byte) error {
 }
 
 // Get retrieves a value associated with a key within a specific namespace.
-func (b *boltdb) Get(namespace string, key []byte) ([]byte, error) {
+func (b *boltdb) Get(key []byte) ([]byte, error) {
 	var value []byte
 
 	err := b.db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(namespace))
+		b := tx.Bucket(b.namespace)
 		if b == nil {
 			return ErrBucketNotFound
 		}

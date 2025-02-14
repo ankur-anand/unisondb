@@ -17,7 +17,7 @@ func setupTestDB(t *testing.T) *boltdb {
 	dir := t.TempDir()
 	tempFile := filepath.Join(dir, "test.db")
 
-	db, err := newBoltdb(tempFile)
+	db, err := newBoltdb(tempFile, testNamespace)
 
 	assert.NoError(t, err, "Failed to open BoltDB")
 
@@ -41,10 +41,10 @@ func TestInsertAndRetrieveFullValue(t *testing.T) {
 	value := []byte("hello world")
 	compressed, err := CompressLZ4(value)
 	assert.NoError(t, err)
-	err = db.Set(testNamespace, key, compressed)
+	err = db.Set(key, compressed)
 	assert.NoError(t, err, "Failed to insert full value")
 
-	retrievedValue, err := db.Get(testNamespace, key)
+	retrievedValue, err := db.Get(key)
 	assert.NoError(t, err, "Failed to retrieve full value")
 	assert.Equal(t, value, retrievedValue, "Retrieved value does not match")
 }
@@ -68,10 +68,10 @@ func TestInsertAndRetrieveChunkedValue(t *testing.T) {
 		assert.NoError(t, err, "Failed to compress chunk")
 	}
 
-	err := db.SetChunks(testNamespace, key, compressed, checksum)
+	err := db.SetChunks(key, compressed, checksum)
 	assert.NoError(t, err, "Failed to insert chunked value")
 
-	retrievedValue, err := db.Get(testNamespace, key)
+	retrievedValue, err := db.Get(key)
 	assert.NoError(t, err, "Failed to retrieve chunked value")
 
 	expectedValue := bytes.Join(chunks, nil)
@@ -93,7 +93,7 @@ func TestCorruptChunkMetadata(t *testing.T) {
 	})
 	assert.NoError(t, err, "Failed to insert corrupt metadata")
 
-	_, err = db.Get(testNamespace, key)
+	_, err = db.Get(key)
 	assert.Error(t, err, "Expected error for corrupt metadata")
 	assert.Equal(t, "invalid chunk metadata", err.Error(), "Unexpected error message")
 }
@@ -110,15 +110,15 @@ func TestDeleteChunks(t *testing.T) {
 
 	checksum := crc32.ChecksumIEEE(bytes.Join(chunks, nil))
 
-	err := db.SetChunks(testNamespace, key, chunks, checksum)
+	err := db.SetChunks(key, chunks, checksum)
 	assert.NoError(t, err)
 
-	err = db.Delete(testNamespace, key)
+	err = db.Delete(key)
 	assert.NoError(t, err)
 
 	for i := range chunks {
 		chunkKey := []byte(fmt.Sprintf("%s_chunk_%d", key, i))
-		chunkValue, err := db.Get(testNamespace, chunkKey)
+		chunkValue, err := db.Get(chunkKey)
 		assert.Error(t, err)
 		assert.Nil(t, chunkValue)
 	}
@@ -136,14 +136,14 @@ func TestDeleteMany(t *testing.T) {
 		[]byte("value2"),
 	}
 
-	err := db.SetMany(testNamespace, keys, values)
+	err := db.SetMany(keys, values)
 	assert.NoError(t, err)
 
-	err = db.DeleteMany(testNamespace, keys)
+	err = db.DeleteMany(keys)
 	assert.NoError(t, err)
 
 	for _, key := range keys {
-		retrievedValue, err := db.Get(testNamespace, key)
+		retrievedValue, err := db.Get(key)
 		assert.Error(t, err)
 		assert.Nil(t, retrievedValue)
 	}
@@ -155,13 +155,13 @@ func TestDelete(t *testing.T) {
 	key := []byte("deleteKey")
 	value := []byte("deleteValue")
 
-	err := db.Set(testNamespace, key, value)
+	err := db.Set(key, value)
 	assert.NoError(t, err)
 
-	err = db.Delete(testNamespace, key)
+	err = db.Delete(key)
 	assert.NoError(t, err)
 
-	retrievedValue, err := db.Get(testNamespace, key)
+	retrievedValue, err := db.Get(key)
 	assert.Error(t, err)
 	assert.Nil(t, retrievedValue)
 }
