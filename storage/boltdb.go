@@ -20,9 +20,10 @@ var (
 	ErrInvalidDataFormat    = errors.New("invalid data format")
 )
 
-// boltdb embed an initialized bolt db and implements PersistenceWriter and PersistenceReader
+// boltdb embed an initialized bolt db and implements PersistenceWriter and PersistenceReader.
 type boltdb struct {
-	db *bbolt.DB
+	db        *bbolt.DB
+	namespace []byte
 }
 
 func newBoltdb(path string) (*boltdb, error) {
@@ -141,7 +142,6 @@ func (b *boltdb) Delete(namespace string, key []byte) error {
 
 		return ErrInvalidDataFormat
 	})
-
 }
 
 // DeleteMany delete multiple values with corresponding keys within a namespace.
@@ -249,5 +249,33 @@ func (b *boltdb) Get(namespace string, key []byte) ([]byte, error) {
 		return ErrInvalidDataFormat
 	})
 
+	return value, err
+}
+
+func (b *boltdb) StoreMetadata(key []byte, value []byte) error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(sysBucketMetaData))
+		if b == nil {
+			return ErrBucketNotFound
+		}
+		return b.Put(key, value)
+	})
+}
+
+func (b *boltdb) RetrieveMetadata(key []byte) ([]byte, error) {
+	var value []byte
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(sysBucketMetaData))
+		if bucket == nil {
+			return ErrBucketNotFound
+		}
+		data := bucket.Get(key)
+		if data == nil {
+			return ErrKeyNotFound
+		}
+		value = make([]byte, len(data))
+		copy(value, data)
+		return nil
+	})
 	return value, err
 }

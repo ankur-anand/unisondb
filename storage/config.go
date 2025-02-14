@@ -9,12 +9,20 @@ import (
 	"github.com/rosedblabs/wal"
 )
 
+// DBEngine : which bTreeStore engine to use for the underlying persistence storage.
+type DBEngine string
+
+const (
+	BoltDBEngine DBEngine = "BOLT"
+)
+
 // StorageConfig stores all tunable parameters.
 type StorageConfig struct {
-	BytesPerSync   int64 `toml:"bytes_per_sync"`
-	SegmentSize    int64 `toml:"segment_size"`
-	ValueThreshold int64 `toml:"value_threshold"`
-	ArenaSize      int64 `toml:"arena_size"`
+	BytesPerSync   int64    `toml:"bytes_per_sync"`
+	SegmentSize    int64    `toml:"segment_size"`
+	ValueThreshold int64    `toml:"value_threshold"`
+	ArenaSize      int64    `toml:"arena_size"`
+	DBEngine       DBEngine `toml:"engine"`
 }
 
 // DefaultConfig returns the default configuration values.
@@ -24,6 +32,7 @@ func DefaultConfig() *StorageConfig {
 		SegmentSize:    16 * wal.MB, // 16MB
 		ValueThreshold: 1 * wal.KB,  // Store small values in MemTable
 		ArenaSize:      4 * wal.MB,  // Default Arena Size
+		DBEngine:       BoltDBEngine,
 	}
 }
 

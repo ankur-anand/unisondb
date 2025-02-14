@@ -26,7 +26,7 @@ func TestMetadataMarshalUnmarshal(t *testing.T) {
 	encoded := originalMetadata.MarshalBinary()
 
 	expectedSize := 8 + len(originalMetadata.Pos.Encode())
-	assert.Equal(t, expectedSize, len(encoded), "Encoded metadata size mismatch")
+	assert.Equal(t, expectedSize, len(encoded), "Encoded metadata capacity mismatch")
 
 	decodedMetadata := UnmarshalMetadata(encoded)
 
@@ -47,7 +47,7 @@ func TestUnmarshalMetadataHandlesInvalidData(t *testing.T) {
 		}
 	}()
 
-	// This should panic due to invalid input size
+	// This should panic due to invalid input capacity
 	_ = UnmarshalMetadata(invalidData)
 }
 
@@ -87,7 +87,7 @@ func TestDecodeWalRecordHandlesInvalidData(t *testing.T) {
 		}
 	}()
 
-	// This should panic due to invalid input size
+	// This should panic due to invalid input capacity
 	_ = wrecord.GetRootAsWalRecord(invalidData, 0)
 }
 
