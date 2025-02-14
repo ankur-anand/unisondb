@@ -2,6 +2,13 @@
 
 package storage
 
+import (
+	"bufio"
+	"io"
+
+	"go.etcd.io/bbolt"
+)
+
 func (b *boltdb) SnapShot(w io.Writer) error {
 	// helps in performance, if the provided writer doesn't
 	// have buffer.
