@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	dbFileName  = "bTreeStore.bolt"
+	dbFileName  = "bolt.db"
 	walDirName  = "wal"
 	pidLockName = "pid.lock"
 )
