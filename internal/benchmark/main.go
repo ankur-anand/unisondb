@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ankur-anand/kvalchemy/internal/benchmark/store"
+	"github.com/ankur-anand/kvalchemy/storage"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/tidwall/redcon"
 )
@@ -106,6 +108,11 @@ func main() {
 					}
 
 					val, err := se.Get(cmd.Args[1])
+
+					if errors.Is(err, storage.ErrKeyNotFound) {
+						conn.WriteNull()
+						return
+					}
 
 					if err != nil {
 						conn.WriteError(err.Error())

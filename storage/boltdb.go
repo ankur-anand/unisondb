@@ -20,10 +20,28 @@ var (
 	ErrInvalidDataFormat    = errors.New("invalid data format")
 )
 
-// insertIntoBoltDB stores a complete key-value pair in BoltDB.
-func insertIntoBoltDB(namespace string, db *bbolt.DB, key, value []byte) error {
-	return db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(namespace))
+// boltdb embed an initialized bolt db and implements PersistenceWriter and PersistenceReader.
+type boltdb struct {
+	db        *bbolt.DB
+	namespace []byte
+}
+
+func newBoltdb(path string, ns string) (*boltdb, error) {
+	db, err := bbolt.Open(path, 0600, nil)
+	if err != nil {
+		return nil, err
+	}
+	return &boltdb{db: db, namespace: []byte(ns)}, nil
+}
+
+func (b *boltdb) Close() error {
+	return b.db.Close()
+}
+
+// Set associates a value with a key within a specific namespace.
+func (b *boltdb) Set(key []byte, value []byte) error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(b.namespace)
 		if b == nil {
 			return ErrBucketNotFound
 		}
@@ -34,10 +52,30 @@ func insertIntoBoltDB(namespace string, db *bbolt.DB, key, value []byte) error {
 	})
 }
 
-// insertChunkIntoBoltDB stores a chunked key-value pair in BoltDB.
-func insertChunkIntoBoltDB(namespace string, db *bbolt.DB, key []byte, chunks [][]byte, checksum uint32) error {
-	return db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(namespace))
+// SetMany associates multiple values with corresponding keys within a namespace.
+func (b *boltdb) SetMany(keys [][]byte, value [][]byte) error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(b.namespace)
+		if b == nil {
+			return ErrBucketNotFound
+		}
+		for i, key := range keys {
+			// indicate this is a full value, not chunked
+			storedValue := append([]byte{FullValueFlag}, value[i]...)
+
+			err := b.Put(key, storedValue)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// SetChunks stores a value that has been split into chunks, associating them with a single key.
+func (b *boltdb) SetChunks(key []byte, chunks [][]byte, checksum uint32) error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(b.namespace)
 		if b == nil {
 			return ErrBucketNotFound
 		}
@@ -66,12 +104,92 @@ func insertChunkIntoBoltDB(namespace string, db *bbolt.DB, key []byte, chunks []
 	})
 }
 
-// retrieveFromBoltDB retrieves either a full value or a chunked value from BoltDB.
-func retrieveFromBoltDB(namespace string, db *bbolt.DB, key []byte) ([]byte, error) {
+// Delete deletes a value with a key within a specific namespace.
+func (b *boltdb) Delete(key []byte) error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(b.namespace)
+		if b == nil {
+			return ErrBucketNotFound
+		}
+
+		storedValue := b.Get(key)
+		if storedValue == nil {
+			return ErrKeyNotFound
+		}
+
+		flag := storedValue[0]
+		switch flag {
+		case FullValueFlag:
+
+			return b.Delete(key)
+
+		case ChunkedValueFlag:
+			if len(storedValue) < 9 {
+				return ErrInvalidChunkMetadata
+			}
+
+			chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
+
+			for i := 0; i < int(chunkCount); i++ {
+				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
+				if err := b.Delete([]byte(chunkKey)); err != nil {
+					return err
+				}
+			}
+
+			return b.Delete(key)
+		}
+
+		return ErrInvalidDataFormat
+	})
+}
+
+// DeleteMany delete multiple values with corresponding keys within a namespace.
+func (b *boltdb) DeleteMany(keys [][]byte) error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(b.namespace)
+		if b == nil {
+			return ErrBucketNotFound
+		}
+		for _, key := range keys {
+			storedValue := b.Get(key)
+			if storedValue == nil {
+				return ErrKeyNotFound
+			}
+
+			flag := storedValue[0]
+			switch flag {
+			case FullValueFlag:
+
+				return b.Delete(key)
+
+			case ChunkedValueFlag:
+				if len(storedValue) < 9 {
+					return ErrInvalidChunkMetadata
+				}
+
+				chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
+
+				for i := 0; i < int(chunkCount); i++ {
+					chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
+					if err := b.Delete([]byte(chunkKey)); err != nil {
+						return err
+					}
+				}
+
+				return b.Delete(key)
+			}
+		}
+		return nil
+	})
+}
+
+// Get retrieves a value associated with a key within a specific namespace.
+func (b *boltdb) Get(key []byte) ([]byte, error) {
 	var value []byte
 
-	err := db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(namespace))
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(b.namespace)
 		if b == nil {
 			return ErrBucketNotFound
 		}
@@ -131,5 +249,33 @@ func retrieveFromBoltDB(namespace string, db *bbolt.DB, key []byte) ([]byte, err
 		return ErrInvalidDataFormat
 	})
 
+	return value, err
+}
+
+func (b *boltdb) StoreMetadata(key []byte, value []byte) error {
+	return b.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(sysBucketMetaData))
+		if b == nil {
+			return ErrBucketNotFound
+		}
+		return b.Put(key, value)
+	})
+}
+
+func (b *boltdb) RetrieveMetadata(key []byte) ([]byte, error) {
+	var value []byte
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(sysBucketMetaData))
+		if bucket == nil {
+			return ErrBucketNotFound
+		}
+		data := bucket.Get(key)
+		if data == nil {
+			return ErrKeyNotFound
+		}
+		value = make([]byte, len(data))
+		copy(value, data)
+		return nil
+	})
 	return value, err
 }

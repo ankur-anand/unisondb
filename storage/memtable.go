@@ -13,16 +13,15 @@ import (
 	"github.com/dgraph-io/badger/v4/skl"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/rosedblabs/wal"
-	"go.etcd.io/bbolt"
 )
 
 var (
-	errArenaSizeWillExceed = errors.New("arena size will exceed the limit")
+	errArenaSizeWillExceed = errors.New("arena capacity will exceed the limit")
 
 	directValuePrefix  = []byte{1} // Marks values stored directly in memory
 	walReferencePrefix = []byte{0} // Marks values stored as a reference in WAL
 
-	readBatchSize = 20
+	readBatchSize = 32
 )
 
 // Add a margin to avoid boundary issues, arena uses the same pool for itself.
@@ -34,101 +33,52 @@ const arenaSafetyMargin = wal.KB
 //
 //nolint:unused
 type memTable struct {
-	sList       *skl.Skiplist
-	currentPost *wal.ChunkPosition
-	size        int64
-	opsCount    int
-	bytesStored int
+	skipList        *skl.Skiplist
+	lastWalPosition *wal.ChunkPosition
+	capacity        int64
+	opCount         int
+	bytesStored     int
+	db              BTreeStore
+	wal             *wal.WAL
+	namespace       string
 }
 
-func newMemTable(size int64) *memTable {
+func newMemTable(capacity int64, db BTreeStore, wal *wal.WAL, namespace string) *memTable {
 	return &memTable{
-		sList: skl.NewSkiplist(size),
-		size:  size,
+		skipList:  skl.NewSkiplist(capacity),
+		capacity:  capacity,
+		db:        db,
+		wal:       wal,
+		namespace: namespace,
 	}
 }
 
-// skiplist arena has a fixed size, if adding the given key-value pair would exceed its capacity
-// the skiplist panic. verify before to avoid the panic.
+// skip list arena has a fixed capacity, if adding the given key-value pair would exceed its capacity
+// the skip list panic. verify before to avoid the panic.
 func (table *memTable) canPut(key []byte, val y.ValueStruct) bool {
-	return table.sList.MemSize()+
+	return table.skipList.MemSize()+
 		int64(len(y.KeyWithTs(key, 0)))+
-		int64(val.EncodedSize())+arenaSafetyMargin <= table.size
+		int64(val.EncodedSize())+arenaSafetyMargin <= table.capacity
 }
 
 func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.ChunkPosition) error {
 	if !table.canPut(key, val) {
 		return errArenaSizeWillExceed
 	}
-	table.sList.Put(y.KeyWithTs(key, uint64(time.Now().UnixNano())), val)
+	table.skipList.Put(y.KeyWithTs(key, uint64(time.Now().UnixNano())), val)
 
-	table.currentPost = pos
-	table.opsCount++
+	table.lastWalPosition = pos
+	table.opCount++
 	table.bytesStored = table.bytesStored + len(key) + len(val.Value)
 	return nil
 }
 
 func (table *memTable) get(key []byte) y.ValueStruct {
-	return table.sList.Get(y.KeyWithTs(key, uint64(time.Now().UnixNano())))
+	return table.skipList.Get(y.KeyWithTs(key, uint64(time.Now().UnixNano())))
 }
 
-func (table *memTable) keysCount() int {
-	return table.opsCount
-}
-
-//nolint:unused
-type flushQueue struct {
-	mTable *memTable
-	next   *flushQueue
-}
-
-// flusherQueue holds all the pending mem table that needs to be flushed to persistence store.
-// queue is used to make the flushing in order the mem-table is written.
-//
-//nolint:unused
-type flusherQueue struct {
-	mu         sync.Mutex
-	head, tail *flushQueue
-	signal     chan struct{}
-}
-
-// newFlusherQueue returns an initialized flusherQueue.
-func newFlusherQueue(signal chan struct{}) *flusherQueue {
-	return &flusherQueue{
-		signal: signal,
-	}
-}
-
-//nolint:unused
-func (fq *flusherQueue) enqueue(m memTable) {
-	fq.mu.Lock()
-	defer fq.mu.Unlock()
-	node := &flushQueue{mTable: &m}
-	if fq.tail != nil {
-		fq.tail.next = node
-	}
-
-	fq.tail = node
-	if fq.head == nil {
-		fq.head = node
-	}
-}
-
-//nolint:unused
-func (fq *flusherQueue) dequeue() *memTable {
-	fq.mu.Lock()
-	defer fq.mu.Unlock()
-
-	if fq.head == nil {
-		return nil
-	}
-
-	memTable := fq.head.mTable
-	fq.head = fq.head.next
-	if fq.head == nil {
-		fq.tail = nil
-	}
-	return memTable
+func (table *memTable) opsCount() int {
+	return table.opCount
 }
 
 // processFlushQueue flushes the pending mem table in the queue to the persistence storage
@@ -139,7 +89,7 @@ func (e *Engine) processFlushQueue(wg *sync.WaitGroup, signal chan struct{}) {
 	wg.Add(1)
 	// check if there is item in queue that needs to be flushed
 	// based upon timer, as the process of input of the WAL write could
-	// be higher, then what bolt-db could keep up the pace.
+	// be higher, then what bolt-bTreeStore could keep up the pace.
 	tick := time.NewTicker(1 * time.Second)
 	go func() {
 		defer tick.Stop()
@@ -159,15 +109,21 @@ func (e *Engine) processFlushQueue(wg *sync.WaitGroup, signal chan struct{}) {
 }
 
 func (e *Engine) handleFlush() {
-	mt := e.flushQueue.dequeue()
-	if mt != nil && !mt.sList.Empty() {
+	var mt *memTable
+	e.mu.Lock()
+	if len(e.sealedMemTables) > 0 {
+		mt = e.sealedMemTables[0]
+	}
+	e.mu.Unlock()
+
+	if mt != nil && !mt.skipList.Empty() {
 		startTime := time.Now()
-		recordProcessed, err := flushMemTable(e.namespace, mt.sList, e.db, e.wal)
+		recordProcessed, err := mt.flush()
 		if err != nil {
 			log.Fatal("Failed to flushMemTable MemTable:", "namespace", e.namespace, "err", err)
 		}
 		// Create WAL checkpoint
-		err = SaveMetadata(e.db, mt.currentPost, e.opsFlushedCounter.Add(uint64(recordProcessed)))
+		err = SaveMetadata(e.bTreeStore, mt.lastWalPosition, e.opsFlushedCounter.Add(uint64(recordProcessed)))
 		if err != nil {
 			log.Fatal("Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
 		}
@@ -178,44 +134,31 @@ func (e *Engine) handleFlush() {
 		if e.Callback != nil {
 			e.Callback()
 		}
+		e.mu.Lock()
+		// Remove it from the list
+		e.sealedMemTables = e.sealedMemTables[1:]
+		e.mu.Unlock()
 		slog.Info("Flushed MemTable to BoltDB & Created WAL Checkpoint",
 			"ops_flushed", recordProcessed, "namespace", e.namespace,
 			"duration", time.Since(startTime), "bytes_flushed", mt.bytesStored)
 	}
 }
 
-// flushMemTable writes all entries from MemTable to BoltDB.
+// flush writes all entries from MemTable to BoltDB.
 //
 //nolint:unused
-func flushMemTable(namespace string, currentTable *skl.Skiplist, db *bbolt.DB, wal *wal.WAL) (int, error) {
-	slog.Debug("Flushing MemTable to BoltDB...", "namespace", namespace)
+func (table *memTable) flush() (int, error) {
+	slog.Debug("Flushing MemTable to BoltDB...", "namespace", table.namespace)
 
 	// Create an iterator for the MemTable
-	it := currentTable.NewIterator()
+	it := table.skipList.NewIterator()
 	defer func(it *skl.Iterator) {
 		_ = it.Close()
 	}(it)
 
 	count := 0
 
-	var records []*wrecord.WalRecord
-	var deleteKeys [][]byte
-
-	processBatch := func() error {
-		if len(deleteKeys) > 0 {
-			if err := flushDeletes(namespace, db, deleteKeys); err != nil {
-				return err
-			}
-			deleteKeys = nil
-		}
-		if len(records) > 0 {
-			if err := flushRecords(namespace, db, records); err != nil {
-				return err
-			}
-			records = nil
-		}
-		return nil
-	}
+	var setKeys, setValues, deleteKeys [][]byte
 
 	for it.SeekToFirst(); it.Valid(); it.Next() {
 		count++
@@ -227,34 +170,54 @@ func flushMemTable(namespace string, currentTable *skl.Skiplist, db *bbolt.DB, w
 			continue
 		}
 
-		record, err := getWalRecord(entry, wal)
-
+		record, err := getWalRecord(entry, table.wal)
 		if err != nil {
 			return 0, err
 		}
 
 		if record.Operation() == wrecord.LogOperationOpBatchCommit {
-			n, err := flushBatchCommit(namespace, db, record, wal)
+			n, err := table.flushBatchCommit(record)
 			if err != nil {
 				return 0, err
 			}
-			count += n // total number of batch record
-			count++    // one for batch start marker that was not part of the record.
+			// total number of batch record + one for batch start marker that was not part of the record.
+			count += n + 1
+
 			continue
 		}
 
-		records = append(records, record)
-		// Flush when batch size is reached
-		if len(deleteKeys) >= readBatchSize || len(records) >= readBatchSize {
-			if err := processBatch(); err != nil {
+		setKeys = append(setKeys, record.KeyBytes())
+		setValues = append(setValues, record.ValueBytes())
+
+		// Flush when batch capacity is reached
+		if len(deleteKeys) >= readBatchSize || len(setKeys) >= readBatchSize {
+			if err := table.processBatch(&setKeys, &setValues, &deleteKeys); err != nil {
 				return 0, err
 			}
 		}
 	}
 
-	return count, processBatch()
+	return count, table.processBatch(&setKeys, &setValues, &deleteKeys)
 }
 
+func (table *memTable) processBatch(setKeys, setValues, deleteKeys *[][]byte) error {
+	if len(*deleteKeys) > 0 {
+		if err := table.db.DeleteMany(*deleteKeys); err != nil {
+			return err
+		}
+		*deleteKeys = nil
+	}
+	if len(*setKeys) > 0 {
+		if err := table.db.SetMany(*setKeys, *setValues); err != nil {
+			return err
+		}
+		*setKeys = nil
+		*setValues = nil
+	}
+	return nil
+}
+
+// Note: We are only compressing the value not the wal record. So not decompression involved.
 func getWalRecord(entry y.ValueStruct, wal *wal.WAL) (*wrecord.WalRecord, error) {
 	chunkPos, value, err := decodeChunkPositionWithValue(entry.Value)
 	if err != nil {
@@ -273,55 +236,17 @@ func getWalRecord(entry y.ValueStruct, wal *wal.WAL) (*wrecord.WalRecord, error)
 	return wrecord.GetRootAsWalRecord(walValue, 0), nil
 }
 
-func flushDeletes(namespace string, db *bbolt.DB, keys [][]byte) error {
-	return db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(namespace))
-		if bucket == nil {
-			return ErrBucketNotFound
-		}
-
-		for _, key := range keys {
-			err := bucket.Delete(key)
-			if err != nil {
-				return err
-			}
-		}
-
-		return nil
-	})
-}
-
-func flushRecords(namespace string, db *bbolt.DB, records []*wrecord.WalRecord) error {
-	return db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(namespace))
-		if bucket == nil {
-			return ErrBucketNotFound
-		}
-		for _, record := range records {
-			key := record.KeyBytes()
-			value := record.ValueBytes()
-			// to indicate this is a full value, not chunked
-			storedValue := append([]byte{FullValueFlag}, value...)
-			err := bucket.Put(key, storedValue)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
 // flushBatchCommit returns the number of batch record that was inserted.
-func flushBatchCommit(namespace string, db *bbolt.DB, record *wrecord.WalRecord, wal *wal.WAL) (int, error) {
-	data, checksum, err := reconstructBatchValue(record, wal)
+func (table *memTable) flushBatchCommit(record *wrecord.WalRecord) (int, error) {
+	data, checksum, err := table.readCompleteBatch(record)
 	if err != nil {
 		return 0, fmt.Errorf("failed to reconstruct batch value: %w", err)
 	}
 
-	return len(data), insertChunkIntoBoltDB(namespace, db, record.KeyBytes(), data, checksum)
+	return len(data), table.db.SetChunks(record.KeyBytes(), data, checksum)
 }
 
-func reconstructBatchValue(record *wrecord.WalRecord, wal *wal.WAL) ([][]byte, uint32, error) {
+func (table *memTable) readCompleteBatch(record *wrecord.WalRecord) ([][]byte, uint32, error) {
 	lastPos := record.LastBatchPosBytes()
 	if len(lastPos) == 0 {
 		return nil, 0, ErrRecordCorrupted
@@ -338,7 +263,7 @@ func reconstructBatchValue(record *wrecord.WalRecord, wal *wal.WAL) ([][]byte, u
 	}
 	checksum := unmarshalChecksum(sum)
 
-	data, err := readChunks(wal, pos)
+	data, err := readChunks(table.wal, pos)
 
 	if err != nil {
 		return nil, 0, err

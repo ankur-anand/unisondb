@@ -8,13 +8,12 @@ import (
 
 	"github.com/pierrec/lz4/v4"
 	"github.com/rosedblabs/wal"
-	"go.etcd.io/bbolt"
 )
 
 var (
-	walCheckPointBucket = []byte("namespace-meta-data")
-	walCheckPointKey    = []byte("wal-checkpoint-key")
-	bloomFilterKey      = []byte("bloom-filter")
+	sysBucketMetaData   = "storage-metadata"
+	sysKeyWalCheckPoint = []byte("wal-checkpoint")
+	sysKeyBloomFilter   = []byte("bloom-filter")
 )
 
 // LZ4WriterPool reuses writers to optimize performance.
@@ -83,46 +82,28 @@ func decodeChunkPositionWithValue(data []byte) (*wal.ChunkPosition, []byte, erro
 // LoadMetadata retrieves the WAL checkpoint from BoltDB.
 //
 //nolint:unused
-func LoadMetadata(db *bbolt.DB) (Metadata, error) {
+func LoadMetadata(db BTreeStore) (Metadata, error) {
 	var metadata Metadata
 
-	err := db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(walCheckPointBucket)
-		if bucket == nil {
-			return ErrBucketNotFound
-		}
-
-		data := bucket.Get(walCheckPointKey)
-		if data == nil {
-			return ErrKeyNotFound
-		}
-		metadata = UnmarshalMetadata(data)
-
-		return nil
-	})
-
+	data, err := db.RetrieveMetadata(sysKeyWalCheckPoint)
+	if err != nil {
+		return metadata, err
+	}
+	metadata = UnmarshalMetadata(data)
 	return metadata, err
 }
 
 // SaveMetadata saves the WAL checkpoint to BoltDB.
 //
 //nolint:unused
-func SaveMetadata(db *bbolt.DB, pos *wal.ChunkPosition, index uint64) error {
+func SaveMetadata(db BTreeStore, pos *wal.ChunkPosition, index uint64) error {
 	metaData := Metadata{
 		RecordProcessed: index,
 		Pos:             pos,
 	}
 	value := metaData.MarshalBinary()
-	err := db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(walCheckPointBucket)
-		if bucket == nil {
-			return ErrBucketNotFound
-		}
 
-		return bucket.Put(walCheckPointKey, value)
-	})
-
-	return err
+	return db.StoreMetadata(sysKeyWalCheckPoint, value)
 }
 
 func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {

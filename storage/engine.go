@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -22,7 +23,7 @@ import (
 )
 
 const (
-	dbFileName  = "db.bolt"
+	dbFileName  = "bTreeStore.bolt"
 	walDirName  = "wal"
 	pidLockName = "pid.lock"
 )
@@ -31,23 +32,53 @@ var (
 	// ErrKeyNotFound is a sentinel error for missing keys.
 	ErrKeyNotFound      = errors.New("key not found")
 	ErrBucketNotFound   = errors.New("bucket not found")
-	ErrInCloseProcess   = errors.New("in-close process")
+	ErrInCloseProcess   = errors.New("in-Close process")
 	ErrDatabaseDirInUse = errors.New("pid.lock is held by another process")
 	ErrRecordCorrupted  = errors.New("record corrupted")
 	ErrInternalError    = errors.New("internal error")
 )
 
+// BtreeWriter defines the interface for interacting with a B-tree based storage
+// for setting individual values, chunks and many value at once.
+type BtreeWriter interface {
+	// Set associates a value with a key.
+	Set(key []byte, value []byte) error
+	// SetMany associates multiple values with corresponding keys.
+	SetMany(keys [][]byte, values [][]byte) error
+	// SetChunks stores a value that has been split into chunks, associating them with a single key.
+	SetChunks(key []byte, chunks [][]byte, checksum uint32) error
+	// Delete deletes a value with a key.
+	Delete(key []byte) error
+	// DeleteMany delete multiple values with corresponding keys.
+	DeleteMany(keys [][]byte) error
+
+	StoreMetadata(key []byte, value []byte) error
+}
+
+// BtreeReader defines the interface for interacting with a B-tree based storage
+// for getting individual values, chunks and many value at once.
+type BtreeReader interface {
+	// Get retrieves a value associated with a key.
+	Get(key []byte) ([]byte, error)
+	// SnapShot writes the complete database to the provided io writer.
+	SnapShot(w io.Writer) error
+	RetrieveMetadata(key []byte) ([]byte, error)
+}
+
+// BTreeStore combines the BtreeWriter and BtreeReader interfaces.
+type BTreeStore interface {
+	BtreeWriter
+	BtreeReader
+	Close() error
+}
+
 // Engine manages WAL, MemTable (SkipList), and BoltDB for a given namespace.
 type Engine struct {
 	namespace string
-	wal       *wal.WAL
-	// stores the global counter for Hybrid logical clock.
-	// it's not the index of wal.
-	globalCounter         atomic.Uint64
-	opsFlushedCounter     atomic.Uint64 // total ops flushed to BoltDB.
-	db                    *bbolt.DB
-	queueChan             chan struct{}
-	flushQueue            *flusherQueue
+
+	bTreeStore  BTreeStore
+	flushSignal chan struct{}
+
 	storageConfig         StorageConfig
 	fileLock              *flock.Flock
 	recoveredEntriesCount int
@@ -56,13 +87,18 @@ type Engine struct {
 
 	// used in testing
 	Callback func()
+	// stores the global counter for Hybrid logical clock.
+	// it's not the index of wal.
+	globalCounter     atomic.Uint64
+	opsFlushedCounter atomic.Uint64 // total ops flushed to BoltDB.
 
-	shutdown atomic.Bool
-	wg       *sync.WaitGroup
-	// protect the mem table and bloom filter
-	mu       sync.RWMutex
-	bloom    *bloom.BloomFilter
-	memTable *memTable
+	shutdown        atomic.Bool
+	wg              *sync.WaitGroup
+	mu              sync.RWMutex
+	wal             *wal.WAL
+	bloom           *bloom.BloomFilter
+	currentMemTable *memTable
+	sealedMemTables []*memTable
 }
 
 // NewStorageEngine initializes WAL, MemTable, and BoltDB.
@@ -77,15 +113,9 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 			return nil, err
 		}
 	}
-
 	fileLock := flock.New(filepath.Join(nsDir, pidLockName))
-	locked, err := fileLock.TryLock()
-	if err != nil {
+	if err := tryFileLock(fileLock); err != nil {
 		return nil, err
-	}
-	// unable to get the exclusive lock
-	if !locked {
-		return nil, ErrDatabaseDirInUse
 	}
 
 	// Open WAL
@@ -94,44 +124,48 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 		return nil, err
 	}
 
-	// Open BoltDB
-	db, err := bbolt.Open(dbFile, 0600, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := createMetadataBucket(db, namespace); err != nil {
-		return nil, err
-	}
-
 	config := sc
 	if config == nil {
 		config = DefaultConfig()
 	}
 
-	// skiplist itself needs few bytes for initialization
-	// and we don't want to keep on trashing writing boltdb often.
-	if config.ArenaSize < 100*wal.KB {
-		return nil, errors.New("arena size too small min size 2 KB")
+	var bTreeStore BTreeStore
+	switch config.DBEngine {
+	case BoltDBEngine, "": // or even default.
+		db, err := newBoltdb(dbFile, namespace)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := createMetadataBucket(db.db, namespace); err != nil {
+			return nil, err
+		}
+		bTreeStore = db
+	default:
+		return nil, fmt.Errorf("unsupported database engine %q", config.DBEngine)
 	}
 
-	mTable := newMemTable(config.ArenaSize)
+	// skip list itself needs few bytes for initialization
+	// and, we don't want to keep on trashing writing boltdb often.
+	if config.ArenaSize < 100*wal.KB {
+		return nil, errors.New("arena capacity too small min capacity 2 KB")
+	}
+	mTable := newMemTable(config.ArenaSize, bTreeStore, w, namespace)
 	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001) // 1M keys, 0.01% false positives
 	signal := make(chan struct{}, 2)
 
 	// Create storage engine
 	engine := &Engine{
-		namespace:     namespace,
-		wal:           w,
-		db:            db,
-		flushQueue:    newFlusherQueue(signal),
-		queueChan:     signal,
-		storageConfig: *config,
-		fileLock:      fileLock,
-		memTable:      mTable,
-		bloom:         bloomFilter,
-		Callback:      func() {},
-		wg:            &sync.WaitGroup{},
+		namespace:       namespace,
+		wal:             w,
+		bTreeStore:      bTreeStore,
+		flushSignal:     signal,
+		storageConfig:   *config,
+		fileLock:        fileLock,
+		currentMemTable: mTable,
+		bloom:           bloomFilter,
+		Callback:        func() {},
+		wg:              &sync.WaitGroup{},
 	}
 
 	// background task:
@@ -147,6 +181,18 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 	return engine, err
 }
 
+func tryFileLock(fileLock *flock.Flock) error {
+	locked, err := fileLock.TryLock()
+	if err != nil {
+		return err
+	}
+	// unable to get the exclusive lock
+	if !locked {
+		return ErrDatabaseDirInUse
+	}
+	return nil
+}
+
 func createMetadataBucket(db *bbolt.DB, namespace string) error {
 	// Create namespace bucket in BoltDB
 	return db.Update(func(tx *bbolt.Tx) error {
@@ -154,7 +200,7 @@ func createMetadataBucket(db *bbolt.DB, namespace string) error {
 		if err != nil {
 			return err
 		}
-		_, err = tx.CreateBucketIfNotExists(walCheckPointBucket)
+		_, err = tx.CreateBucketIfNotExists([]byte(sysBucketMetaData))
 		return err
 	})
 }
@@ -162,7 +208,7 @@ func createMetadataBucket(db *bbolt.DB, namespace string) error {
 // loadMetaValues loads meta value that the engine stores.
 func (e *Engine) loadMetaValues() error {
 	// Load Global Counter
-	metadata, err := LoadMetadata(e.db)
+	metadata, err := LoadMetadata(e.bTreeStore)
 	if err != nil && !errors.Is(err, ErrKeyNotFound) {
 		return err
 	}
@@ -249,29 +295,34 @@ func (e *Engine) RecoveredEntriesCount() int {
 	return e.recoveredEntriesCount
 }
 
+// PersistenceSnapShot creates a snapshot of the engine's persistent data and writes it to the provided io.Writer.
+func (e *Engine) PersistenceSnapShot(w io.Writer) error {
+	return e.bTreeStore.SnapShot(w)
+}
+
 // MemTableSize returns the number of keys currently stored in the MemTable.
 func (e *Engine) MemTableSize() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.memTable.keysCount()
+	return e.currentMemTable.opsCount()
 }
 
 // memTableWrite will write the provided key and value to the memTable.
 func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, chunkPos *wal.ChunkPosition) error {
 	var err error
-	err = e.memTable.put(key, v, chunkPos)
+	err = e.currentMemTable.put(key, v, chunkPos)
 	if err != nil {
 		if errors.Is(err, errArenaSizeWillExceed) {
 			// put the old table in the queue
-			oldTable := e.memTable
-			e.memTable = newMemTable(e.storageConfig.ArenaSize)
-			e.flushQueue.enqueue(*oldTable)
+			oldTable := e.currentMemTable
+			e.currentMemTable = newMemTable(e.storageConfig.ArenaSize, e.bTreeStore, e.wal, e.namespace)
+			e.sealedMemTables = append(e.sealedMemTables, oldTable)
 			select {
-			case e.queueChan <- struct{}{}:
+			case e.flushSignal <- struct{}{}:
 			default:
 				slog.Debug("queue signal channel full")
 			}
-			err = e.memTable.put(key, v, chunkPos)
+			err = e.currentMemTable.put(key, v, chunkPos)
 			// :(
 			if err != nil {
 				return err
@@ -331,7 +382,14 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		if !e.bloom.Test(key) {
 			return y.ValueStruct{}, ErrKeyNotFound
 		}
-		it := e.memTable.get(key)
+		it := e.currentMemTable.get(key)
+		if it.Meta == byte(wrecord.LogOperationOpNoop) {
+			for i := len(e.sealedMemTables) - 1; i >= 0; i-- {
+				if val := e.sealedMemTables[i].get(key); val.Meta != byte(wrecord.LogOperationOpNoop) {
+					return val, nil
+				}
+			}
+		}
 		return it, nil
 	}
 
@@ -343,7 +401,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	// if the mem table doesn't have this key associated action or log.
 	// directly go to the boltdb to fetch the same.
 	if it.Meta == byte(wrecord.LogOperationOpNoop) {
-		return e.getFromBoltDB(key)
+		return e.bTreeStore.Get(key)
 	}
 
 	// key deleted
@@ -413,11 +471,6 @@ func decodeChunkPos(data []byte) (pos *wal.ChunkPosition, err error) {
 	return
 }
 
-// Fetch from BoltDB.
-func (e *Engine) getFromBoltDB(key []byte) ([]byte, error) {
-	return retrieveFromBoltDB(e.namespace, e.db, key)
-}
-
 func (e *Engine) saveBloomFilter() error {
 	// Serialize Bloom Filter
 	var buf bytes.Buffer
@@ -428,34 +481,11 @@ func (e *Engine) saveBloomFilter() error {
 		return err
 	}
 
-	return e.db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(walCheckPointBucket)
-
-		if bucket == nil {
-			return errors.New("walCheckPointBucket not found") // No checkpoint saved yet
-		}
-		// Save serialized Bloom Filter to BoltDB
-		return bucket.Put(bloomFilterKey, buf.Bytes())
-	})
+	return e.bTreeStore.StoreMetadata(sysKeyBloomFilter, buf.Bytes())
 }
 
 func (e *Engine) loadBloomFilter() error {
-	var result []byte
-	err := e.db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(walCheckPointBucket)
-		if bucket == nil {
-			return nil // No existing Bloom filter, create a new one
-		}
-
-		data := bucket.Get(bloomFilterKey)
-		if data == nil {
-			return ErrKeyNotFound
-		}
-
-		// copy the value
-		result = append([]byte{}, data...)
-		return nil
-	})
+	result, err := e.bTreeStore.RetrieveMetadata(sysKeyBloomFilter)
 
 	if len(result) != 0 {
 		// Deserialize Bloom Filter
@@ -476,7 +506,7 @@ func (e *Engine) Close() error {
 	}
 	slog.Info("engine: closing", "namespace", e.namespace, "ops_received", e.globalCounter.Load(), "ops_flushed", e.opsFlushedCounter.Load())
 	e.shutdown.Store(true)
-	close(e.queueChan)
+	close(e.flushSignal)
 
 	var errs strings.Builder
 
@@ -496,7 +526,7 @@ func (e *Engine) Close() error {
 		errs.WriteString("|")
 	}
 
-	if err := e.db.Close(); err != nil {
+	if err := e.bTreeStore.Close(); err != nil {
 		errs.WriteString(err.Error())
 		errs.WriteString("|")
 	}

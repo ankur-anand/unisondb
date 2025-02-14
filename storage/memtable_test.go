@@ -8,75 +8,60 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/brianvoe/gofakeit/v7"
-	"github.com/dgraph-io/badger/v4/skl"
 	"github.com/dgraph-io/badger/v4/y"
-	"github.com/google/uuid"
 	"github.com/rosedblabs/wal"
 	"github.com/stretchr/testify/assert"
 	"go.etcd.io/bbolt"
 )
 
-func TestFlusherQueue(t *testing.T) {
+func setupMemTable(t *testing.T, capacity int64) *memTable {
+	dir := t.TempDir()
 
-	signal := make(chan struct{})
-	enq := newFlusherQueue(signal)
+	dbFile := filepath.Join(dir, "test_flush.db")
 
-	if enq.dequeue() != nil {
-		t.Error("enq dequeue should return nil for empty queue")
-	}
-
-	type mCase struct {
-		memTable *skl.Skiplist
-		id       []byte
-	}
-
-	var memTables []mCase
-	key := y.KeyWithTs([]byte("uuid"), 0)
-
-	for i := 0; i <= 5; i++ {
-		id, err := uuid.New().MarshalText()
+	db, err := newBoltdb(dbFile, testNamespace)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		db.Close()
+		err := db.Close()
 		if err != nil {
-			t.Fatal(err)
+			t.Errorf("failed to close db: %s", err)
 		}
-		memTables = append(memTables, mCase{
-			memTable: skl.NewSkiplist(2 * wal.MB),
-			id:       id,
-		})
+	})
 
-		memTables[i].memTable.Put(key, y.ValueStruct{
-			Meta:      0,
-			UserMeta:  0,
-			ExpiresAt: 0,
-			Value:     id,
-			Version:   0,
-		})
+	// Create namespace bucket in BoltDB
+	err = db.db.Update(func(tx *bbolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte(testNamespace))
+		return err
+	})
+	assert.NoError(t, err)
 
-		enq.enqueue(memTable{
-			sList:       memTables[i].memTable,
-			currentPost: nil,
-		})
+	tdir := os.TempDir()
+	walDir := filepath.Join(tdir, "wal_test")
+	err = os.MkdirAll(walDir, 0777)
+	assert.NoError(t, err)
+
+	walInstance, err := wal.Open(newWALOptions(walDir))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		walInstance.Close()
+	})
+
+	if capacity == 0 {
+		capacity = 1 * 1024 * 1024
 	}
-
-	for i := 0; i <= 5; i++ {
-		mt := enq.dequeue()
-		exp := memTables[i].id
-
-		if bytes.Compare(mt.sList.Get(key).Value, exp) != 0 {
-			t.Errorf("enq dequeue = %v; want %v", mt, exp)
-		}
-	}
+	return newMemTable(capacity, db, walInstance, testNamespace)
 }
 
 func TestMemTable_PutAndGet(t *testing.T) {
 
 	const capacity = wal.MB
-	table := newMemTable(capacity)
+	table := newMemTable(capacity, nil, nil, "")
 
 	// Create a test key, value, and WAL position.
 	key := []byte("test-key")
@@ -98,14 +83,14 @@ func TestMemTable_PutAndGet(t *testing.T) {
 	}
 
 	// Verify that the table's WAL position was updated.
-	if table.currentPost != pos {
-		t.Errorf("expected table currentPost to be %+v, got %+v", pos, table.currentPost)
+	if table.lastWalPosition != pos {
+		t.Errorf("expected table lastWalPosition to be %+v, got %+v", pos, table.lastWalPosition)
 	}
 }
 
 func TestMemTable_CannotPut(t *testing.T) {
-	const capacity = 1 * wal.KB // a very small arena size for testing
-	table := newMemTable(capacity)
+	const capacity = 1 * wal.KB // a very small arena capacity for testing
+	table := newMemTable(capacity, nil, nil, "")
 
 	key := []byte("key")
 	// more than 1 KB
@@ -121,37 +106,7 @@ func TestMemTable_CannotPut(t *testing.T) {
 }
 
 func TestFlush_Success(t *testing.T) {
-	dir := t.TempDir()
-
-	dbFile := filepath.Join(dir, "test_flush.db")
-
-	db, err := bbolt.Open(dbFile, 0600, nil)
-	assert.NoError(t, err)
-	defer func(db *bbolt.DB) {
-		err := db.Close()
-		if err != nil {
-			t.Errorf("failed to close db: %s", err)
-		}
-	}(db)
-
-	memTable := skl.NewSkiplist(1 * 1024 * 1024)
-
-	// Create namespace bucket in BoltDB
-	err = db.Update(func(tx *bbolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte("test_namespace"))
-		return err
-	})
-	assert.NoError(t, err)
-
-	tdir := os.TempDir()
-	walDir := filepath.Join(tdir, "wal_test")
-	err = os.MkdirAll(walDir, 0777)
-	assert.NoError(t, err)
-
-	walInstance, err := wal.Open(newWALOptions(walDir))
-	assert.NoError(t, err)
-	defer walInstance.Close()
-
+	mmTable := setupMemTable(t, 0)
 	for i := 0; i < 150; i++ {
 		key := []byte("key_" + strconv.Itoa(i))
 		value := []byte("value_" + strconv.Itoa(i))
@@ -165,23 +120,23 @@ func TestFlush_Success(t *testing.T) {
 
 		encodedRecord, err := record.fbEncode()
 		assert.NoError(t, err, "failed to encode record")
-		walPos, err := walInstance.Write(encodedRecord)
+		walPos, err := mmTable.wal.Write(encodedRecord)
 		assert.NoError(t, err)
 
 		// Store WAL ChunkPosition in MemTable
-		memTable.Put(y.KeyWithTs(key, 0), y.ValueStruct{
+		mmTable.skipList.Put(y.KeyWithTs(key, 0), y.ValueStruct{
 			Meta:  byte(wrecord.LogOperationOpInsert),
 			Value: append([]byte{0}, walPos.Encode()...), // Storing WAL position
 		})
 	}
 
-	_, err = flushMemTable("test_namespace", memTable, db, walInstance)
+	_, err := mmTable.flush()
 	assert.NoError(t, err)
 
 	// **Verify
 	for i := 0; i < 150; i++ {
 		key := []byte("key_" + strconv.Itoa(i))
-		val, err := retrieveFromBoltDB("test_namespace", db, key)
+		val, err := mmTable.db.Get(key)
 		assert.NoError(t, err)
 		assert.NotNil(t, val)
 		assert.Equal(t, []byte("value_"+strconv.Itoa(i)), val)
@@ -191,126 +146,51 @@ func TestFlush_Success(t *testing.T) {
 }
 
 func TestFlush_EmptyMemTable(t *testing.T) {
-	dir := t.TempDir()
+	mmTable := setupMemTable(t, 0)
 
-	dbFile := filepath.Join(dir, "test_flush.db")
-
-	db, err := bbolt.Open(dbFile, 0600, nil)
-	assert.NoError(t, err)
-	defer db.Close()
-
-	memTable := skl.NewSkiplist(1 * 1024 * 1024)
-
-	// Create namespace bucket in BoltDB
-	err = db.Update(func(tx *bbolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte("test_namespace"))
-		return err
-	})
-	assert.NoError(t, err)
-	walDir := filepath.Join(dir, "wal_test")
-	walInstance, err := wal.Open(newWALOptions(walDir))
-	assert.NoError(t, err)
-	defer walInstance.Close()
-
-	_, err = flushMemTable("test_namespace", memTable, db, walInstance)
+	_, err := mmTable.flush()
 	assert.NoError(t, err)
 }
 
 func TestFlush_Deletes(t *testing.T) {
-	dir := t.TempDir()
 
-	dbFile := filepath.Join(dir, "test_flush.db")
-
-	db, err := bbolt.Open(dbFile, 0600, nil)
-	assert.NoError(t, err)
-	defer func(db *bbolt.DB) {
-		err := db.Close()
-		if err != nil {
-			t.Errorf("failed to close db: %s", err)
-		}
-	}(db)
-
-	memTable := skl.NewSkiplist(1 * 1024 * 1024)
-
-	// Create namespace bucket in BoltDB
-	err = db.Update(func(tx *bbolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte("test_namespace"))
-		return err
-	})
-	assert.NoError(t, err)
-
-	tdir := os.TempDir()
-	walDir := filepath.Join(tdir, "wal_test")
-	err = os.MkdirAll(walDir, 0777)
-	assert.NoError(t, err)
-
-	walInstance, err := wal.Open(newWALOptions(walDir))
-	assert.NoError(t, err)
-	defer walInstance.Close()
+	mmTable := setupMemTable(t, 0)
+	key := []byte("delete_me")
+	value := []byte(gofakeit.LetterN(100))
 	// Create namespace bucket and insert keys
-	err = db.Update(func(tx *bbolt.Tx) error {
-		bucket, err := tx.CreateBucketIfNotExists([]byte("test_namespace"))
-		assert.NoError(t, err)
-		assert.NotNil(t, bucket)
-
-		err = bucket.Put([]byte("delete_me"), []byte("to_be_deleted"))
-		assert.NoError(t, err)
-		return nil
-	})
+	err := mmTable.db.Set(key, value)
 	assert.NoError(t, err)
 
 	record := walRecord{
 		hlc: uint64(1),
-		key: []byte("delete_me"),
+		key: key,
 		op:  wrecord.LogOperationOpDelete,
 	}
 
 	data, err := record.fbEncode()
 	assert.NoError(t, err)
 
-	walPos, err := walInstance.Write(data)
+	walPos, err := mmTable.wal.Write(data)
 	assert.NoError(t, err)
 
 	// Store WAL ChunkPosition in MemTable
-	memTable.Put(y.KeyWithTs([]byte("delete_me"), 0), y.ValueStruct{
+	err = mmTable.put(key, y.ValueStruct{
 		Meta:  byte(wrecord.LogOperationOpDelete),
 		Value: append([]byte{0}, walPos.Encode()...), // Storing WAL position
-	})
+	}, walPos)
 
-	_, err = flushMemTable("test_namespace", memTable, db, walInstance)
+	assert.NoError(t, err)
+	_, err = mmTable.flush()
 	assert.NoError(t, err)
 
 	// Verify key is deleted from BoltDB
-	err = db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte("test_namespace"))
-		assert.NotNil(t, bucket)
-		assert.Nil(t, bucket.Get([]byte("delete_me"))) // Ensure it's deleted
-		return nil
-	})
-	assert.NoError(t, err)
+	val, err := mmTable.db.Get(key)
+	assert.ErrorIs(t, err, ErrKeyNotFound)
+	assert.Nil(t, val)
 }
 
 func TestFlush_WALLookup(t *testing.T) {
-	dir := t.TempDir()
-
-	dbFile := filepath.Join(dir, "test_flush.db")
-
-	db, err := bbolt.Open(dbFile, 0600, nil)
-	assert.NoError(t, err)
-	defer db.Close()
-
-	memTable := skl.NewSkiplist(1 * 1024 * 1024)
-
-	// Create namespace bucket in BoltDB
-	err = db.Update(func(tx *bbolt.Tx) error {
-		_, err := tx.CreateBucketIfNotExists([]byte("test_namespace"))
-		return err
-	})
-	assert.NoError(t, err)
-	walDir := filepath.Join(dir, "wal_test")
-	walInstance, err := wal.Open(newWALOptions(walDir))
-	assert.NoError(t, err)
-	defer walInstance.Close()
+	mmTable := setupMemTable(t, 0)
 
 	key := []byte("wal_key")
 	value := []byte("wal_value")
@@ -322,21 +202,23 @@ func TestFlush_WALLookup(t *testing.T) {
 	}
 	data, err := record.fbEncode()
 	assert.NoError(t, err)
-	walPos, err := walInstance.Write(data)
+	walPos, err := mmTable.wal.Write(data)
 	assert.NoError(t, err)
 
 	// Store a reference to WAL instead of direct value
-	memTable.Put(y.KeyWithTs(key, 0), y.ValueStruct{
+	err = mmTable.put(key, y.ValueStruct{
 		Meta:  0,
 		Value: append([]byte{0}, walPos.Encode()...),
-	})
+	}, walPos)
+
+	assert.NoError(t, err)
 
 	// Execute flushMemTable function
-	_, err = flushMemTable("test_namespace", memTable, db, walInstance)
+	_, err = mmTable.flush()
 	assert.NoError(t, err)
 
 	// Verify the key is stored correctly in BoltDB
-	val, err := retrieveFromBoltDB("test_namespace", db, key)
+	val, err := mmTable.db.Get(key)
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("wal_value"), val)
 }
@@ -347,14 +229,14 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 	callBack := func() {
 		close(callSignal)
 	}
-	engine, err := NewStorageEngine(dir, "test_namespace", nil)
+	engine, err := NewStorageEngine(dir, testNamespace, nil)
 	assert.NoError(t, err, "error creating engine instance")
 	engine.Callback = callBack
 
 	key := []byte("wal_key")
 	value := []byte("wal_value")
 
-	table := newMemTable(200 * wal.KB)
+	table := newMemTable(200*wal.KB, engine.bTreeStore, engine.wal, testNamespace)
 
 	record := walRecord{
 		hlc:   1,
@@ -362,23 +244,24 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 		value: value,
 		op:    wrecord.LogOperationOpInsert,
 	}
+
 	data, err := record.fbEncode()
 	assert.NoError(t, err)
-	pos := &wal.ChunkPosition{SegmentId: 1}
+
+	pos, err := engine.wal.Write(data)
+	assert.NoError(t, err)
+
 	// Store WAL ChunkPosition in MemTable
 	err = table.put(key, y.ValueStruct{
 		Meta:  0,
-		Value: append([]byte{1}, data...), // Storing WAL position
+		Value: append(walReferencePrefix, pos.Encode()...), // Storing WAL position
 	}, pos)
 
 	assert.NoError(t, err, "error putting data")
 
-	engine.flushQueue.enqueue(*table)
-
-	signal := make(chan struct{})
-	var wg sync.WaitGroup
-
-	engine.processFlushQueue(&wg, signal)
+	engine.mu.Lock()
+	engine.sealedMemTables = append(engine.sealedMemTables, table)
+	engine.mu.Unlock()
 
 	select {
 	case <-callSignal:
@@ -386,15 +269,11 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 		t.Errorf("processFlushQueue timeout")
 	}
 
-	val, err := retrieveFromBoltDB(engine.namespace, engine.db, key)
+	val, err := engine.bTreeStore.Get(key)
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("wal_value"), val)
 
-	// Cleanup
-	close(signal)
-	wg.Wait()
-
-	metadata, err := LoadMetadata(engine.db)
+	metadata, err := LoadMetadata(engine.bTreeStore)
 	assert.NoError(t, err, "error loading chunk position")
 	if metadata.Pos.SegmentId != 1 {
 		t.Errorf("error loading chunk position, expected 1, got %d", metadata.Pos.SegmentId)
@@ -405,19 +284,19 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 	}
 }
 
-func TestProcessFlushQueue(t *testing.T) {
+func TestProcessHandleFlush(t *testing.T) {
 	dir := t.TempDir()
 	callSignal := make(chan struct{})
 	callBack := func() {
 		close(callSignal)
 	}
-	engine, err := NewStorageEngine(dir, "test_namespace", nil)
+	engine, err := NewStorageEngine(dir, testNamespace, nil)
 	engine.Callback = callBack
 	assert.NoError(t, err, "error creating engine instance")
 	key := []byte("wal_key")
 	value := []byte("wal_value")
 
-	table := newMemTable(200 * wal.KB)
+	table := newMemTable(200*wal.KB, engine.bTreeStore, engine.wal, engine.namespace)
 
 	record := walRecord{
 		hlc:   1,
@@ -425,27 +304,26 @@ func TestProcessFlushQueue(t *testing.T) {
 		value: value,
 		op:    wrecord.LogOperationOpInsert,
 	}
-	// compress
+
 	data, err := record.fbEncode()
 	assert.NoError(t, err)
-	pos := &wal.ChunkPosition{SegmentId: 1, ChunkOffset: 10}
+
+	walPos, err := table.wal.Write(data)
+	//pos := &wal.ChunkPosition{SegmentId: 1, ChunkOffset: 10}
 	// Store WAL ChunkPosition in MemTable
 	err = table.put(key, y.ValueStruct{
 		Meta:  0,
-		Value: append([]byte{1}, data...), // Storing WAL metadata
-	}, pos)
+		Value: append(directValuePrefix, data...), //direct Value
+	}, walPos)
 
 	assert.NoError(t, err, "error putting data")
 
-	engine.flushQueue.enqueue(*table)
+	engine.mu.Lock()
+	engine.sealedMemTables = append(engine.sealedMemTables, table)
+	assert.Equal(t, 1, len(engine.sealedMemTables))
+	engine.mu.Unlock()
 
-	signal := make(chan struct{})
-	var wg sync.WaitGroup
-
-	engine.processFlushQueue(&wg, signal)
-
-	// Trigger
-	signal <- struct{}{}
+	engine.handleFlush()
 
 	select {
 	case <-callSignal:
@@ -454,20 +332,21 @@ func TestProcessFlushQueue(t *testing.T) {
 	}
 
 	// Verify that the key is now in BoltDB
-	val, err := retrieveFromBoltDB(engine.namespace, engine.db, key)
+	val, err := engine.bTreeStore.Get(key)
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("wal_value"), val)
 
-	// Cleanup
-	close(signal)
-	wg.Wait()
-
 	// verify that the checkpoint has been created
-	metadata, err := LoadMetadata(engine.db)
+	metadata, err := LoadMetadata(engine.bTreeStore)
 	assert.NoError(t, err, "error loading chunk metadata")
 	if metadata.Pos.SegmentId != 1 && metadata.Pos.ChunkOffset != 10 {
 		t.Errorf("error loading chunk metadata, expected 10, got %d", metadata.Pos.ChunkOffset)
 	}
+
+	// after flush, the size of the sealed mem table should be one less.
+	engine.mu.Lock()
+	assert.Equal(t, 0, len(engine.sealedMemTables))
+	engine.mu.Unlock()
 }
 
 func TestChunkFlush_Persistent(t *testing.T) {
@@ -482,12 +361,12 @@ func TestChunkFlush_Persistent(t *testing.T) {
 	engine, err := NewStorageEngine(baseDir, namespace, nil)
 	assert.NoError(t, err)
 	engine.Callback = callBack
-	defer func(engine *Engine) {
+	t.Cleanup(func() {
 		err := engine.Close()
 		if err != nil {
 			t.Errorf("Failed to close engine: %v", err)
 		}
-	}(engine)
+	})
 
 	key := []byte("test_key")
 	value := []byte(gofakeit.Sentence(100))
@@ -541,23 +420,16 @@ func TestChunkFlush_Persistent(t *testing.T) {
 	// flush the memtable.
 	engine.mu.Lock()
 	// put the old table in the queue
-	oldTable := engine.memTable
-	engine.memTable = newMemTable(engine.storageConfig.ArenaSize)
-	engine.flushQueue.enqueue(*oldTable)
+	oldTable := engine.currentMemTable
+	engine.currentMemTable = newMemTable(engine.storageConfig.ArenaSize, engine.bTreeStore, engine.wal, testNamespace)
+	engine.sealedMemTables = append(engine.sealedMemTables, oldTable)
+	engine.mu.Unlock()
+
 	select {
-	case engine.queueChan <- struct{}{}:
+	case engine.flushSignal <- struct{}{}:
 	default:
 		slog.Warn("queue signal channel full")
 	}
-	engine.mu.Unlock()
-
-	signal := make(chan struct{})
-	var wg sync.WaitGroup
-
-	engine.processFlushQueue(&wg, signal)
-
-	// Trigger
-	signal <- struct{}{}
 
 	select {
 	case <-callSignal:

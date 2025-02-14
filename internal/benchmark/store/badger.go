@@ -8,6 +8,7 @@ import (
 	"github.com/ankur-anand/kvalchemy/storage"
 	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/dgraph-io/badger/v4"
+	"github.com/rosedblabs/wal"
 )
 
 type BadgerStore struct {
@@ -20,6 +21,8 @@ func NewBadgerStore(dir string) (*BadgerStore, error) {
 	fp := filepath.Join(dir, "badger")
 	opts := badger.DefaultOptions(fp)
 	opts.Dir, opts.ValueDir = fp, fp
+	opts.MemTableSize = 4 * wal.MB
+	opts.ValueThreshold = 1 * wal.KB
 
 	badgerDB, err := badger.Open(opts)
 	if err != nil {
