@@ -9,6 +9,7 @@ require (
 	github.com/gofrs/flock v0.12.1
 	github.com/google/flatbuffers v24.12.23+incompatible
 	github.com/google/uuid v1.6.0
+	github.com/hashicorp/go-metrics v0.5.4
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/prometheus/client_golang v1.20.5
@@ -28,6 +29,8 @@ require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dgraph-io/ristretto/v2 v2.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/hashicorp/go-immutable-radix v1.0.0 // indirect
+	github.com/hashicorp/golang-lru v0.5.0 // indirect
 	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect

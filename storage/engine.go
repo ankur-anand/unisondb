@@ -18,6 +18,7 @@ import (
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/gofrs/flock"
+	"github.com/hashicorp/go-metrics"
 	"github.com/rosedblabs/wal"
 	"go.etcd.io/bbolt"
 )
@@ -344,6 +345,12 @@ func (e *Engine) Put(key, value []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "put", "total"}, 1, []metrics.Label{{"namespace", e.namespace}})
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "put", "latency", "msec"}, startTime, []metrics.Label{{"namespace", e.namespace}})
+	}()
+
 	return e.persistKeyValue(key, value, wrecord.LogOperationOpInsert, nil, nil)
 }
 
@@ -352,6 +359,13 @@ func (e *Engine) Delete(key []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
+
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "delete", "total"}, 1, []metrics.Label{{"namespace", e.namespace}})
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "delete", "latency", "msec"}, startTime, []metrics.Label{{"namespace", e.namespace}})
+	}()
+
 	return e.persistKeyValue(key, nil, wrecord.LogOperationOpDelete, nil, nil)
 }
 
@@ -373,6 +387,13 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	if e.shutdown.Load() {
 		return nil, ErrInCloseProcess
 	}
+
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "get", "total"}, 1, []metrics.Label{{"namespace", e.namespace}})
+	startTime := time.Now()
+
+	defer func() {
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "get", "latency", "msec"}, startTime, []metrics.Label{{"namespace", e.namespace}})
+	}()
 
 	checkFunc := func() (y.ValueStruct, error) {
 		// Retrieve entry from MemTable
