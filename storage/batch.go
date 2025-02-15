@@ -121,7 +121,7 @@ func (b *Batch) Commit() error {
 	}
 
 	metrics.IncrCounterWithLabels([]string{"kvalchemy", "chunk", "commited", "kv", "total"}, float32(b.valuesCount), b.engine.label)
-	metrics.MeasureSinceWithLabels([]string{"kvalchemy", "chunk", "commited", "duration", "msec"}, b.startTime, b.engine.label)
+	metrics.MeasureSinceWithLabels([]string{"kvalchemy", "chunk", "init", "to", "commit", "duration", "msec"}, b.startTime, b.engine.label)
 	return b.engine.persistKeyValue(b.key, marshalChecksum(b.checksum), wrecord.LogOperationOpBatchCommit, b.batchID, b.lastPos)
 }
 
