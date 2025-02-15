@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"time"
 
+	"github.com/hashicorp/go-metrics"
 	"go.etcd.io/bbolt"
 )
 
@@ -24,6 +26,7 @@ var (
 type boltdb struct {
 	db        *bbolt.DB
 	namespace []byte
+	label     []metrics.Label
 }
 
 func newBoltdb(path string, ns string) (*boltdb, error) {
@@ -31,7 +34,8 @@ func newBoltdb(path string, ns string) (*boltdb, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &boltdb{db: db, namespace: []byte(ns)}, nil
+	l := []metrics.Label{{Name: "namespace", Value: ns}}
+	return &boltdb{db: db, namespace: []byte(ns), label: l}, nil
 }
 
 func (b *boltdb) Close() error {
@@ -40,6 +44,12 @@ func (b *boltdb) Close() error {
 
 // Set associates a value with a key within a specific namespace.
 func (b *boltdb) Set(key []byte, value []byte) error {
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "boltdb", "set", "total"}, 1, b.label)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "set", "latency", "msec"}, startTime, b.label)
+	}()
+
 	return b.db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket(b.namespace)
 		if b == nil {
@@ -54,6 +64,12 @@ func (b *boltdb) Set(key []byte, value []byte) error {
 
 // SetMany associates multiple values with corresponding keys within a namespace.
 func (b *boltdb) SetMany(keys [][]byte, value [][]byte) error {
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "boltdb", "set", "many", "total"}, 1, b.label)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "set", "many", "latency", "msec"}, startTime, b.label)
+	}()
+
 	return b.db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket(b.namespace)
 		if b == nil {
@@ -74,6 +90,11 @@ func (b *boltdb) SetMany(keys [][]byte, value [][]byte) error {
 
 // SetChunks stores a value that has been split into chunks, associating them with a single key.
 func (b *boltdb) SetChunks(key []byte, chunks [][]byte, checksum uint32) error {
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "boltdb", "set", "chunks", "total"}, 1, b.label)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "set", "chunks", "latency", "msec"}, startTime, b.label)
+	}()
 	return b.db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket(b.namespace)
 		if b == nil {
@@ -106,6 +127,11 @@ func (b *boltdb) SetChunks(key []byte, chunks [][]byte, checksum uint32) error {
 
 // Delete deletes a value with a key within a specific namespace.
 func (b *boltdb) Delete(key []byte) error {
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "boltdb", "delete", "total"}, 1, b.label)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "delete", "latency", "msec"}, startTime, b.label)
+	}()
 	return b.db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket(b.namespace)
 		if b == nil {
@@ -146,6 +172,11 @@ func (b *boltdb) Delete(key []byte) error {
 
 // DeleteMany delete multiple values with corresponding keys within a namespace.
 func (b *boltdb) DeleteMany(keys [][]byte) error {
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "boltdb", "delete", "many", "total"}, 1, b.label)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "delete", "many", "latency", "msec"}, startTime, b.label)
+	}()
 	return b.db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket(b.namespace)
 		if b == nil {
@@ -186,6 +217,11 @@ func (b *boltdb) DeleteMany(keys [][]byte) error {
 
 // Get retrieves a value associated with a key within a specific namespace.
 func (b *boltdb) Get(key []byte) ([]byte, error) {
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "boltdb", "get", "total"}, 1, b.label)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "get", "latency", "msec"}, startTime, b.label)
+	}()
 	var value []byte
 
 	err := b.db.View(func(tx *bbolt.Tx) error {

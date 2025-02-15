@@ -42,7 +42,7 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 	// if the hlc is zero
 	// maybe in first run itself, we never crossed the arena limit, and it was never flushed.
 	// or the db file was new, somehow.
-	// in both the case try loading the entire wal.
+	// in both the case try loading the entire wIO.
 	if metadata.RecordProcessed == 0 {
 		slog.Info("WAL RecordProcessed Position is 0. Loading the Complete WAL...", "namespace", namespace)
 		reader = e.wal.NewReader()
@@ -113,8 +113,8 @@ func isMemTableOperation(op wrecord.LogOperation) bool {
 	return false
 }
 
-// readChunksFromWal from Wal reads the chunks value from the wal entries and return all the chunks value.
-func readChunksFromWal(w *wal.WAL, startPos *wal.ChunkPosition, startID []byte, completeChecksum uint32) ([][]byte, error) {
+// readChunksFromWal from Wal reads the chunks value from the wIO entries and return all the chunks value.
+func readChunksFromWal(w *walIO, startPos *wal.ChunkPosition, startID []byte, completeChecksum uint32) ([][]byte, error) {
 	if startPos == nil {
 		return nil, ErrInternalError
 	}

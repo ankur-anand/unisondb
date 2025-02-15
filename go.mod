@@ -8,7 +8,7 @@ require (
 	github.com/dgraph-io/badger/v4 v4.5.1
 	github.com/dustin/go-humanize v1.0.1
 	github.com/gofrs/flock v0.12.1
-	github.com/google/flatbuffers v24.12.23+incompatible
+	github.com/google/flatbuffers v25.2.10+incompatible
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-metrics v0.5.4
 	github.com/pelletier/go-toml/v2 v2.2.3

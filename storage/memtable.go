@@ -13,6 +13,7 @@ import (
 	"github.com/dgraph-io/badger/v4/skl"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/dustin/go-humanize"
+	"github.com/hashicorp/go-metrics"
 	"github.com/rosedblabs/wal"
 )
 
@@ -22,14 +23,14 @@ var (
 	directValuePrefix  = []byte{1} // Marks values stored directly in memory
 	walReferencePrefix = []byte{0} // Marks values stored as a reference in WAL
 
-	readBatchSize = 32
+	dbBatchSize = 32
 )
 
 // Add a margin to avoid boundary issues, arena uses the same pool for itself.
 const arenaSafetyMargin = wal.KB
 
 // memTable hold the underlying skip list and
-// the last chunk position in the wal, associated
+// the last chunk position in the wIO, associated
 // with this skip list
 //
 //nolint:unused
@@ -40,16 +41,16 @@ type memTable struct {
 	opCount         int
 	bytesStored     int
 	db              BTreeStore
-	wal             *wal.WAL
+	wIO             *walIO
 	namespace       string
 }
 
-func newMemTable(capacity int64, db BTreeStore, wal *wal.WAL, namespace string) *memTable {
+func newMemTable(capacity int64, db BTreeStore, wIO *walIO, namespace string) *memTable {
 	return &memTable{
 		skipList:  skl.NewSkiplist(capacity),
 		capacity:  capacity,
 		db:        db,
-		wal:       wal,
+		wIO:       wIO,
 		namespace: namespace,
 	}
 }
@@ -112,6 +113,7 @@ func (e *Engine) processFlushQueue(wg *sync.WaitGroup, signal chan struct{}) {
 func (e *Engine) handleFlush() {
 	var mt *memTable
 	e.mu.Lock()
+	metrics.SetGaugeWithLabels([]string{"kvalchemy", "sealed", "memtable", "count"}, float32(len(e.sealedMemTables)), e.label)
 	if len(e.sealedMemTables) > 0 {
 		mt = e.sealedMemTables[0]
 	}
@@ -139,6 +141,10 @@ func (e *Engine) handleFlush() {
 		// Remove it from the list
 		e.sealedMemTables = e.sealedMemTables[1:]
 		e.mu.Unlock()
+
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "flush", "duration", "msec"}, startTime, e.label)
+		metrics.IncrCounterWithLabels([]string{"kvalchemy", "flush", "record", "count"}, float32(recordProcessed), e.label)
+
 		slog.Info("Flushed MemTable to BoltDB & Created WAL Checkpoint",
 			"ops_flushed", recordProcessed, "namespace", e.namespace,
 			"duration", time.Since(startTime), "bytes_flushed", humanize.Bytes(uint64(mt.bytesStored)))
@@ -171,7 +177,7 @@ func (table *memTable) flush() (int, error) {
 			continue
 		}
 
-		record, err := getWalRecord(entry, table.wal)
+		record, err := getWalRecord(entry, table.wIO)
 		if err != nil {
 			return 0, err
 		}
@@ -191,7 +197,7 @@ func (table *memTable) flush() (int, error) {
 		setValues = append(setValues, record.ValueBytes())
 
 		// Flush when batch capacity is reached
-		if len(deleteKeys) >= readBatchSize || len(setKeys) >= readBatchSize {
+		if len(deleteKeys) >= dbBatchSize || len(setKeys) >= dbBatchSize {
 			if err := table.processBatch(&setKeys, &setValues, &deleteKeys); err != nil {
 				return 0, err
 			}
@@ -218,8 +224,8 @@ func (table *memTable) processBatch(setKeys, setValues, deleteKeys *[][]byte) er
 	return nil
 }
 
-// Note: We are only compressing the value not the wal record. So not decompression involved.
-func getWalRecord(entry y.ValueStruct, wal *wal.WAL) (*wrecord.WalRecord, error) {
+// Note: We are only compressing the value not the wIO record. So not decompression involved.
+func getWalRecord(entry y.ValueStruct, wIO *walIO) (*wrecord.WalRecord, error) {
 	chunkPos, value, err := decodeChunkPositionWithValue(entry.Value)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode chunk position: %w", err)
@@ -229,7 +235,7 @@ func getWalRecord(entry y.ValueStruct, wal *wal.WAL) (*wrecord.WalRecord, error)
 		return wrecord.GetRootAsWalRecord(value, 0), nil
 	}
 
-	walValue, err := wal.Read(chunkPos)
+	walValue, err := wIO.Read(chunkPos)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read WAL for chunk position: %w", err)
 	}
@@ -264,7 +270,7 @@ func (table *memTable) readCompleteBatch(record *wrecord.WalRecord) ([][]byte, u
 	}
 	checksum := unmarshalChecksum(sum)
 
-	data, err := readChunks(table.wal, pos)
+	data, err := readChunks(table.wIO, pos)
 
 	if err != nil {
 		return nil, 0, err
@@ -274,7 +280,7 @@ func (table *memTable) readCompleteBatch(record *wrecord.WalRecord) ([][]byte, u
 }
 
 // readChunksFromWal from Wal without decompressing.
-func readChunks(w *wal.WAL, startPos *wal.ChunkPosition) ([][]byte, error) {
+func readChunks(wIO *walIO, startPos *wal.ChunkPosition) ([][]byte, error) {
 	if startPos == nil {
 		return nil, ErrInternalError
 	}
@@ -285,9 +291,9 @@ func readChunks(w *wal.WAL, startPos *wal.ChunkPosition) ([][]byte, error) {
 
 	for {
 		// read the next pos data
-		record, err := w.Read(nextPos)
+		record, err := wIO.Read(nextPos)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read WAL at position %+v: %w", nextPos, err)
+			return nil, fmt.Errorf("failed to read WAL at position %+v: %wIO", nextPos, err)
 		}
 		wr := wrecord.GetRootAsWalRecord(record, 0)
 		value := wr.ValueBytes()

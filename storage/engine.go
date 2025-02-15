@@ -73,6 +73,30 @@ type BTreeStore interface {
 	Close() error
 }
 
+// walIO wrapped Read and Write with metrics exports.
+type walIO struct {
+	*wal.WAL
+	label []metrics.Label
+}
+
+func (w *walIO) Read(pos *wal.ChunkPosition) ([]byte, error) {
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "wIO", "read", "total"}, 1, w.label)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "wIO", "read", "latency", "msec"}, startTime, w.label)
+	}()
+	return w.WAL.Read(pos)
+}
+
+func (w *walIO) Write(data []byte) (*wal.ChunkPosition, error) {
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "wIO", "write", "total"}, 1, w.label)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "wIO", "write", "latency", "msec"}, startTime, w.label)
+	}()
+	return w.WAL.Write(data)
+}
+
 // Engine manages WAL, MemTable (SkipList), and BoltDB for a given namespace.
 type Engine struct {
 	namespace string
@@ -83,6 +107,7 @@ type Engine struct {
 	storageConfig         StorageConfig
 	fileLock              *flock.Flock
 	recoveredEntriesCount int
+	label                 []metrics.Label
 
 	startMetadata Metadata
 
@@ -97,6 +122,7 @@ type Engine struct {
 	wg              *sync.WaitGroup
 	mu              sync.RWMutex
 	wal             *wal.WAL
+	walIO           *walIO
 	bloom           *bloom.BloomFilter
 	currentMemTable *memTable
 	sealedMemTables []*memTable
@@ -151,7 +177,13 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 	if config.ArenaSize < 100*wal.KB {
 		return nil, errors.New("arena capacity too small min capacity 2 KB")
 	}
-	mTable := newMemTable(config.ArenaSize, bTreeStore, w, namespace)
+	label := []metrics.Label{{Name: "namespace", Value: namespace}}
+	wIO := &walIO{
+		WAL:   w,
+		label: label,
+	}
+
+	mTable := newMemTable(config.ArenaSize, bTreeStore, wIO, namespace)
 	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001) // 1M keys, 0.01% false positives
 	signal := make(chan struct{}, 2)
 
@@ -167,6 +199,8 @@ func NewStorageEngine(baseDir, namespace string, sc *StorageConfig) (*Engine, er
 		bloom:           bloomFilter,
 		Callback:        func() {},
 		wg:              &sync.WaitGroup{},
+		walIO:           wIO,
+		label:           label,
 	}
 
 	// background task:
@@ -258,7 +292,7 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op wrecord.LogOperati
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	// Write to WAL
-	chunkPos, err := e.wal.Write(encoded)
+	chunkPos, err := e.walIO.Write(encoded)
 	if err != nil {
 		return err
 	}
@@ -298,6 +332,12 @@ func (e *Engine) RecoveredEntriesCount() int {
 
 // PersistenceSnapShot creates a snapshot of the engine's persistent data and writes it to the provided io.Writer.
 func (e *Engine) PersistenceSnapShot(w io.Writer) error {
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "snapshot", "total"}, 1, e.label)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "snapshot", "latency", "msec"}, startTime, e.label)
+	}()
+
 	return e.bTreeStore.SnapShot(w)
 }
 
@@ -314,9 +354,10 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, chunkPos *wal.ChunkP
 	err = e.currentMemTable.put(key, v, chunkPos)
 	if err != nil {
 		if errors.Is(err, errArenaSizeWillExceed) {
+			metrics.IncrCounterWithLabels([]string{"kvalchemy", "memtable", "rotation", "total"}, 1, e.label)
 			// put the old table in the queue
 			oldTable := e.currentMemTable
-			e.currentMemTable = newMemTable(e.storageConfig.ArenaSize, e.bTreeStore, e.wal, e.namespace)
+			e.currentMemTable = newMemTable(e.storageConfig.ArenaSize, e.bTreeStore, e.walIO, e.namespace)
 			e.sealedMemTables = append(e.sealedMemTables, oldTable)
 			select {
 			case e.flushSignal <- struct{}{}:
@@ -345,10 +386,10 @@ func (e *Engine) Put(key, value []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "put", "total"}, 1, []metrics.Label{{"namespace", e.namespace}})
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "put", "total"}, 1, e.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "put", "latency", "msec"}, startTime, []metrics.Label{{"namespace", e.namespace}})
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "put", "latency", "msec"}, startTime, e.label)
 	}()
 
 	return e.persistKeyValue(key, value, wrecord.LogOperationOpInsert, nil, nil)
@@ -360,10 +401,10 @@ func (e *Engine) Delete(key []byte) error {
 		return ErrInCloseProcess
 	}
 
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "delete", "total"}, 1, []metrics.Label{{"namespace", e.namespace}})
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "delete", "total"}, 1, e.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "delete", "latency", "msec"}, startTime, []metrics.Label{{"namespace", e.namespace}})
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "delete", "latency", "msec"}, startTime, e.label)
 	}()
 
 	return e.persistKeyValue(key, nil, wrecord.LogOperationOpDelete, nil, nil)
@@ -388,11 +429,11 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, ErrInCloseProcess
 	}
 
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "get", "total"}, 1, []metrics.Label{{"namespace", e.namespace}})
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "get", "total"}, 1, e.label)
 	startTime := time.Now()
 
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "get", "latency", "msec"}, startTime, []metrics.Label{{"namespace", e.namespace}})
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "get", "latency", "msec"}, startTime, e.label)
 	}()
 
 	checkFunc := func() (y.ValueStruct, error) {
@@ -430,7 +471,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, ErrKeyNotFound
 	}
 
-	record, err := getWalRecord(it, e.wal)
+	record, err := getWalRecord(it, e.walIO)
 	if err != nil {
 		return nil, err
 	}
@@ -469,7 +510,7 @@ func (e *Engine) reconstructBatchValue(key []byte, record *wrecord.WalRecord) ([
 	}
 	checksum := unmarshalChecksum(sum)
 
-	data, err := readChunksFromWal(e.wal, pos, record.BatchIdBytes(), checksum)
+	data, err := readChunksFromWal(e.walIO, pos, record.BatchIdBytes(), checksum)
 	if err != nil {
 		return nil, err
 	}

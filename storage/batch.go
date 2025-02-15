@@ -3,8 +3,10 @@ package storage
 import (
 	"encoding/binary"
 	"hash/crc32"
+	"time"
 
 	"github.com/ankur-anand/kvalchemy/storage/wrecord"
+	"github.com/hashicorp/go-metrics"
 	"github.com/rosedblabs/wal"
 	"github.com/segmentio/ksuid"
 )
@@ -13,13 +15,15 @@ import (
 // Batch must be commited for write to be visible.
 // UnCommited Batch will never be visible to reader until commited.
 type Batch struct {
-	key      []byte
-	batchID  []byte // a private Batch ID
-	lastPos  *wal.ChunkPosition
-	err      error
-	commited bool
-	engine   *Engine
-	checksum uint32 // Rolling checksum
+	key         []byte
+	batchID     []byte // a private Batch ID
+	lastPos     *wal.ChunkPosition
+	err         error
+	commited    bool
+	engine      *Engine
+	checksum    uint32 // Rolling checksum
+	startTime   time.Time
+	valuesCount int
 }
 
 // NewBatch return an initialized batch, with a start marker in wal.
@@ -44,17 +48,18 @@ func (e *Engine) NewBatch(key []byte) (*Batch, error) {
 		return nil, err
 	}
 
-	chunkPos, err := e.wal.Write(encoded)
+	chunkPos, err := e.walIO.Write(encoded)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Batch{
-		key:     key,
-		batchID: uuid,
-		lastPos: chunkPos,
-		err:     err,
-		engine:  e,
+		key:       key,
+		batchID:   uuid,
+		lastPos:   chunkPos,
+		err:       err,
+		engine:    e,
+		startTime: time.Now(),
 	}, nil
 }
 
@@ -94,7 +99,7 @@ func (b *Batch) Put(value []byte) error {
 	}
 
 	// Write to WAL
-	chunkPos, err := b.engine.wal.Write(encoded)
+	chunkPos, err := b.engine.walIO.Write(encoded)
 
 	if err != nil {
 		b.err = err
@@ -105,15 +110,18 @@ func (b *Batch) Put(value []byte) error {
 	// Update the rolling checksum
 
 	b.checksum = crc32.Update(b.checksum, crc32.IEEETable, value)
+	b.valuesCount++
 	return nil
 }
 
-// Commit the given Batch to wal.
+// Commit the given Batch to wIO.
 func (b *Batch) Commit() error {
 	if b.err != nil {
 		return b.err
 	}
 
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "chunk", "commited", "kv", "total"}, float32(b.valuesCount), b.engine.label)
+	metrics.MeasureSinceWithLabels([]string{"kvalchemy", "chunk", "commited", "duration", "msec"}, b.startTime, b.engine.label)
 	return b.engine.persistKeyValue(b.key, marshalChecksum(b.checksum), wrecord.LogOperationOpBatchCommit, b.batchID, b.lastPos)
 }
 

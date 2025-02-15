@@ -114,7 +114,11 @@ func TestWALChunkRead(t *testing.T) {
 	_, err = walI.Write(encoded)
 	assert.NoError(t, err)
 
-	gotChunks, err := readChunksFromWal(walI, chunkPos, id, checksum)
+	wIO := &walIO{
+		WAL:   walI,
+		label: nil,
+	}
+	gotChunks, err := readChunksFromWal(wIO, chunkPos, id, checksum)
 	assert.NoError(t, err)
 	assert.Equal(t, len(chunks), len(gotChunks))
 	for i, chunk := range gotChunks {
