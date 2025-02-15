@@ -39,6 +39,14 @@ kvalchemy is designed to scale efficiently across distributed environments:
 
 ![storage architecture](docs/kvalchemy_storage.png)
 
+## Development
+```sh
+make lint
+make test
+```
+
+If L
+
 ## License
 
 [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0)

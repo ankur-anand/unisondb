@@ -55,7 +55,11 @@ func setupMemTable(t *testing.T, capacity int64) *memTable {
 	if capacity == 0 {
 		capacity = 1 * 1024 * 1024
 	}
-	return newMemTable(capacity, db, walInstance, testNamespace)
+	wIO := walIO{
+		WAL:   walInstance,
+		label: nil,
+	}
+	return newMemTable(capacity, db, &wIO, testNamespace)
 }
 
 func TestMemTable_PutAndGet(t *testing.T) {
@@ -120,7 +124,7 @@ func TestFlush_Success(t *testing.T) {
 
 		encodedRecord, err := record.fbEncode()
 		assert.NoError(t, err, "failed to encode record")
-		walPos, err := mmTable.wal.Write(encodedRecord)
+		walPos, err := mmTable.wIO.Write(encodedRecord)
 		assert.NoError(t, err)
 
 		// Store WAL ChunkPosition in MemTable
@@ -170,7 +174,7 @@ func TestFlush_Deletes(t *testing.T) {
 	data, err := record.fbEncode()
 	assert.NoError(t, err)
 
-	walPos, err := mmTable.wal.Write(data)
+	walPos, err := mmTable.wIO.Write(data)
 	assert.NoError(t, err)
 
 	// Store WAL ChunkPosition in MemTable
@@ -202,7 +206,7 @@ func TestFlush_WALLookup(t *testing.T) {
 	}
 	data, err := record.fbEncode()
 	assert.NoError(t, err)
-	walPos, err := mmTable.wal.Write(data)
+	walPos, err := mmTable.wIO.Write(data)
 	assert.NoError(t, err)
 
 	// Store a reference to WAL instead of direct value
@@ -236,7 +240,7 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 	key := []byte("wal_key")
 	value := []byte("wal_value")
 
-	table := newMemTable(200*wal.KB, engine.bTreeStore, engine.wal, testNamespace)
+	table := newMemTable(200*wal.KB, engine.bTreeStore, engine.walIO, testNamespace)
 
 	record := walRecord{
 		hlc:   1,
@@ -296,7 +300,7 @@ func TestProcessHandleFlush(t *testing.T) {
 	key := []byte("wal_key")
 	value := []byte("wal_value")
 
-	table := newMemTable(200*wal.KB, engine.bTreeStore, engine.wal, engine.namespace)
+	table := newMemTable(200*wal.KB, engine.bTreeStore, engine.walIO, engine.namespace)
 
 	record := walRecord{
 		hlc:   1,
@@ -308,8 +312,8 @@ func TestProcessHandleFlush(t *testing.T) {
 	data, err := record.fbEncode()
 	assert.NoError(t, err)
 
-	walPos, err := table.wal.Write(data)
-	//pos := &wal.ChunkPosition{SegmentId: 1, ChunkOffset: 10}
+	walPos, err := table.wIO.Write(data)
+	//pos := &wIO.ChunkPosition{SegmentId: 1, ChunkOffset: 10}
 	// Store WAL ChunkPosition in MemTable
 	err = table.put(key, y.ValueStruct{
 		Meta:  0,
@@ -421,7 +425,7 @@ func TestChunkFlush_Persistent(t *testing.T) {
 	engine.mu.Lock()
 	// put the old table in the queue
 	oldTable := engine.currentMemTable
-	engine.currentMemTable = newMemTable(engine.storageConfig.ArenaSize, engine.bTreeStore, engine.wal, testNamespace)
+	engine.currentMemTable = newMemTable(engine.storageConfig.ArenaSize, engine.bTreeStore, engine.walIO, testNamespace)
 	engine.sealedMemTables = append(engine.sealedMemTables, oldTable)
 	engine.mu.Unlock()
 
