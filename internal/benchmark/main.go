@@ -11,13 +11,13 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
 	"github.com/ankur-anand/kvalchemy/internal/benchmark/store"
+	"github.com/ankur-anand/kvalchemy/internal/xy"
 	"github.com/ankur-anand/kvalchemy/storage"
-	"github.com/bits-and-blooms/bloom/v3"
+	"github.com/hashicorp/go-metrics"
 	"github.com/tidwall/redcon"
 )
 
@@ -63,9 +63,14 @@ func main() {
 	addr := net.JoinHostPort("", fmt.Sprintf("%d", *port))
 
 	go slog.Info("started server", "addr", addr, "engine", *engine, "dataDir", *dataDir)
-	var setCount int
-	bMutex := &sync.Mutex{}
-	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001)
+	inm := metrics.NewInmemSink(10*time.Second, time.Minute)
+	cfg := metrics.DefaultConfig("benchmark")
+	cfg.EnableHostname = false
+	cfg.EnableRuntimeMetrics = true
+	_, err = metrics.NewGlobal(cfg, inm)
+	if err != nil {
+		panic(err)
+	}
 
 	go func() {
 		err = redcon.ListenAndServe(addr,
@@ -78,22 +83,13 @@ func main() {
 				case "quit":
 					conn.WriteString("OK")
 					conn.Close()
-				case "set_count":
-					bMutex.Lock()
-					conn.WriteInt(setCount)
-					bMutex.Unlock()
-				case "ops_count":
+				case "ops":
 					conn.WriteUint64(se.TotalOpsCount())
 				case "set":
 					if len(cmd.Args) != 3 {
 						conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 						return
 					}
-					bMutex.Lock()
-					if !bloomFilter.Test([]byte(cmd.Args[1])) {
-						setCount++
-					}
-					bMutex.Unlock()
 					err := se.Set(cmd.Args[1], cmd.Args[2])
 					if err != nil {
 						slog.Error("failed to set", "key", cmd.Args[1], "value", cmd.Args[2], "err", err)
@@ -142,6 +138,9 @@ func main() {
 					conn.WriteArray(2)
 					conn.WriteBulk(cmd.Args[2])
 					conn.WriteBulkString("")
+				case "metrics":
+					xy.DumpStats(inm, os.Stdout)
+					conn.WriteNull()
 				}
 			},
 			func(conn redcon.Conn) bool {
