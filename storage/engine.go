@@ -80,19 +80,19 @@ type walIO struct {
 }
 
 func (w *walIO) Read(pos *wal.ChunkPosition) ([]byte, error) {
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "wIO", "read", "total"}, 1, w.label)
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "wal", "read", "total"}, 1, w.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "wIO", "read", "latency", "msec"}, startTime, w.label)
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "wal", "read", "latency", "msec"}, startTime, w.label)
 	}()
 	return w.WAL.Read(pos)
 }
 
 func (w *walIO) Write(data []byte) (*wal.ChunkPosition, error) {
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "wIO", "write", "total"}, 1, w.label)
+	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "wal", "write", "total"}, 1, w.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "wIO", "write", "latency", "msec"}, startTime, w.label)
+		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "wal", "write", "latency", "msec"}, startTime, w.label)
 	}()
 	return w.WAL.Write(data)
 }
