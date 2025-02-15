@@ -14,6 +14,7 @@ import (
 	"github.com/rosedblabs/wal"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -148,7 +149,7 @@ func (s *WalReplicatorServer) flushBatch(batch []*v1.WALRecord, g grpc.ServerStr
 		return nil
 	}
 	slog.Debug("[GRPC] Batch flushing", "size", len(batch))
-	response := &v1.StreamWALResponse{WalRecords: batch}
+	response := &v1.StreamWALResponse{WalRecords: batch, SentAt: timestamppb.Now()}
 
 	start := time.Now()
 	defer func() {

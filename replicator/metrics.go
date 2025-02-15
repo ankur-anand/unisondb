@@ -42,6 +42,22 @@ var (
 		Name: "wal_replicator_eof_timeouts_total",
 		Help: "Total number of EOF timeouts during WAL record prefetching.",
 	}, []string{"namespace"})
+
+	clientWalRecvTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "client_stream_replicator_record_received_total",
+			Help: "Total number of WAL record received from the gRPC stream.",
+		},
+		[]string{"namespace"},
+	)
+
+	clientWalStreamErrTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "client_stream_replicator_errors_total",
+			Help: "Total number of errors while streaming WAL at client side.",
+		},
+		[]string{"namespace", "error"},
+	)
 )
 
 // RegisterMetrics registers the Prometheus metrics.

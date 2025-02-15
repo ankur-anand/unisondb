@@ -28,7 +28,7 @@ func toGRPCError(err error) error {
 	case errors.Is(err, ErrMissingNamespaceInMetadata):
 		return status.Error(codes.InvalidArgument, ErrMissingNamespaceInMetadata.Error())
 	case errors.Is(err, ErrStreamTimeout):
-		return status.Error(codes.DeadlineExceeded, ErrStreamTimeout.Error())
+		return status.Error(codes.Unavailable, ErrStreamTimeout.Error())
 	default:
 		return status.Errorf(codes.Internal, "internal server error")
 	}

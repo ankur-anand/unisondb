@@ -261,6 +261,11 @@ func (e *Engine) loadMetaValues() error {
 	return nil
 }
 
+// GetLastMetadata returns the last applied metadata saved in the database.
+func (e *Engine) GetLastMetadata() (Metadata, error) {
+	return LoadMetadata(e.bTreeStore)
+}
+
 // persistKeyValue writes a key-value pair to WAL and MemTable, ensuring durability.
 // multistep process to persist the key-value pair:
 // 1. Encodes the record.
