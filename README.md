@@ -45,7 +45,20 @@ make lint
 make test
 ```
 
-If L
+## certificate for Local host
+
+```shell
+brew install mkcert
+
+## install local CA
+mkcert -install
+
+## Generate gRPC TLS Certificates
+## these certificate are valid for hostnames/IPs localhost 127.0.0.1 ::1
+
+mkcert -key-file grpc.key -cert-file grpc.crt localhost 127.0.0.1 ::1
+
+```
 
 ## License
 
