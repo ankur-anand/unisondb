@@ -33,11 +33,6 @@ var (
 		Help: "Total number of errors during sending WAL records.",
 	}, []string{"namespace", "method"})
 
-	prefetchErrors = promauto.NewCounterVec(prometheus.CounterOpts{
-		Name: "wal_replicator_prefetch_errors_total",
-		Help: "Total number of errors during WAL record prefetching.",
-	}, []string{"namespace"})
-
 	metricsEOFTimeouts = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "wal_replicator_eof_timeouts_total",
 		Help: "Total number of EOF timeouts during WAL record prefetching.",
@@ -62,5 +57,8 @@ var (
 
 // RegisterMetrics registers the Prometheus metrics.
 func RegisterMetrics() {
-	prometheus.MustRegister(rpcDurations)
+	prometheus.MustRegister(rpcDurations, metricsActiveStreams,
+		metricsStreamSendLatency, metricsStreamSendErrors,
+		metricsEOFTimeouts, clientWalRecvTotal,
+		clientWalStreamErrTotal)
 }
