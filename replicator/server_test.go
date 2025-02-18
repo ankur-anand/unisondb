@@ -253,7 +253,7 @@ func TestServer_StreamWAL(t *testing.T) {
 			val, err := wal.Recv()
 			if err != nil {
 				statusErr := status.Convert(err)
-				assert.Equal(t, codes.DeadlineExceeded, statusErr.Code(), "expected error code NotFound")
+				assert.Equal(t, codes.Unavailable, statusErr.Code(), "expected error code NotFound")
 				assert.Equal(t, statusErr.Message(), ErrStreamTimeout.Error(), "expected error message didn't match")
 				break
 			}

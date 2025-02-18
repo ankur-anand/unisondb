@@ -14,6 +14,7 @@ import (
 	"github.com/rosedblabs/wal"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -32,6 +33,14 @@ type WalReplicatorServer struct {
 	errGrp           *errgroup.Group
 	dynamicTimeout   time.Duration
 	eofRetryInterval time.Duration
+}
+
+func NewWalReplicatorServer(se map[string]*storage.Engine) *WalReplicatorServer {
+	return &WalReplicatorServer{
+		storageEngines:   se,
+		dynamicTimeout:   dynamicTimeout,
+		eofRetryInterval: eofRetryInterval,
+	}
 }
 
 // StreamWAL stream the underlying WAL record on the connection.
@@ -148,7 +157,7 @@ func (s *WalReplicatorServer) flushBatch(batch []*v1.WALRecord, g grpc.ServerStr
 		return nil
 	}
 	slog.Debug("[GRPC] Batch flushing", "size", len(batch))
-	response := &v1.StreamWALResponse{WalRecords: batch}
+	response := &v1.StreamWALResponse{WalRecords: batch, SentAt: timestamppb.Now()}
 
 	start := time.Now()
 	defer func() {
@@ -182,7 +191,7 @@ func (s *WalReplicatorServer) prefetchWalRecord(ctx context.Context, namespace s
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Debug("Stopping WAL prefetch goroutine", "namespace", namespace)
+			slog.Debug("[replicator] Stopping WAL prefetch goroutine", "namespace", namespace)
 			return
 		default:
 			record, chunkPos, err := currentReader.Next()
@@ -199,13 +208,13 @@ func (s *WalReplicatorServer) prefetchWalRecord(ctx context.Context, namespace s
 				eofCount++
 				// Check if we have received EOF continuously for 1 minute
 				if time.Since(lastValidRecordTime) > s.dynamicTimeout {
-					slog.Warn("WAL prefetch exiting: Continuous EOF for 1 minute", "namespace", namespace)
+					slog.Warn("[replicator] WAL prefetch exiting: Continuous EOF for 1 minute", "namespace", namespace)
 					select {
 					case prefetchChan <- fetchedWalRecord{err: ErrStreamTimeout}:
 						metricsEOFTimeouts.WithLabelValues(namespace).Add(1)
 						return
 					case <-ctx.Done():
-						slog.Debug("Stopping WAL prefetch due to context cancellation", "namespace", namespace)
+						slog.Debug("[replicator] Stopping WAL prefetch due to context cancellation", "namespace", namespace)
 						return
 					}
 				}
@@ -216,28 +225,28 @@ func (s *WalReplicatorServer) prefetchWalRecord(ctx context.Context, namespace s
 					// Try creating a new reader from last known valid position
 					newReader, err := s.storageEngines[namespace].NewWalReader().NewReaderWithStart(lastValidChunkPos)
 					if err != nil {
-						slog.Error("Failed to fetch new WAL reader", "err", err, "namespace", namespace)
+						slog.Error("[replicator] Failed to fetch new WAL reader", "err", err, "namespace", namespace)
 						select {
 						case prefetchChan <- fetchedWalRecord{err: err}:
 						case <-ctx.Done():
-							slog.Debug("Stopping WAL prefetch due to context cancellation", "namespace", namespace)
+							slog.Debug("[replicator] Stopping WAL prefetch due to context cancellation", "namespace", namespace)
 						}
 						return
 					}
 					skip1 = true
 					currentReader = newReader // Use the new reader
-					slog.Debug("Switched to new WAL reader from last known position", "namespace", namespace)
+					slog.Debug("[replicator] Switched to new WAL reader from last known position", "namespace", namespace)
 				}
 
 				continue
 			}
 
 			if err != nil {
-				slog.Error("WAL read error:", "err", err, "namespace", namespace)
+				slog.Error("[replicator] WAL read error:", "err", err, "namespace", namespace)
 				select {
 				case prefetchChan <- fetchedWalRecord{err: err}:
 				case <-ctx.Done():
-					slog.Debug("Stopping WAL prefetch due to context cancellation", "namespace", namespace)
+					slog.Debug("[replicator] Stopping WAL prefetch due to context cancellation", "namespace", namespace)
 					return
 				}
 				return
@@ -258,7 +267,7 @@ func (s *WalReplicatorServer) prefetchWalRecord(ctx context.Context, namespace s
 			select {
 			case prefetchChan <- fetchedWalRecord{records: chunks, size: totalSize}:
 			case <-ctx.Done():
-				slog.Debug("Stopping WAL prefetch due to context cancellation", "namespace", namespace)
+				slog.Debug("[replicator] Stopping WAL prefetch due to context cancellation", "namespace", namespace)
 				return
 			}
 		}

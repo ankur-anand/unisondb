@@ -1,0 +1,19 @@
+## Port of the http server
+http_port = 4000
+pprof_enable = true
+
+[grpc]
+port = 4001
+# SSL/TLS certificate paths for gRPC server
+cert_path = "./../../grpc.crt"
+key_path = "./../../grpc.key"
+
+# StorageConfig stores all tunable parameters.
+[storage]
+base_dir = "/tmp/kvalchemy/server"   # Base directory for storage
+namespaces = ["default", "tenant_1", "tenant_2"]
+bytes_per_sync = "1MB"
+segment_size = "16MB"
+value_threshold = "1KB"
+arena_size = "4MB"
+
