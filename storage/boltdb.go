@@ -101,6 +101,23 @@ func (b *boltdb) SetChunks(key []byte, chunks [][]byte, checksum uint32) error {
 			return ErrBucketNotFound
 		}
 
+		// get last stored for keys, if present.
+		// older chunk needs to deleted for not leaking the space.
+		storedValue := b.Get(key)
+		if storedValue != nil && storedValue[0] == ChunkedValueFlag {
+			if len(storedValue) < 9 {
+				return ErrInvalidChunkMetadata
+			}
+			chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
+
+			for i := 0; i < int(chunkCount); i++ {
+				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
+				if err := b.Delete([]byte(chunkKey)); err != nil {
+					return err
+				}
+			}
+		}
+
 		chunkCount := uint32(len(chunks))
 		// Metadata: 1 byte flag + 4 bytes chunk count + 4 bytes checksum
 		metaData := make([]byte, 9)

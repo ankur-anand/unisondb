@@ -76,6 +76,52 @@ func TestInsertAndRetrieveChunkedValue(t *testing.T) {
 
 	expectedValue := bytes.Join(chunks, nil)
 	assert.Equal(t, expectedValue, retrievedValue, "Retrieved chunked value does not match")
+
+	chunks = [][]byte{
+		[]byte("chunk_1_"),
+		[]byte("chunk_2_"),
+	}
+
+	compressed = make([][]byte, len(chunks))
+	checksum = 0
+	for i := 0; i < len(chunks); i++ {
+		var err error
+		compressed[i], err = CompressLZ4(chunks[i])
+		checksum = crc32.Update(checksum, crc32.IEEETable, chunks[i])
+		assert.NoError(t, err, "Failed to compress chunk")
+	}
+
+	err = db.SetChunks(key, compressed, checksum)
+	assert.NoError(t, err, "Failed to insert chunked value")
+
+	retrievedValue, err = db.Get(key)
+	assert.NoError(t, err, "Failed to retrieve chunked value")
+
+	expectedValue = bytes.Join(chunks, nil)
+	assert.Equal(t, expectedValue, retrievedValue, "Retrieved chunked value does not match")
+
+	keys := make(map[string]bool)
+	keys["chunked_key_chunk_0"] = true
+	keys["chunked_key_chunk_1"] = true
+	keys["chunked_key_chunk_2"] = false
+
+	for k, v := range keys {
+		err := db.db.View(func(tx *bbolt.Tx) error {
+			bucket := tx.Bucket([]byte(testNamespace))
+			assert.NotNil(t, bucket, "bucket should not be nil")
+			val := bucket.Get([]byte(k))
+			if v {
+				assert.NotNil(t, val, "val should not be nil")
+			}
+
+			if !v {
+				assert.Nil(t, val, "val should not be nil")
+			}
+			return nil
+		})
+
+		assert.NoError(t, err, "Failed to retrieve chunked value")
+	}
 }
 
 // IMP: no panic
