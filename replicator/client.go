@@ -36,7 +36,10 @@ func NewStorageIO(engine *storage.Engine, namespace string) *StorageIO {
 
 func (io *StorageIO) Write(data *v1.WALRecord) {
 	record := wrecord.GetRootAsWalRecord(data.CompressedData, 0)
-	io.engine.Put(record.KeyBytes(), record.ValueBytes())
+	err := io.engine.Put(record.KeyBytes(), record.ValueBytes())
+	if err != nil {
+		slog.Error("[REPLICATOR] WalIO.Write error", "error", err)
+	}
 }
 
 // WalIO provide.
