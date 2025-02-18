@@ -120,6 +120,7 @@ func (ms *mainServer) initTelemetry(ctx context.Context) error {
 	defaultConfig.EnableHostname = false
 	_, err = metrics.New(defaultConfig, sink)
 	fatalIfErr(err)
+	replicator.RegisterMetrics()
 	return nil
 }
 
