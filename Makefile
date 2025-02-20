@@ -2,7 +2,7 @@
 # set COVERAGE_DIR If not set
 COVERAGE_DIR ?= .coverage
 .PHONY: test
-test:
+test: lint
 	@echo "[go test] running unit tests and collecting coverage metrics"
 	@-rm -r $(COVERAGE_DIR)
 	@mkdir $(COVERAGE_DIR)
