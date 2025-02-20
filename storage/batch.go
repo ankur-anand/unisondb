@@ -32,10 +32,13 @@ func (e *Engine) NewBatch(key []byte) (*Batch, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	// start the batch marker in wal
+	index := e.globalCounter.Add(1)
 	record := walRecord{
-		hlc:          HLCNow(e.globalCounter.Add(1)),
+		index:        index,
+		hlc:          HLCNow(index),
 		key:          key,
 		value:        nil,
 		op:           wrecord.LogOperationOpBatchStart,
@@ -77,12 +80,16 @@ func (b *Batch) LastPos() wal.ChunkPosition {
 
 // Put the value for the key.
 func (b *Batch) Put(value []byte) error {
+	b.engine.mu.Lock()
+	defer b.engine.mu.Unlock()
+
 	if b.err != nil {
 		return b.err
 	}
-
+	index := b.engine.globalCounter.Add(1)
 	record := &walRecord{
-		hlc:          HLCNow(b.engine.globalCounter.Add(1)),
+		index:        index,
+		hlc:          HLCNow(index),
 		key:          b.key,
 		value:        value,
 		op:           wrecord.LogOperationOPBatchInsert,

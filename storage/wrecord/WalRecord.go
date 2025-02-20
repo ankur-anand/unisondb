@@ -41,7 +41,7 @@ func (rcv *WalRecord) Table() flatbuffers.Table {
 	return rcv._tab
 }
 
-func (rcv *WalRecord) Hlc() uint64 {
+func (rcv *WalRecord) Index() uint64 {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(4))
 	if o != 0 {
 		return rcv._tab.GetUint64(o + rcv._tab.Pos)
@@ -49,12 +49,24 @@ func (rcv *WalRecord) Hlc() uint64 {
 	return 0
 }
 
-func (rcv *WalRecord) MutateHlc(n uint64) bool {
+func (rcv *WalRecord) MutateIndex(n uint64) bool {
 	return rcv._tab.MutateUint64Slot(4, n)
 }
 
-func (rcv *WalRecord) Operation() LogOperation {
+func (rcv *WalRecord) Hlc() uint64 {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
+	if o != 0 {
+		return rcv._tab.GetUint64(o + rcv._tab.Pos)
+	}
+	return 0
+}
+
+func (rcv *WalRecord) MutateHlc(n uint64) bool {
+	return rcv._tab.MutateUint64Slot(6, n)
+}
+
+func (rcv *WalRecord) Operation() LogOperation {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
 	if o != 0 {
 		return LogOperation(rcv._tab.GetByte(o + rcv._tab.Pos))
 	}
@@ -62,11 +74,11 @@ func (rcv *WalRecord) Operation() LogOperation {
 }
 
 func (rcv *WalRecord) MutateOperation(n LogOperation) bool {
-	return rcv._tab.MutateByteSlot(6, byte(n))
+	return rcv._tab.MutateByteSlot(8, byte(n))
 }
 
 func (rcv *WalRecord) Key(j int) byte {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
 		return rcv._tab.GetByte(a + flatbuffers.UOffsetT(j*1))
@@ -75,7 +87,7 @@ func (rcv *WalRecord) Key(j int) byte {
 }
 
 func (rcv *WalRecord) KeyLength() int {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
 	if o != 0 {
 		return rcv._tab.VectorLen(o)
 	}
@@ -83,7 +95,7 @@ func (rcv *WalRecord) KeyLength() int {
 }
 
 func (rcv *WalRecord) KeyBytes() []byte {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
 	if o != 0 {
 		return rcv._tab.ByteVector(o + rcv._tab.Pos)
 	}
@@ -91,7 +103,7 @@ func (rcv *WalRecord) KeyBytes() []byte {
 }
 
 func (rcv *WalRecord) MutateKey(j int, n byte) bool {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
 		return rcv._tab.MutateByte(a+flatbuffers.UOffsetT(j*1), n)
@@ -100,7 +112,7 @@ func (rcv *WalRecord) MutateKey(j int, n byte) bool {
 }
 
 func (rcv *WalRecord) Value(j int) byte {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
 		return rcv._tab.GetByte(a + flatbuffers.UOffsetT(j*1))
@@ -109,7 +121,7 @@ func (rcv *WalRecord) Value(j int) byte {
 }
 
 func (rcv *WalRecord) ValueLength() int {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
 	if o != 0 {
 		return rcv._tab.VectorLen(o)
 	}
@@ -117,7 +129,7 @@ func (rcv *WalRecord) ValueLength() int {
 }
 
 func (rcv *WalRecord) ValueBytes() []byte {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
 	if o != 0 {
 		return rcv._tab.ByteVector(o + rcv._tab.Pos)
 	}
@@ -125,7 +137,7 @@ func (rcv *WalRecord) ValueBytes() []byte {
 }
 
 func (rcv *WalRecord) MutateValue(j int, n byte) bool {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
 		return rcv._tab.MutateByte(a+flatbuffers.UOffsetT(j*1), n)
@@ -134,7 +146,7 @@ func (rcv *WalRecord) MutateValue(j int, n byte) bool {
 }
 
 func (rcv *WalRecord) RecordChecksum() uint32 {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
 	if o != 0 {
 		return rcv._tab.GetUint32(o + rcv._tab.Pos)
 	}
@@ -142,11 +154,11 @@ func (rcv *WalRecord) RecordChecksum() uint32 {
 }
 
 func (rcv *WalRecord) MutateRecordChecksum(n uint32) bool {
-	return rcv._tab.MutateUint32Slot(12, n)
+	return rcv._tab.MutateUint32Slot(14, n)
 }
 
 func (rcv *WalRecord) BatchId(j int) byte {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
 		return rcv._tab.GetByte(a + flatbuffers.UOffsetT(j*1))
@@ -155,7 +167,7 @@ func (rcv *WalRecord) BatchId(j int) byte {
 }
 
 func (rcv *WalRecord) BatchIdLength() int {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
 	if o != 0 {
 		return rcv._tab.VectorLen(o)
 	}
@@ -163,7 +175,7 @@ func (rcv *WalRecord) BatchIdLength() int {
 }
 
 func (rcv *WalRecord) BatchIdBytes() []byte {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
 	if o != 0 {
 		return rcv._tab.ByteVector(o + rcv._tab.Pos)
 	}
@@ -171,7 +183,7 @@ func (rcv *WalRecord) BatchIdBytes() []byte {
 }
 
 func (rcv *WalRecord) MutateBatchId(j int, n byte) bool {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
 		return rcv._tab.MutateByte(a+flatbuffers.UOffsetT(j*1), n)
@@ -180,7 +192,7 @@ func (rcv *WalRecord) MutateBatchId(j int, n byte) bool {
 }
 
 func (rcv *WalRecord) LastBatchPos(j int) byte {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(18))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
 		return rcv._tab.GetByte(a + flatbuffers.UOffsetT(j*1))
@@ -189,7 +201,7 @@ func (rcv *WalRecord) LastBatchPos(j int) byte {
 }
 
 func (rcv *WalRecord) LastBatchPosLength() int {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(18))
 	if o != 0 {
 		return rcv._tab.VectorLen(o)
 	}
@@ -197,7 +209,7 @@ func (rcv *WalRecord) LastBatchPosLength() int {
 }
 
 func (rcv *WalRecord) LastBatchPosBytes() []byte {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(18))
 	if o != 0 {
 		return rcv._tab.ByteVector(o + rcv._tab.Pos)
 	}
@@ -205,7 +217,7 @@ func (rcv *WalRecord) LastBatchPosBytes() []byte {
 }
 
 func (rcv *WalRecord) MutateLastBatchPos(j int, n byte) bool {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(18))
 	if o != 0 {
 		a := rcv._tab.Vector(o)
 		return rcv._tab.MutateByte(a+flatbuffers.UOffsetT(j*1), n)
@@ -214,37 +226,40 @@ func (rcv *WalRecord) MutateLastBatchPos(j int, n byte) bool {
 }
 
 func WalRecordStart(builder *flatbuffers.Builder) {
-	builder.StartObject(7)
+	builder.StartObject(8)
+}
+func WalRecordAddIndex(builder *flatbuffers.Builder, index uint64) {
+	builder.PrependUint64Slot(0, index, 0)
 }
 func WalRecordAddHlc(builder *flatbuffers.Builder, hlc uint64) {
-	builder.PrependUint64Slot(0, hlc, 0)
+	builder.PrependUint64Slot(1, hlc, 0)
 }
 func WalRecordAddOperation(builder *flatbuffers.Builder, operation LogOperation) {
-	builder.PrependByteSlot(1, byte(operation), 0)
+	builder.PrependByteSlot(2, byte(operation), 0)
 }
 func WalRecordAddKey(builder *flatbuffers.Builder, key flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(2, flatbuffers.UOffsetT(key), 0)
+	builder.PrependUOffsetTSlot(3, flatbuffers.UOffsetT(key), 0)
 }
 func WalRecordStartKeyVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)
 }
 func WalRecordAddValue(builder *flatbuffers.Builder, value flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(3, flatbuffers.UOffsetT(value), 0)
+	builder.PrependUOffsetTSlot(4, flatbuffers.UOffsetT(value), 0)
 }
 func WalRecordStartValueVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)
 }
 func WalRecordAddRecordChecksum(builder *flatbuffers.Builder, recordChecksum uint32) {
-	builder.PrependUint32Slot(4, recordChecksum, 0)
+	builder.PrependUint32Slot(5, recordChecksum, 0)
 }
 func WalRecordAddBatchId(builder *flatbuffers.Builder, batchId flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(5, flatbuffers.UOffsetT(batchId), 0)
+	builder.PrependUOffsetTSlot(6, flatbuffers.UOffsetT(batchId), 0)
 }
 func WalRecordStartBatchIdVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)
 }
 func WalRecordAddLastBatchPos(builder *flatbuffers.Builder, lastBatchPos flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(6, flatbuffers.UOffsetT(lastBatchPos), 0)
+	builder.PrependUOffsetTSlot(7, flatbuffers.UOffsetT(lastBatchPos), 0)
 }
 func WalRecordStartLastBatchPosVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)

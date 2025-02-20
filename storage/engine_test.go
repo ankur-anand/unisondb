@@ -2,8 +2,10 @@ package storage_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"os"
 	"strconv"
 	"sync"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ankur-anand/kvalchemy/storage"
+	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/rosedblabs/wal"
 	"github.com/stretchr/testify/assert"
@@ -419,4 +422,19 @@ func TestArenaReplacement_Uncommited_batch(t *testing.T) {
 	value, err = engine.Get(batchKey)
 	assert.ErrorIs(t, err, storage.ErrKeyNotFound, "Get operation should not succeed")
 	assert.Nil(t, value, "Get value should not be nil")
+
+	// test reader
+	index := 0
+	reader := engine.NewWalReader().NewReader()
+	for {
+		value, _, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		index++
+		assert.NoError(t, err)
+		assert.NotNil(t, value, "value should not be nil")
+		record := wrecord.GetRootAsWalRecord(value, 0)
+		assert.Equal(t, uint64(index), record.Index(), "index mismatch")
+	}
 }

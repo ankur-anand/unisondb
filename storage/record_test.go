@@ -57,6 +57,7 @@ func TestEncodeDecodeWalRecord(t *testing.T) {
 	assert.NoError(t, err)
 
 	wr := walRecord{
+		index:   12,
 		hlc:     123456789,
 		key:     []byte("test_key"),
 		value:   []byte("test_value"),
@@ -71,6 +72,7 @@ func TestEncodeDecodeWalRecord(t *testing.T) {
 	data, err := DecompressLZ4(record.ValueBytes())
 	assert.NoError(t, err)
 	// Validate that all fields are correctly restored
+	assert.Equal(t, uint64(12), record.Index(), "Wal Index mismatch")
 	assert.Equal(t, uint64(123456789), record.Hlc(), "WAL RecordProcessed mismatch")
 	assert.Equal(t, wrecord.LogOperationOpInsert, record.Operation(), "Operation mismatch")
 	assert.Equal(t, []byte("test_key"), record.KeyBytes(), "Key mismatch")
