@@ -51,7 +51,7 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 	if metadata.RecordProcessed != 0 {
 		// recovery should happen from last chunk position + 1.
 		ignoreFirstChunk = true
-		slog.Info("Starting WAL replay from hlc ..", "hlc", metadata.RecordProcessed, "segment", metadata.Pos.SegmentId, "offset", metadata.Pos.ChunkOffset, "namespace", namespace)
+		slog.Info("Starting WAL replay from index ..", "index", metadata.RecordProcessed, "segment", metadata.Pos.SegmentId, "offset", metadata.Pos.ChunkOffset, "namespace", namespace)
 
 		reader, err = e.wal.NewReaderWithStart(metadata.Pos)
 		if err != nil {

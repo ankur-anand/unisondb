@@ -12,6 +12,7 @@ import (
 
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
 	"github.com/ankur-anand/kvalchemy/storage"
+	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sync/errgroup"
@@ -247,7 +248,7 @@ func TestServer_StreamWAL(t *testing.T) {
 		assert.NoError(t, err, "failed to stream WAL")
 
 		valuesCount := 0
-
+		lastRecvIndex := uint64(0)
 		for {
 
 			val, err := wal.Recv()
@@ -258,6 +259,13 @@ func TestServer_StreamWAL(t *testing.T) {
 				break
 			}
 			valuesCount = +len(val.WalRecords)
+			for _, record := range val.WalRecords {
+				lastRecvIndex++
+				wr := wrecord.GetRootAsWalRecord(record.CompressedData, 0)
+				assert.NotNil(t, wr, "error converting to wal record")
+				assert.Equal(t, lastRecvIndex, wr.Index(), "last recv index does not match")
+			}
+
 		}
 
 		assert.Greater(t, valuesCount, 0, "total 20 logs should have streamed")

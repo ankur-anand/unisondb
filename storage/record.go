@@ -45,6 +45,7 @@ func UnmarshalMetadata(data []byte) Metadata {
 
 // walRecord.
 type walRecord struct {
+	index uint64
 	hlc   uint64
 	key   []byte
 	value []byte
@@ -91,6 +92,7 @@ func (w *walRecord) fbEncode() ([]byte, error) {
 
 	// Start building the WAL Record
 	wrecord.WalRecordStart(builder)
+	wrecord.WalRecordAddIndex(builder, w.index)
 	wrecord.WalRecordAddHlc(builder, w.hlc)
 	wrecord.WalRecordAddOperation(builder, w.op)
 	wrecord.WalRecordAddKey(builder, keyOffset)

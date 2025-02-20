@@ -279,8 +279,12 @@ func (e *Engine) GetLastMetadata() (Metadata, error) {
 //
 // 5. Store the current Chunk Position in the variable.
 func (e *Engine) persistKeyValue(key []byte, value []byte, op wrecord.LogOperation, batchID []byte, pos *wal.ChunkPosition) error {
-	hlc := HLCNow(e.globalCounter.Add(1))
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	index := e.globalCounter.Add(1)
+	hlc := HLCNow(index)
 	record := walRecord{
+		index:        index,
 		hlc:          hlc,
 		key:          key,
 		value:        value,
@@ -294,8 +298,7 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op wrecord.LogOperati
 	if err != nil {
 		return err
 	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
+
 	// Write to WAL
 	chunkPos, err := e.walIO.Write(encoded)
 	if err != nil {

@@ -11,6 +11,7 @@ enum LogOperation : ubyte {
 }
 
 table WalRecord {
+  index: uint64;
   hlc: uint64;
   operation: LogOperation;
 
