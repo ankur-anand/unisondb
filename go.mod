@@ -14,6 +14,7 @@ require (
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/prometheus/client_golang v1.20.5
+	github.com/prometheus/common v0.55.0
 	github.com/rosedblabs/wal v1.3.8
 	github.com/segmentio/ksuid v1.0.4
 	github.com/stretchr/testify v1.10.0
@@ -37,7 +38,6 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect
-	github.com/prometheus/common v0.55.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/rogpeppe/go-internal v1.13.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
@@ -49,4 +49,4 @@ require (
 )
 
 // replacing for #https://github.com/rosedblabs/wal/pull/45
-replace github.com/rosedblabs/wal v1.3.8 => github.com/ankur-anand/wal v0.0.1
+replace github.com/rosedblabs/wal v1.3.8 => github.com/ankur-anand/wal v0.0.2
