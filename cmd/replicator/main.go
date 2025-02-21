@@ -17,7 +17,7 @@ import (
 	"github.com/ankur-anand/kvalchemy/cmd/replicator/config"
 	"github.com/ankur-anand/kvalchemy/internal/xy"
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
-	"github.com/ankur-anand/kvalchemy/replicator"
+	"github.com/ankur-anand/kvalchemy/services/replicator"
 	"github.com/ankur-anand/kvalchemy/storage"
 	"github.com/hashicorp/go-metrics"
 	hashiprom "github.com/hashicorp/go-metrics/prometheus"

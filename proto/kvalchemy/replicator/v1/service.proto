@@ -8,15 +8,6 @@ import "google/protobuf/timestamp.proto";
 service WALReplicationService {
   /// Stream WAL Logs
   rpc StreamWAL(StreamWALRequest) returns (stream StreamWALResponse);
-
-  rpc PutKV(PutKVRequest) returns (PutKVResponse);
-
-  rpc StreamPutKV(stream StreamPutKVRequest) returns (StreamPutKVResponse);
-
-  rpc DeleteKV(DeleteKVRequest) returns (DeleteKVResponse);
-
-  rpc StreamDeleteKV(stream StreamDeleteKVRequest) returns (StreamDeleteKVResponse);
-
 }
 
 message StreamWALRequest {
@@ -41,15 +32,26 @@ message WALRecord {
   fixed32 checksum = 6;
 }
 
+service KeyValueService {
+  rpc PutKV(PutKVRequest) returns (PutKVResponse);
+
+  rpc StreamPutKV(stream StreamPutKVRequest) returns (StreamPutKVResponse);
+
+  rpc DeleteKV(DeleteKVRequest) returns (DeleteKVResponse);
+
+  rpc StreamDeleteKV(stream StreamDeleteKVRequest) returns (StreamDeleteKVResponse);
+
+  rpc StreamPutKVChunks(stream StreamPutKVChunksRequest) returns (StreamPutKVChunksResponse);
+}
+
 message PutKVRequest {
-  bytes key = 1;                      // Binary key (Required)
-  bytes value = 2;                    // Binary value (Optional)
-  bytes batch_id = 3;                 // Optional batch identifier (UUID)
-  google.protobuf.Timestamp timestamp = 4; // Timestamp for consistency
+  bytes key = 1;
+  bytes value = 2;
+  google.protobuf.Timestamp timestamp = 4;
 }
 
 message StreamPutKVRequest {
-  repeated PutKVRequest kv_pairs = 1;  // Batch insert requests
+  repeated PutKVRequest kv_pairs = 1;
 }
 
 message PutKVResponse {}
@@ -67,3 +69,28 @@ message StreamDeleteKVRequest {
 }
 
 message StreamDeleteKVResponse {}
+
+message StreamPutKVChunksRequest {
+  oneof request_type  {
+    ChunkStartMarker start_marker = 1;
+    ChunkCommitMarker commit_marker = 2;
+    ChunkPutValue chunk = 3;
+  }
+}
+
+message ChunkStartMarker {
+  bytes key = 1;
+}
+
+message ChunkPutValue {
+  string uuid = 1;
+  bytes value = 2;
+}
+
+message ChunkCommitMarker {
+  string uuid = 1;
+}
+
+message StreamPutKVChunksResponse {
+  string uuid = 1;
+}
