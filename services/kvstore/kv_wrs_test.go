@@ -233,9 +233,9 @@ func TestClient_PutStreamChunksForKey(t *testing.T) {
 	key := "chunk_random"
 	assert.NoError(t, client.PutStreamChunksForKey(ctx, nameSpaces[0], key, keyValue), "failed to put chunks")
 
-	value, err := engines[nameSpaces[0]].Get([]byte(key))
+	value, err := client.GetKV(ctx, nameSpaces[0], key)
 	assert.NoError(t, err)
 	assert.Equal(t, assembledValue, value, "value mismatch")
 	assert.Equal(t, checksum, splitter.ComputeChecksum(value), "checksum mismatch")
-	
+
 }
