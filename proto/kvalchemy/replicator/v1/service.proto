@@ -8,15 +8,6 @@ import "google/protobuf/timestamp.proto";
 service WALReplicationService {
   /// Stream WAL Logs
   rpc StreamWAL(StreamWALRequest) returns (stream StreamWALResponse);
-
-  rpc PutKV(PutKVRequest) returns (PutKVResponse);
-
-  rpc StreamPutKV(stream StreamPutKVRequest) returns (StreamPutKVResponse);
-
-  rpc DeleteKV(DeleteKVRequest) returns (DeleteKVResponse);
-
-  rpc StreamDeleteKV(stream StreamDeleteKVRequest) returns (StreamDeleteKVResponse);
-
 }
 
 message StreamWALRequest {
@@ -31,39 +22,85 @@ message StreamWALResponse {
 
 // WAL Record Format
 message WALRecord {
-  bytes metadata = 1;
-  bytes compressed_data = 2;        // Compressed WAL entry (LZ4)
-
-  bool is_chunked = 3;              // Is this part of a chunked WAL entry?
-  uint32 chunk_index = 4;           // Chunk number in the sequence
-  string chunk_type = 5;            // start and end of chunk marker.
-
-  fixed32 checksum = 6;
+  bytes chunk_pos = 1;
+  bytes record = 2;        // entire WAL entry
 }
 
-message PutKVRequest {
-  bytes key = 1;                      // Binary key (Required)
-  bytes value = 2;                    // Binary value (Optional)
-  bytes batch_id = 3;                 // Optional batch identifier (UUID)
-  google.protobuf.Timestamp timestamp = 4; // Timestamp for consistency
+service KVStoreWriteService {
+  rpc Put(PutRequest) returns (PutResponse);
+  rpc PutStream(stream PutStreamRequest) returns (PutStreamResponse);
+  // PutStreamChunksForKey: starts a stream can be used to put a large value associated
+  // with the key.
+  // value needs to be chunked into smaller size for efficient transmission and storage over grpc.
+  // STEPS:
+  // 1. Send the Chunk Start Marker.
+  // 2. Stream the Chunk Values.
+  // 3. Send the Chunk Commit Marker.
+  // It's important to send Chunk Commit Marker else the chunked value will not be visible to reader.
+  rpc PutStreamChunksForKey(stream PutStreamChunksForKeyRequest) returns (PutStreamChunksForKeyResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc DeleteStream(stream DeleteStreamRequest) returns (DeleteStreamResponse);
 }
 
-message StreamPutKVRequest {
-  repeated PutKVRequest kv_pairs = 1;  // Batch insert requests
+message PutRequest {
+  bytes key = 1;
+  bytes value = 2;
+  google.protobuf.Timestamp timestamp = 4;
 }
 
-message PutKVResponse {}
+message PutStreamRequest {
+  repeated PutRequest kv_pairs = 1;
+}
 
-message StreamPutKVResponse {}
+message PutResponse {}
 
-message DeleteKVRequest {
+message PutStreamResponse {}
+
+message DeleteRequest {
   bytes key = 1;
 }
 
-message DeleteKVResponse {}
+message DeleteResponse {}
 
-message StreamDeleteKVRequest {
-  repeated DeleteKVRequest deletes = 1; // List of keys to delete
+message DeleteStreamRequest {
+  repeated DeleteRequest deletes = 1; // List of keys to delete
 }
 
-message StreamDeleteKVResponse {}
+message DeleteStreamResponse {}
+
+message PutStreamChunksForKeyRequest {
+  oneof request_type  {
+    ChunkStartMarker start_marker = 1;
+    ChunkCommitMarker commit_marker = 2;
+    ChunkPutValue chunk = 3;
+  }
+}
+
+message ChunkStartMarker {
+  bytes key = 1;
+}
+
+message ChunkPutValue {
+  bytes value = 1;
+  uint32 crc32_checksum = 2;
+}
+
+message ChunkCommitMarker {
+  uint32 final_crc32_checksum = 1;
+}
+
+message PutStreamChunksForKeyResponse {}
+
+service KVStoreReadService {
+  rpc Get(GetRequest) returns (stream GetResponse);
+}
+
+message GetRequest {
+  bytes key = 1;
+}
+
+message GetResponse {
+  bytes data = 1;
+  bool chunked = 2;
+  fixed32 final_crc32_checksum = 3;
+}

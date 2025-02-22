@@ -15,9 +15,11 @@ import (
 	"time"
 
 	"github.com/ankur-anand/kvalchemy/cmd/replicator/config"
+	"github.com/ankur-anand/kvalchemy/internal/middleware"
 	"github.com/ankur-anand/kvalchemy/internal/xy"
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
-	"github.com/ankur-anand/kvalchemy/replicator"
+	"github.com/ankur-anand/kvalchemy/services/kvstore"
+	"github.com/ankur-anand/kvalchemy/services/replicator"
 	"github.com/ankur-anand/kvalchemy/storage"
 	"github.com/hashicorp/go-metrics"
 	hashiprom "github.com/hashicorp/go-metrics/prometheus"
@@ -160,14 +162,30 @@ func (ms *mainServer) setupStorage(ctx context.Context) error {
 
 func (ms *mainServer) setupGrpcServer(ctx context.Context) error {
 	rep := replicator.NewWalReplicatorServer(ms.engines)
+	kvr := kvstore.NewKVReaderService(ms.engines)
+	kvw := kvstore.NewKVWriterService(ms.engines)
 
-	gS := grpc.NewServer(grpc.ChainStreamInterceptor(replicator.RequireNamespaceInterceptor,
-		replicator.RequestIDStreamInterceptor,
-		replicator.CorrelationIDStreamInterceptor,
-		replicator.TelemetryInterceptor),
+	gS := grpc.NewServer(grpc.ChainStreamInterceptor(middleware.RequireNamespaceInterceptor,
+		middleware.RequestIDStreamInterceptor,
+		middleware.CorrelationIDStreamInterceptor,
+		middleware.MethodInterceptor,
+		middleware.TelemetryInterceptor),
+
+		grpc.ChainUnaryInterceptor(middleware.RequireNamespaceUnaryInterceptor,
+			middleware.RequestIDUnaryInterceptor,
+			middleware.CorrelationIDUnaryInterceptor,
+			middleware.MethodUnaryInterceptor,
+			middleware.TelemetryUnaryInterceptor),
+
 		grpc.KeepaliveEnforcementPolicy(kAlv))
 
 	v1.RegisterWALReplicationServiceServer(gS, rep)
+	v1.RegisterKVStoreReadServiceServer(gS, kvr)
+	// only register write server if allowed
+	if ms.cfg.AllowWrite {
+		v1.RegisterKVStoreWriteServiceServer(gS, kvw)
+	}
+
 	ms.grpcServer = gS
 	ms.deferCallback = append(ms.deferCallback, func(ctx context.Context) {
 		gS.GracefulStop()

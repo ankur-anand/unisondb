@@ -35,7 +35,7 @@ func NewStorageIO(engine *storage.Engine, namespace string) *StorageIO {
 }
 
 func (io *StorageIO) Write(data *v1.WALRecord) {
-	record := wrecord.GetRootAsWalRecord(data.CompressedData, 0)
+	record := wrecord.GetRootAsWalRecord(data.Record, 0)
 	err := io.engine.Put(record.KeyBytes(), record.ValueBytes())
 	if err != nil {
 		slog.Error("[REPLICATOR] WalIO.Write error", "error", err)
@@ -48,14 +48,14 @@ type WalIO interface {
 }
 
 type Client struct {
-	gcc        *grpc.ClientConn
-	namespaces string
-	wIO        WalIO
-	metadata   []byte
+	gcc       *grpc.ClientConn
+	namespace string
+	wIO       WalIO
+	metadata  []byte
 }
 
 func (c *Client) StreamWAL(ctx context.Context) error {
-	md := metadata.Pairs("x-namespace", c.namespaces)
+	md := metadata.Pairs("x-namespace", c.namespace)
 	ctx = metadata.NewOutgoingContext(ctx, md)
 
 	var retryCount int
@@ -65,8 +65,8 @@ func (c *Client) StreamWAL(ctx context.Context) error {
 	for {
 		if retryCount > maxRetries {
 			slog.Error("[REPLICATOR] Max retries reached, aborting WAL stream",
-				"namespace", c.namespaces, "retries", retryCount)
-			clientWalStreamErrTotal.WithLabelValues(c.namespaces, "max_retries_reached").Inc()
+				"namespace", c.namespace, "retries", retryCount)
+			clientWalStreamErrTotal.WithLabelValues(c.namespace, "max_retries_reached").Inc()
 			return fmt.Errorf("max retries [%d] exceeded", maxRetries)
 		}
 
@@ -78,19 +78,19 @@ func (c *Client) StreamWAL(ctx context.Context) error {
 			if shouldRetry(err) {
 				retryCount++
 				slog.Warn("[REPLICATOR] StreamWAL failed, retrying",
-					"namespace", c.namespaces, "error", err,
+					"namespace", c.namespace, "error", err,
 					"retry_count", retryCount)
 				time.Sleep(getJitteredBackoff(&backoff))
 				continue
 			}
-			return handleStreamError(c.namespaces, err)
+			return handleStreamError(c.namespace, err)
 		}
 
 		if err := c.receiveWALRecords(client, streamStartTime); err != nil {
 			if shouldRetry(err) {
 				retryCount++
 				slog.Warn("[REPLICATOR] StreamWAL failed, retrying",
-					"namespace", c.namespaces, "error", err,
+					"namespace", c.namespace, "error", err,
 					"retry_count", retryCount)
 				time.Sleep(getJitteredBackoff(&backoff))
 				continue
@@ -109,7 +109,7 @@ func (c *Client) receiveWALRecords(client v1.WALReplicationService_StreamWALClie
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
 				slog.Info("[REPLICATOR] stream closed",
-					"namespace", c.namespaces,
+					"namespace", c.namespace,
 					"stream_duration", humanizeDuration(time.Since(startTime)),
 				)
 				return nil
@@ -117,10 +117,10 @@ func (c *Client) receiveWALRecords(client v1.WALReplicationService_StreamWALClie
 			return err
 		}
 
-		clientWalRecvTotal.WithLabelValues(c.namespaces).Add(float64(len(res.WalRecords)))
+		clientWalRecvTotal.WithLabelValues(c.namespace).Add(float64(len(res.WalRecords)))
 
 		for _, record := range res.WalRecords {
-			c.metadata = record.Metadata
+			c.metadata = record.ChunkPos
 			if err := c.wIO.Write(record); err != nil {
 				return err
 			}

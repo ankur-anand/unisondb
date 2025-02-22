@@ -8,8 +8,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ankur-anand/kvalchemy/logchunk"
+	"github.com/ankur-anand/kvalchemy/internal/middleware"
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
+	"github.com/ankur-anand/kvalchemy/services"
 	"github.com/ankur-anand/kvalchemy/storage"
 	"github.com/rosedblabs/wal"
 	"golang.org/x/sync/errgroup"
@@ -45,22 +46,22 @@ func NewWalReplicatorServer(se map[string]*storage.Engine) *WalReplicatorServer 
 
 // StreamWAL stream the underlying WAL record on the connection.
 func (s *WalReplicatorServer) StreamWAL(request *v1.StreamWALRequest, g grpc.ServerStreamingServer[v1.StreamWALResponse]) error {
-	namespace := getNamespace(g.Context())
+	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
 
 	if namespace == "" {
-		return toGRPCError(ErrMissingNamespaceInMetadata)
+		return services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)
 	}
 
 	engine, ok := s.storageEngines[namespace]
 	if !ok {
-		return toGRPCError(ErrNamespaceNotExists)
+		return services.ToGRPCError(namespace, reqID, method, services.ErrNamespaceNotExists)
 	}
 
 	// it can contain terrible data
 	meta, err := decodeMetadata(request.GetMetadata())
 
 	if err != nil {
-		return toGRPCError(ErrInvalidMetadata)
+		return services.ToGRPCError(namespace, reqID, method, services.ErrInvalidMetadata)
 	}
 
 	wr := engine.NewWalReader()
@@ -71,7 +72,7 @@ func (s *WalReplicatorServer) StreamWAL(request *v1.StreamWALRequest, g grpc.Ser
 	} else {
 		reader, rErr = wr.NewReaderWithStart(meta.Pos)
 		if rErr != nil {
-			return toGRPCError(rErr)
+			return services.ToGRPCError(namespace, reqID, method, rErr)
 		}
 	}
 
@@ -84,7 +85,7 @@ func (s *WalReplicatorServer) StreamWAL(request *v1.StreamWALRequest, g grpc.Ser
 		return nil
 	})
 
-	return s.streamWalRecords(ctx, namespace, g, ch)
+	return s.streamWalRecords(ctx, namespace, reqID, method, g, ch)
 }
 
 // streamWalRecords streams namespaced Write-Ahead Log (WAL) records to the client in batches
@@ -97,7 +98,11 @@ func (s *WalReplicatorServer) StreamWAL(request *v1.StreamWALRequest, g grpc.Ser
 //   - Resource Exhaustion: A malfunctioning client stream could monopolize the server's buffer,
 //   - Unnecessary Processing: The server might fetch and stream WAL records that the client has already
 //     received or is no longer interested in.
-func (s *WalReplicatorServer) streamWalRecords(ctx context.Context, namespace string, g grpc.ServerStream, prefetchChan <-chan fetchedWalRecord) error {
+func (s *WalReplicatorServer) streamWalRecords(ctx context.Context,
+	namespace string,
+	reqID middleware.RequestID,
+	method middleware.Method,
+	g grpc.ServerStream, prefetchChan <-chan fetchedWalRecord) error {
 	var (
 		batch          []*v1.WALRecord
 		totalBatchSize int
@@ -114,22 +119,22 @@ func (s *WalReplicatorServer) streamWalRecords(ctx context.Context, namespace st
 		select {
 		case <-ctx.Done():
 			err := ctx.Err()
-			if errors.Is(err, ErrStreamTimeout) {
-				return toGRPCError(ErrStreamTimeout)
+			if errors.Is(err, services.ErrStreamTimeout) {
+				return services.ToGRPCError(namespace, reqID, method, services.ErrStreamTimeout)
 			}
 			if errors.Is(err, context.Canceled) {
-				return ErrStatusOk
+				return nil
 			}
 			return ctx.Err()
 
 		case response, ok := <-prefetchChan:
 
 			if !ok {
-				return ErrStatusOk
+				return nil
 			}
 
 			if response.err != nil {
-				return toGRPCError(response.err)
+				return services.ToGRPCError(namespace, reqID, method, response.err)
 			}
 
 			batch = append(batch, response.records...)
@@ -137,14 +142,14 @@ func (s *WalReplicatorServer) streamWalRecords(ctx context.Context, namespace st
 
 			if totalBatchSize >= batchFlushThreshold {
 				if err := flushBatch(); err != nil {
-					return toGRPCError(err)
+					return services.ToGRPCError(namespace, reqID, method, err)
 				}
 			}
 
 		case <-time.After(batchFlushTimeout):
 			if totalBatchSize > 0 {
 				if err := flushBatch(); err != nil {
-					return toGRPCError(err)
+					return services.ToGRPCError(namespace, reqID, method, err)
 				}
 			}
 		}
@@ -152,7 +157,7 @@ func (s *WalReplicatorServer) streamWalRecords(ctx context.Context, namespace st
 }
 
 func (s *WalReplicatorServer) flushBatch(batch []*v1.WALRecord, g grpc.ServerStream, namespace string) error {
-	method := getMethod(g.Context())
+	method := middleware.GetMethod(g.Context())
 	if len(batch) == 0 {
 		return nil
 	}
@@ -210,7 +215,7 @@ func (s *WalReplicatorServer) prefetchWalRecord(ctx context.Context, namespace s
 				if time.Since(lastValidRecordTime) > s.dynamicTimeout {
 					slog.Warn("[replicator] WAL prefetch exiting: Continuous EOF for 1 minute", "namespace", namespace)
 					select {
-					case prefetchChan <- fetchedWalRecord{err: ErrStreamTimeout}:
+					case prefetchChan <- fetchedWalRecord{err: services.ErrStreamTimeout}:
 						metricsEOFTimeouts.WithLabelValues(namespace).Add(1)
 						return
 					case <-ctx.Done():
@@ -256,16 +261,10 @@ func (s *WalReplicatorServer) prefetchWalRecord(ctx context.Context, namespace s
 			eofCount = 0
 			lastValidRecordTime = time.Now()
 			lastValidChunkPos = chunkPos // Store last read chunk position
-			// Prepare fetchedWalRecord with size calculation
-			chunks := logchunk.ChunkWALRecord(chunkPos.Encode(), record)
-			var totalSize int
-			for _, chunk := range chunks {
-				totalSize += len(chunk.CompressedData)
-			}
 
 			// Send response to the channel
 			select {
-			case prefetchChan <- fetchedWalRecord{records: chunks, size: totalSize}:
+			case prefetchChan <- fetchedWalRecord{records: []*v1.WALRecord{{Record: record, ChunkPos: chunkPos.Encode()}}, size: len(record)}:
 			case <-ctx.Done():
 				slog.Debug("[replicator] Stopping WAL prefetch due to context cancellation", "namespace", namespace)
 				return

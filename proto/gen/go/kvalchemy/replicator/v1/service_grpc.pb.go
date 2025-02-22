@@ -19,11 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WALReplicationService_StreamWAL_FullMethodName      = "/kvalchemy.replicator.v1.WALReplicationService/StreamWAL"
-	WALReplicationService_PutKV_FullMethodName          = "/kvalchemy.replicator.v1.WALReplicationService/PutKV"
-	WALReplicationService_StreamPutKV_FullMethodName    = "/kvalchemy.replicator.v1.WALReplicationService/StreamPutKV"
-	WALReplicationService_DeleteKV_FullMethodName       = "/kvalchemy.replicator.v1.WALReplicationService/DeleteKV"
-	WALReplicationService_StreamDeleteKV_FullMethodName = "/kvalchemy.replicator.v1.WALReplicationService/StreamDeleteKV"
+	WALReplicationService_StreamWAL_FullMethodName = "/kvalchemy.replicator.v1.WALReplicationService/StreamWAL"
 )
 
 // WALReplicationServiceClient is the client API for WALReplicationService service.
@@ -32,10 +28,6 @@ const (
 type WALReplicationServiceClient interface {
 	// / Stream WAL Logs
 	StreamWAL(ctx context.Context, in *StreamWALRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamWALResponse], error)
-	PutKV(ctx context.Context, in *PutKVRequest, opts ...grpc.CallOption) (*PutKVResponse, error)
-	StreamPutKV(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[StreamPutKVRequest, StreamPutKVResponse], error)
-	DeleteKV(ctx context.Context, in *DeleteKVRequest, opts ...grpc.CallOption) (*DeleteKVResponse, error)
-	StreamDeleteKV(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[StreamDeleteKVRequest, StreamDeleteKVResponse], error)
 }
 
 type wALReplicationServiceClient struct {
@@ -65,62 +57,12 @@ func (c *wALReplicationServiceClient) StreamWAL(ctx context.Context, in *StreamW
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WALReplicationService_StreamWALClient = grpc.ServerStreamingClient[StreamWALResponse]
 
-func (c *wALReplicationServiceClient) PutKV(ctx context.Context, in *PutKVRequest, opts ...grpc.CallOption) (*PutKVResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(PutKVResponse)
-	err := c.cc.Invoke(ctx, WALReplicationService_PutKV_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *wALReplicationServiceClient) StreamPutKV(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[StreamPutKVRequest, StreamPutKVResponse], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WALReplicationService_ServiceDesc.Streams[1], WALReplicationService_StreamPutKV_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[StreamPutKVRequest, StreamPutKVResponse]{ClientStream: stream}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WALReplicationService_StreamPutKVClient = grpc.ClientStreamingClient[StreamPutKVRequest, StreamPutKVResponse]
-
-func (c *wALReplicationServiceClient) DeleteKV(ctx context.Context, in *DeleteKVRequest, opts ...grpc.CallOption) (*DeleteKVResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeleteKVResponse)
-	err := c.cc.Invoke(ctx, WALReplicationService_DeleteKV_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *wALReplicationServiceClient) StreamDeleteKV(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[StreamDeleteKVRequest, StreamDeleteKVResponse], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &WALReplicationService_ServiceDesc.Streams[2], WALReplicationService_StreamDeleteKV_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[StreamDeleteKVRequest, StreamDeleteKVResponse]{ClientStream: stream}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WALReplicationService_StreamDeleteKVClient = grpc.ClientStreamingClient[StreamDeleteKVRequest, StreamDeleteKVResponse]
-
 // WALReplicationServiceServer is the server API for WALReplicationService service.
 // All implementations must embed UnimplementedWALReplicationServiceServer
 // for forward compatibility.
 type WALReplicationServiceServer interface {
 	// / Stream WAL Logs
 	StreamWAL(*StreamWALRequest, grpc.ServerStreamingServer[StreamWALResponse]) error
-	PutKV(context.Context, *PutKVRequest) (*PutKVResponse, error)
-	StreamPutKV(grpc.ClientStreamingServer[StreamPutKVRequest, StreamPutKVResponse]) error
-	DeleteKV(context.Context, *DeleteKVRequest) (*DeleteKVResponse, error)
-	StreamDeleteKV(grpc.ClientStreamingServer[StreamDeleteKVRequest, StreamDeleteKVResponse]) error
 	mustEmbedUnimplementedWALReplicationServiceServer()
 }
 
@@ -133,18 +75,6 @@ type UnimplementedWALReplicationServiceServer struct{}
 
 func (UnimplementedWALReplicationServiceServer) StreamWAL(*StreamWALRequest, grpc.ServerStreamingServer[StreamWALResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method StreamWAL not implemented")
-}
-func (UnimplementedWALReplicationServiceServer) PutKV(context.Context, *PutKVRequest) (*PutKVResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method PutKV not implemented")
-}
-func (UnimplementedWALReplicationServiceServer) StreamPutKV(grpc.ClientStreamingServer[StreamPutKVRequest, StreamPutKVResponse]) error {
-	return status.Errorf(codes.Unimplemented, "method StreamPutKV not implemented")
-}
-func (UnimplementedWALReplicationServiceServer) DeleteKV(context.Context, *DeleteKVRequest) (*DeleteKVResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method DeleteKV not implemented")
-}
-func (UnimplementedWALReplicationServiceServer) StreamDeleteKV(grpc.ClientStreamingServer[StreamDeleteKVRequest, StreamDeleteKVResponse]) error {
-	return status.Errorf(codes.Unimplemented, "method StreamDeleteKV not implemented")
 }
 func (UnimplementedWALReplicationServiceServer) mustEmbedUnimplementedWALReplicationServiceServer() {}
 func (UnimplementedWALReplicationServiceServer) testEmbeddedByValue()                               {}
@@ -178,87 +108,373 @@ func _WALReplicationService_StreamWAL_Handler(srv interface{}, stream grpc.Serve
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WALReplicationService_StreamWALServer = grpc.ServerStreamingServer[StreamWALResponse]
 
-func _WALReplicationService_PutKV_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(PutKVRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WALReplicationServiceServer).PutKV(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WALReplicationService_PutKV_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WALReplicationServiceServer).PutKV(ctx, req.(*PutKVRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _WALReplicationService_StreamPutKV_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(WALReplicationServiceServer).StreamPutKV(&grpc.GenericServerStream[StreamPutKVRequest, StreamPutKVResponse]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WALReplicationService_StreamPutKVServer = grpc.ClientStreamingServer[StreamPutKVRequest, StreamPutKVResponse]
-
-func _WALReplicationService_DeleteKV_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DeleteKVRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(WALReplicationServiceServer).DeleteKV(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: WALReplicationService_DeleteKV_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WALReplicationServiceServer).DeleteKV(ctx, req.(*DeleteKVRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _WALReplicationService_StreamDeleteKV_Handler(srv interface{}, stream grpc.ServerStream) error {
-	return srv.(WALReplicationServiceServer).StreamDeleteKV(&grpc.GenericServerStream[StreamDeleteKVRequest, StreamDeleteKVResponse]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type WALReplicationService_StreamDeleteKVServer = grpc.ClientStreamingServer[StreamDeleteKVRequest, StreamDeleteKVResponse]
-
 // WALReplicationService_ServiceDesc is the grpc.ServiceDesc for WALReplicationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var WALReplicationService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "kvalchemy.replicator.v1.WALReplicationService",
 	HandlerType: (*WALReplicationServiceServer)(nil),
-	Methods: []grpc.MethodDesc{
-		{
-			MethodName: "PutKV",
-			Handler:    _WALReplicationService_PutKV_Handler,
-		},
-		{
-			MethodName: "DeleteKV",
-			Handler:    _WALReplicationService_DeleteKV_Handler,
-		},
-	},
+	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
 		{
 			StreamName:    "StreamWAL",
 			Handler:       _WALReplicationService_StreamWAL_Handler,
 			ServerStreams: true,
 		},
+	},
+	Metadata: "kvalchemy/replicator/v1/service.proto",
+}
+
+const (
+	KVStoreWriteService_Put_FullMethodName                   = "/kvalchemy.replicator.v1.KVStoreWriteService/Put"
+	KVStoreWriteService_PutStream_FullMethodName             = "/kvalchemy.replicator.v1.KVStoreWriteService/PutStream"
+	KVStoreWriteService_PutStreamChunksForKey_FullMethodName = "/kvalchemy.replicator.v1.KVStoreWriteService/PutStreamChunksForKey"
+	KVStoreWriteService_Delete_FullMethodName                = "/kvalchemy.replicator.v1.KVStoreWriteService/Delete"
+	KVStoreWriteService_DeleteStream_FullMethodName          = "/kvalchemy.replicator.v1.KVStoreWriteService/DeleteStream"
+)
+
+// KVStoreWriteServiceClient is the client API for KVStoreWriteService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type KVStoreWriteServiceClient interface {
+	Put(ctx context.Context, in *PutRequest, opts ...grpc.CallOption) (*PutResponse, error)
+	PutStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[PutStreamRequest, PutStreamResponse], error)
+	// PutStreamChunksForKey: starts a stream can be used to put a large value associated
+	// with the key.
+	// value needs to be chunked into smaller size for efficient transmission and storage over grpc.
+	// STEPS:
+	// 1. Send the Chunk Start Marker.
+	// 2. Stream the Chunk Values.
+	// 3. Send the Chunk Commit Marker.
+	// It's important to send Chunk Commit Marker else the chunked value will not be visible to reader.
+	PutStreamChunksForKey(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[PutStreamChunksForKeyRequest, PutStreamChunksForKeyResponse], error)
+	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
+	DeleteStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[DeleteStreamRequest, DeleteStreamResponse], error)
+}
+
+type kVStoreWriteServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewKVStoreWriteServiceClient(cc grpc.ClientConnInterface) KVStoreWriteServiceClient {
+	return &kVStoreWriteServiceClient{cc}
+}
+
+func (c *kVStoreWriteServiceClient) Put(ctx context.Context, in *PutRequest, opts ...grpc.CallOption) (*PutResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PutResponse)
+	err := c.cc.Invoke(ctx, KVStoreWriteService_Put_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *kVStoreWriteServiceClient) PutStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[PutStreamRequest, PutStreamResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &KVStoreWriteService_ServiceDesc.Streams[0], KVStoreWriteService_PutStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PutStreamRequest, PutStreamResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KVStoreWriteService_PutStreamClient = grpc.ClientStreamingClient[PutStreamRequest, PutStreamResponse]
+
+func (c *kVStoreWriteServiceClient) PutStreamChunksForKey(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[PutStreamChunksForKeyRequest, PutStreamChunksForKeyResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &KVStoreWriteService_ServiceDesc.Streams[1], KVStoreWriteService_PutStreamChunksForKey_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PutStreamChunksForKeyRequest, PutStreamChunksForKeyResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KVStoreWriteService_PutStreamChunksForKeyClient = grpc.ClientStreamingClient[PutStreamChunksForKeyRequest, PutStreamChunksForKeyResponse]
+
+func (c *kVStoreWriteServiceClient) Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteResponse)
+	err := c.cc.Invoke(ctx, KVStoreWriteService_Delete_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *kVStoreWriteServiceClient) DeleteStream(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[DeleteStreamRequest, DeleteStreamResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &KVStoreWriteService_ServiceDesc.Streams[2], KVStoreWriteService_DeleteStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[DeleteStreamRequest, DeleteStreamResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KVStoreWriteService_DeleteStreamClient = grpc.ClientStreamingClient[DeleteStreamRequest, DeleteStreamResponse]
+
+// KVStoreWriteServiceServer is the server API for KVStoreWriteService service.
+// All implementations must embed UnimplementedKVStoreWriteServiceServer
+// for forward compatibility.
+type KVStoreWriteServiceServer interface {
+	Put(context.Context, *PutRequest) (*PutResponse, error)
+	PutStream(grpc.ClientStreamingServer[PutStreamRequest, PutStreamResponse]) error
+	// PutStreamChunksForKey: starts a stream can be used to put a large value associated
+	// with the key.
+	// value needs to be chunked into smaller size for efficient transmission and storage over grpc.
+	// STEPS:
+	// 1. Send the Chunk Start Marker.
+	// 2. Stream the Chunk Values.
+	// 3. Send the Chunk Commit Marker.
+	// It's important to send Chunk Commit Marker else the chunked value will not be visible to reader.
+	PutStreamChunksForKey(grpc.ClientStreamingServer[PutStreamChunksForKeyRequest, PutStreamChunksForKeyResponse]) error
+	Delete(context.Context, *DeleteRequest) (*DeleteResponse, error)
+	DeleteStream(grpc.ClientStreamingServer[DeleteStreamRequest, DeleteStreamResponse]) error
+	mustEmbedUnimplementedKVStoreWriteServiceServer()
+}
+
+// UnimplementedKVStoreWriteServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedKVStoreWriteServiceServer struct{}
+
+func (UnimplementedKVStoreWriteServiceServer) Put(context.Context, *PutRequest) (*PutResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Put not implemented")
+}
+func (UnimplementedKVStoreWriteServiceServer) PutStream(grpc.ClientStreamingServer[PutStreamRequest, PutStreamResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method PutStream not implemented")
+}
+func (UnimplementedKVStoreWriteServiceServer) PutStreamChunksForKey(grpc.ClientStreamingServer[PutStreamChunksForKeyRequest, PutStreamChunksForKeyResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method PutStreamChunksForKey not implemented")
+}
+func (UnimplementedKVStoreWriteServiceServer) Delete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedKVStoreWriteServiceServer) DeleteStream(grpc.ClientStreamingServer[DeleteStreamRequest, DeleteStreamResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method DeleteStream not implemented")
+}
+func (UnimplementedKVStoreWriteServiceServer) mustEmbedUnimplementedKVStoreWriteServiceServer() {}
+func (UnimplementedKVStoreWriteServiceServer) testEmbeddedByValue()                             {}
+
+// UnsafeKVStoreWriteServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to KVStoreWriteServiceServer will
+// result in compilation errors.
+type UnsafeKVStoreWriteServiceServer interface {
+	mustEmbedUnimplementedKVStoreWriteServiceServer()
+}
+
+func RegisterKVStoreWriteServiceServer(s grpc.ServiceRegistrar, srv KVStoreWriteServiceServer) {
+	// If the following call pancis, it indicates UnimplementedKVStoreWriteServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&KVStoreWriteService_ServiceDesc, srv)
+}
+
+func _KVStoreWriteService_Put_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KVStoreWriteServiceServer).Put(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KVStoreWriteService_Put_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KVStoreWriteServiceServer).Put(ctx, req.(*PutRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KVStoreWriteService_PutStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(KVStoreWriteServiceServer).PutStream(&grpc.GenericServerStream[PutStreamRequest, PutStreamResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KVStoreWriteService_PutStreamServer = grpc.ClientStreamingServer[PutStreamRequest, PutStreamResponse]
+
+func _KVStoreWriteService_PutStreamChunksForKey_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(KVStoreWriteServiceServer).PutStreamChunksForKey(&grpc.GenericServerStream[PutStreamChunksForKeyRequest, PutStreamChunksForKeyResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KVStoreWriteService_PutStreamChunksForKeyServer = grpc.ClientStreamingServer[PutStreamChunksForKeyRequest, PutStreamChunksForKeyResponse]
+
+func _KVStoreWriteService_Delete_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KVStoreWriteServiceServer).Delete(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KVStoreWriteService_Delete_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KVStoreWriteServiceServer).Delete(ctx, req.(*DeleteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KVStoreWriteService_DeleteStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(KVStoreWriteServiceServer).DeleteStream(&grpc.GenericServerStream[DeleteStreamRequest, DeleteStreamResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KVStoreWriteService_DeleteStreamServer = grpc.ClientStreamingServer[DeleteStreamRequest, DeleteStreamResponse]
+
+// KVStoreWriteService_ServiceDesc is the grpc.ServiceDesc for KVStoreWriteService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var KVStoreWriteService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "kvalchemy.replicator.v1.KVStoreWriteService",
+	HandlerType: (*KVStoreWriteServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
 		{
-			StreamName:    "StreamPutKV",
-			Handler:       _WALReplicationService_StreamPutKV_Handler,
+			MethodName: "Put",
+			Handler:    _KVStoreWriteService_Put_Handler,
+		},
+		{
+			MethodName: "Delete",
+			Handler:    _KVStoreWriteService_Delete_Handler,
+		},
+	},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "PutStream",
+			Handler:       _KVStoreWriteService_PutStream_Handler,
 			ClientStreams: true,
 		},
 		{
-			StreamName:    "StreamDeleteKV",
-			Handler:       _WALReplicationService_StreamDeleteKV_Handler,
+			StreamName:    "PutStreamChunksForKey",
+			Handler:       _KVStoreWriteService_PutStreamChunksForKey_Handler,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "DeleteStream",
+			Handler:       _KVStoreWriteService_DeleteStream_Handler,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "kvalchemy/replicator/v1/service.proto",
+}
+
+const (
+	KVStoreReadService_Get_FullMethodName = "/kvalchemy.replicator.v1.KVStoreReadService/Get"
+)
+
+// KVStoreReadServiceClient is the client API for KVStoreReadService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type KVStoreReadServiceClient interface {
+	Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetResponse], error)
+}
+
+type kVStoreReadServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewKVStoreReadServiceClient(cc grpc.ClientConnInterface) KVStoreReadServiceClient {
+	return &kVStoreReadServiceClient{cc}
+}
+
+func (c *kVStoreReadServiceClient) Get(ctx context.Context, in *GetRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[GetResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &KVStoreReadService_ServiceDesc.Streams[0], KVStoreReadService_Get_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[GetRequest, GetResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KVStoreReadService_GetClient = grpc.ServerStreamingClient[GetResponse]
+
+// KVStoreReadServiceServer is the server API for KVStoreReadService service.
+// All implementations must embed UnimplementedKVStoreReadServiceServer
+// for forward compatibility.
+type KVStoreReadServiceServer interface {
+	Get(*GetRequest, grpc.ServerStreamingServer[GetResponse]) error
+	mustEmbedUnimplementedKVStoreReadServiceServer()
+}
+
+// UnimplementedKVStoreReadServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedKVStoreReadServiceServer struct{}
+
+func (UnimplementedKVStoreReadServiceServer) Get(*GetRequest, grpc.ServerStreamingServer[GetResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method Get not implemented")
+}
+func (UnimplementedKVStoreReadServiceServer) mustEmbedUnimplementedKVStoreReadServiceServer() {}
+func (UnimplementedKVStoreReadServiceServer) testEmbeddedByValue()                            {}
+
+// UnsafeKVStoreReadServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to KVStoreReadServiceServer will
+// result in compilation errors.
+type UnsafeKVStoreReadServiceServer interface {
+	mustEmbedUnimplementedKVStoreReadServiceServer()
+}
+
+func RegisterKVStoreReadServiceServer(s grpc.ServiceRegistrar, srv KVStoreReadServiceServer) {
+	// If the following call pancis, it indicates UnimplementedKVStoreReadServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&KVStoreReadService_ServiceDesc, srv)
+}
+
+func _KVStoreReadService_Get_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(GetRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(KVStoreReadServiceServer).Get(m, &grpc.GenericServerStream[GetRequest, GetResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KVStoreReadService_GetServer = grpc.ServerStreamingServer[GetResponse]
+
+// KVStoreReadService_ServiceDesc is the grpc.ServiceDesc for KVStoreReadService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var KVStoreReadService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "kvalchemy.replicator.v1.KVStoreReadService",
+	HandlerType: (*KVStoreReadServiceServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Get",
+			Handler:       _KVStoreReadService_Get_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "kvalchemy/replicator/v1/service.proto",
