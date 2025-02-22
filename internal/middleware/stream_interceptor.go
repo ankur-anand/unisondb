@@ -1,15 +1,17 @@
-package replicator
+package middleware
 
 import (
 	"context"
+	"errors"
+	"expvar"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/hashicorp/go-metrics"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -17,33 +19,13 @@ const (
 	reqIDKey = "request_id"
 )
 
-// maskClientPort removes the port from IP addresses.
-func maskClientPort(address string) string {
-	if idx := strings.LastIndex(address, ":"); idx != -1 {
-		return address[:idx] // Remove port
-	}
-	return address
-}
+var (
+	totalActiveStream = expvar.NewInt("total_active_stream")
+)
 
-// getClientIP extracts and masks the client IP (removes port).
-func getClientIP(ctx context.Context) string {
-	if p, ok := peer.FromContext(ctx); ok {
-		ip := p.Addr.String()
-		return maskClientPort(ip)
-	}
-	return "unknown"
-}
-
-func getNamespace(ctx context.Context) string {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return ""
-	}
-	if values := md.Get("x-namespace"); len(values) > 0 {
-		return values[0]
-	}
-	return ""
-}
+var (
+	ErrMissingNamespaceInMetadata = errors.New("missing required metadata: x-namespace")
+)
 
 // extractRequestID retrieves x-request-id or x-trace-id from gRPC metadata.
 // If not present, it generates a new one.
@@ -142,14 +124,25 @@ func TelemetryInterceptor(
 	startTime := time.Now()
 	clientIP := getClientIP(ss.Context())
 	requestID := extractRequestID(ss.Context())
-	ns := getNamespace(ss.Context())
+	ns := GetNamespace(ss.Context())
 	slog.Info("[GRPC] Streaming Request Started",
 		"method", info.FullMethod,
 		"client_ip", clientIP,
 		reqIDKey, requestID,
 		"namespace", ns,
 	)
-	metricsActiveStreams.WithLabelValues(ns, info.FullMethod).Inc()
+	totalActiveStream.Add(1)
+	defer totalActiveStream.Add(-1)
+	label := []metrics.Label{{
+		Name:  "method",
+		Value: info.FullMethod,
+	}, {
+		Name:  "namespace",
+		Value: ns,
+	},
+	}
+
+	metrics.SetGaugeWithLabels([]string{"grpc", "active", "server", "stream"}, float32(totalActiveStream.Value()), label)
 	// handler
 	err := handler(srv, ss)
 
@@ -158,9 +151,13 @@ func TelemetryInterceptor(
 
 	st, _ := status.FromError(err)
 	grpcStatus := st.Code().String()
-	// Record duration in Prometheus
-	rpcDurations.WithLabelValues(ns, info.FullMethod, grpcStatus).Observe(duration.Seconds())
-	metricsActiveStreams.WithLabelValues(ns, info.FullMethod).Dec()
+
+	labelDur := append(label, metrics.Label{
+		Name:  "grpc_status",
+		Value: grpcStatus,
+	})
+	metrics.MeasureSinceWithLabels([]string{"grpc", "request", "duration", "seconds"}, startTime, labelDur)
+
 	// Log completion.
 	if err != nil {
 		slog.Error("[GRPC] Streaming Request Failed",
@@ -191,7 +188,7 @@ func RequireNamespaceInterceptor(srv interface{}, ss grpc.ServerStream, info *gr
 
 	// Check if metadata exists
 	if !ok || len(md.Get("x-namespace")) == 0 {
-		return toGRPCError(ErrMissingNamespaceInMetadata)
+		return status.Error(codes.InvalidArgument, ErrMissingNamespaceInMetadata.Error())
 	}
 
 	namespace := md.Get("x-namespace")[0]
@@ -207,15 +204,4 @@ func MethodInterceptor(srv interface{}, ss grpc.ServerStream, info *grpc.StreamS
 	wrappedStream := &wrappedServerStream{ServerStream: ss, ctx: ctx}
 
 	return handler(srv, wrappedStream)
-}
-
-func getMethod(ctx context.Context) string {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return ""
-	}
-	if values := md.Get("x-method"); len(values) > 0 {
-		return values[0]
-	}
-	return ""
 }

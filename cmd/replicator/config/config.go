@@ -6,6 +6,7 @@ type Config struct {
 	Grpc        GrpcConfig    `toml:"grpc"`
 	Storage     StorageConfig `toml:"storage"`
 	PprofEnable bool          `toml:"pprof_enable"`
+	AllowWrite  bool          `toml:"allow_write"`
 }
 
 type GrpcConfig struct {

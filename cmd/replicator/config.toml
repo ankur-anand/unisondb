@@ -1,6 +1,7 @@
 ## Port of the http server
 http_port = 4000
 pprof_enable = true
+allow_write = true
 
 [grpc]
 port = 4001

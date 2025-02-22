@@ -132,6 +132,11 @@ func (b *Batch) Commit() error {
 	return b.engine.persistKeyValue(b.key, marshalChecksum(b.checksum), wrecord.LogOperationOpBatchCommit, b.batchID, b.lastPos)
 }
 
+// Checksum returns the current checksum as present in the batch.
+func (b *Batch) Checksum() uint32 {
+	return b.checksum
+}
+
 func marshalChecksum(checksum uint32) []byte {
 	buf := make([]byte, 4) // uint32 takes 4 bytes
 	binary.LittleEndian.PutUint32(buf, checksum)

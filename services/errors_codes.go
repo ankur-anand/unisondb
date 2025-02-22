@@ -1,8 +1,10 @@
-package replicator
+package services
 
 import (
 	"errors"
+	"log/slog"
 
+	"github.com/ankur-anand/kvalchemy/internal/middleware"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -13,11 +15,15 @@ var (
 	ErrInvalidMetadata            = errors.New("bad metadata in request")
 	ErrMissingNamespaceInMetadata = errors.New("missing required metadata: x-namespace")
 	ErrStreamTimeout              = errors.New("stream timeout: no records received within 60 seconds")
-	ErrStatusOk                   = status.Error(codes.OK, "")
+	ErrKeyNotFound                = status.Error(codes.NotFound, "key not found")
+	ErrPutChunkPrecondition       = errors.New("invalid sequence: StartMarker must be sent before sending chunks or calling CommitMarker")
+	ErrPutChunkCheckSumMismatch   = errors.New("invalid checksum: checksum mismatch")
+	ErrPutChunkAlreadyCommited    = errors.New("put chunk stream already commited")
 )
 
-// Convert business error to gRPC error.
-func toGRPCError(err error) error {
+// ToGRPCError Convert business error to gRPC error.
+// Custom types to avoid ordering issue while calling the function.
+func ToGRPCError(namespace string, reqID middleware.RequestID, method middleware.Method, err error) error {
 	switch {
 	case errors.Is(err, ErrMissingNamespace):
 		return status.Error(codes.InvalidArgument, ErrMissingNamespace.Error())
@@ -29,7 +35,17 @@ func toGRPCError(err error) error {
 		return status.Error(codes.InvalidArgument, ErrMissingNamespaceInMetadata.Error())
 	case errors.Is(err, ErrStreamTimeout):
 		return status.Error(codes.Unavailable, ErrStreamTimeout.Error())
+	case errors.Is(err, ErrPutChunkPrecondition):
+		return status.Error(codes.FailedPrecondition, ErrPutChunkPrecondition.Error())
+	case errors.Is(err, ErrPutChunkCheckSumMismatch):
+		return status.Error(codes.DataLoss, ErrPutChunkCheckSumMismatch.Error())
+	case errors.Is(err, ErrPutChunkAlreadyCommited):
+		return status.Error(codes.Aborted, ErrPutChunkAlreadyCommited.Error())
 	default:
+		slog.Error("[GRPC] service error", "error", err,
+			"method", method,
+			"request_id", reqID,
+			"namespace", namespace)
 		return status.Errorf(codes.Internal, "internal server error")
 	}
 }

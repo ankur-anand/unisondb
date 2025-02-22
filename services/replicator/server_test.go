@@ -10,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ankur-anand/kvalchemy/internal/middleware"
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
+	"github.com/ankur-anand/kvalchemy/services"
 	"github.com/ankur-anand/kvalchemy/storage"
 	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/brianvoe/gofakeit/v7"
@@ -82,7 +84,7 @@ func TestServer_Invalid_Request(t *testing.T) {
 
 	listener := bufconn.Listen(listenerBuffSize)
 	defer listener.Close()
-	gS := grpc.NewServer(grpc.ChainStreamInterceptor(RequireNamespaceInterceptor, RequestIDStreamInterceptor, CorrelationIDStreamInterceptor, TelemetryInterceptor))
+	gS := grpc.NewServer(grpc.ChainStreamInterceptor(middleware.RequireNamespaceInterceptor, middleware.RequestIDStreamInterceptor, middleware.CorrelationIDStreamInterceptor, middleware.TelemetryInterceptor))
 	defer gS.Stop()
 
 	go func() {
@@ -92,7 +94,6 @@ func TestServer_Invalid_Request(t *testing.T) {
 		}
 	}()
 
-	// conn, err := grpc.NewClient()
 	conn, err := grpc.NewClient("passthrough://bufnet", grpc.WithContextDialer(bufDialer(listener)),
 		grpc.WithTransportCredentials(insecure.NewCredentials()))
 
@@ -108,7 +109,7 @@ func TestServer_Invalid_Request(t *testing.T) {
 
 		statusErr := status.Convert(err)
 		assert.Equal(t, codes.InvalidArgument, statusErr.Code(), "expected error code InvalidArgument")
-		assert.Equal(t, ErrMissingNamespaceInMetadata.Error(), statusErr.Message(), "expected error message didn't match")
+		assert.Equal(t, services.ErrMissingNamespaceInMetadata.Error(), statusErr.Message(), "expected error message didn't match")
 	})
 
 	// Case 2: Namespace does not exist
@@ -122,7 +123,7 @@ func TestServer_Invalid_Request(t *testing.T) {
 
 		statusErr := status.Convert(err)
 		assert.Equal(t, codes.NotFound, statusErr.Code(), "expected error code NotFound")
-		assert.Equal(t, ErrNamespaceNotExists.Error(), statusErr.Message(), "expected error message didn't match")
+		assert.Equal(t, services.ErrNamespaceNotExists.Error(), statusErr.Message(), "expected error message didn't match")
 	})
 
 	// Case 3: Invalid Metadata
@@ -138,7 +139,7 @@ func TestServer_Invalid_Request(t *testing.T) {
 
 		statusErr := status.Convert(err)
 		assert.Equal(t, codes.InvalidArgument, statusErr.Code(), "expected error code InvalidArgument")
-		assert.Equal(t, ErrInvalidMetadata.Error(), statusErr.Message(), "expected error message didn't match")
+		assert.Equal(t, services.ErrInvalidMetadata.Error(), statusErr.Message(), "expected error message didn't match")
 	})
 
 }
@@ -201,7 +202,7 @@ func TestServer_StreamWAL(t *testing.T) {
 
 	listener := bufconn.Listen(listenerBuffSize)
 	defer listener.Close()
-	gS := grpc.NewServer(grpc.ChainStreamInterceptor(RequireNamespaceInterceptor, RequestIDStreamInterceptor, CorrelationIDStreamInterceptor, TelemetryInterceptor))
+	gS := grpc.NewServer(grpc.ChainStreamInterceptor(middleware.RequireNamespaceInterceptor, middleware.RequestIDStreamInterceptor, middleware.CorrelationIDStreamInterceptor, middleware.TelemetryInterceptor))
 	defer gS.Stop()
 
 	go func() {
@@ -255,13 +256,13 @@ func TestServer_StreamWAL(t *testing.T) {
 			if err != nil {
 				statusErr := status.Convert(err)
 				assert.Equal(t, codes.Unavailable, statusErr.Code(), "expected error code NotFound")
-				assert.Equal(t, statusErr.Message(), ErrStreamTimeout.Error(), "expected error message didn't match")
+				assert.Equal(t, statusErr.Message(), services.ErrStreamTimeout.Error(), "expected error message didn't match")
 				break
 			}
 			valuesCount = +len(val.WalRecords)
 			for _, record := range val.WalRecords {
 				lastRecvIndex++
-				wr := wrecord.GetRootAsWalRecord(record.CompressedData, 0)
+				wr := wrecord.GetRootAsWalRecord(record.Record, 0)
 				assert.NotNil(t, wr, "error converting to wal record")
 				assert.Equal(t, lastRecvIndex, wr.Index(), "last recv index does not match")
 			}
