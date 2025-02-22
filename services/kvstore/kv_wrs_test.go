@@ -151,6 +151,47 @@ func TestClient_PutKV_GetKV_DeleteKV(t *testing.T) {
 		assert.ErrorIs(t, err, kvstore.ErrValueSizeLimitExceeded, "failed to put kv")
 	})
 
+	t.Run("missing_mandatory_param_key", func(t *testing.T) {
+
+		_, err := client.GetKV(ctx, "random", "")
+		assert.ErrorIs(t, err, kvstore.ErrMissingParameters, "mandatory parameter key should fail")
+
+		err = client.PutKV(ctx, "random", "", nil)
+		assert.ErrorIs(t, err, kvstore.ErrMissingParameters, "mandatory parameter key should fail")
+
+		err = client.DeleteKV(ctx, "random", "")
+		assert.ErrorIs(t, err, kvstore.ErrMissingParameters, "mandatory parameter key should fail")
+
+		keyValue := make([][]byte, 0, 2)
+		for i := 0; i < 2; i++ {
+			value := gofakeit.Sentence(2)
+			keyValue = append(keyValue, []byte(value))
+		}
+
+		err = client.PutStreamChunksForKey(ctx, "random", "", keyValue)
+		assert.ErrorIs(t, err, kvstore.ErrMissingParameters, "mandatory parameter key should fail")
+	})
+
+	t.Run("missing_mandatory_param_namespace", func(t *testing.T) {
+
+		_, err := client.GetKV(ctx, "", "1")
+		assert.ErrorIs(t, err, kvstore.ErrMissingParameters, "mandatory parameter namespace should fail")
+
+		err = client.PutKV(ctx, "", "1", nil)
+		assert.ErrorIs(t, err, kvstore.ErrMissingParameters, "mandatory parameter namespace should fail")
+
+		err = client.DeleteKV(ctx, "", "1")
+		assert.ErrorIs(t, err, kvstore.ErrMissingParameters, "mandatory parameter namespace should fail")
+
+		keyValue := make([][]byte, 0, 2)
+		for i := 0; i < 2; i++ {
+			value := gofakeit.Sentence(2)
+			keyValue = append(keyValue, []byte(value))
+		}
+
+		err = client.PutStreamChunksForKey(ctx, "", "1", keyValue)
+		assert.ErrorIs(t, err, kvstore.ErrMissingParameters, "mandatory parameter namespcae should fail")
+	})
 }
 
 func TestClient_PutStreamChunksForKey(t *testing.T) {
@@ -220,22 +261,59 @@ func TestClient_PutStreamChunksForKey(t *testing.T) {
 	assert.NoError(t, err, "failed to create grpc client")
 	client := kvstore.NewClient(conn)
 
-	keyValue := make([][]byte, 0, 10)
-	assembledValue := make([]byte, 0)
-	checksum := uint32(0)
-	for i := 0; i < 10; i++ {
-		value := gofakeit.Sentence(2)
-		keyValue = append(keyValue, []byte(value))
-		assembledValue = append(assembledValue, value...)
-		checksum = crc32.Update(checksum, crc32.IEEETable, []byte(value))
-	}
+	t.Run("small_chunk", func(t *testing.T) {
+		keyValue := make([][]byte, 0, 10)
+		assembledValue := make([]byte, 0)
+		checksum := uint32(0)
+		for i := 0; i < 10; i++ {
+			value := gofakeit.Sentence(2)
+			keyValue = append(keyValue, []byte(value))
+			assembledValue = append(assembledValue, value...)
+			checksum = crc32.Update(checksum, crc32.IEEETable, []byte(value))
+		}
 
-	key := "chunk_random"
-	assert.NoError(t, client.PutStreamChunksForKey(ctx, nameSpaces[0], key, keyValue), "failed to put chunks")
+		key := "chunk_random"
+		assert.NoError(t, client.PutStreamChunksForKey(ctx, nameSpaces[0], key, keyValue), "failed to put chunks")
 
-	value, err := client.GetKV(ctx, nameSpaces[0], key)
-	assert.NoError(t, err)
-	assert.Equal(t, assembledValue, value, "value mismatch")
-	assert.Equal(t, checksum, splitter.ComputeChecksum(value), "checksum mismatch")
+		value, err := client.GetKV(ctx, nameSpaces[0], key)
+		assert.NoError(t, err)
+		assert.Equal(t, assembledValue, value, "value mismatch")
+		assert.Equal(t, checksum, splitter.ComputeChecksum(value), "checksum mismatch")
+	})
 
+	t.Run("large_chunk_1mb", func(t *testing.T) {
+		keyValue := make([][]byte, 0, 10)
+		assembledValue := make([]byte, 0)
+		checksum := uint32(0)
+		for i := 0; i < 10; i++ {
+			value := GenerateTestData(chunkSizeMB)
+			keyValue = append(keyValue, value)
+			assembledValue = append(assembledValue, value...)
+			checksum = crc32.Update(checksum, crc32.IEEETable, value)
+		}
+
+		key := "chunk_random_large"
+		assert.NoError(t, client.PutStreamChunksForKey(ctx, nameSpaces[0], key, keyValue), "failed to put chunks")
+
+		value, err := client.GetKV(ctx, nameSpaces[0], key)
+		assert.NoError(t, err)
+		assert.Equal(t, assembledValue, value, "value mismatch")
+		assert.Equal(t, checksum, splitter.ComputeChecksum(value), "checksum mismatch")
+	})
+
+	t.Run("large_chunk_exceed_cap", func(t *testing.T) {
+		keyValue := make([][]byte, 0, 10)
+		assembledValue := make([]byte, 0)
+		checksum := uint32(0)
+		for i := 0; i < 2; i++ {
+			value := GenerateTestData(2 * chunkSizeMB)
+			keyValue = append(keyValue, value)
+			assembledValue = append(assembledValue, value...)
+			checksum = crc32.Update(checksum, crc32.IEEETable, value)
+		}
+
+		key := "chunk_random_large"
+		assert.ErrorIs(t, client.PutStreamChunksForKey(ctx, nameSpaces[0], key, keyValue), kvstore.ErrValueSizeLimitExceeded, "failed to put chunks")
+
+	})
 }

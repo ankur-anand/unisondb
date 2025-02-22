@@ -22,6 +22,7 @@ const (
 var (
 	ErrValueSizeLimitExceeded = errors.New("value size limit exceeded 1 MB")
 	ErrKeyNotFound            = errors.New("key not found")
+	ErrMissingParameters      = errors.New("missing mandatory parameters [namespace|key]")
 )
 
 type Client struct {
@@ -44,7 +45,7 @@ func (c *Client) PutKV(ctx context.Context, namespace, key string, value []byte)
 		return ErrValueSizeLimitExceeded
 	}
 	if namespace == "" || key == "" {
-		return errors.New("namespace or key is empty")
+		return ErrMissingParameters
 	}
 
 	md := metadata.Pairs("x-namespace", namespace)
@@ -65,7 +66,7 @@ func (c *Client) PutKV(ctx context.Context, namespace, key string, value []byte)
 
 func (c *Client) DeleteKV(ctx context.Context, namespace, key string) error {
 	if namespace == "" || key == "" {
-		return errors.New("namespace or key is empty")
+		return ErrMissingParameters
 	}
 	md := metadata.Pairs("x-namespace", namespace)
 	ctx = metadata.NewOutgoingContext(ctx, md)
@@ -87,7 +88,7 @@ func (c *Client) PutStreamChunksForKey(ctx context.Context, namespace, key strin
 		return errors.New("chunks is empty")
 	}
 	if namespace == "" || key == "" {
-		return errors.New("namespace or key is empty")
+		return ErrMissingParameters
 	}
 
 	for _, chunk := range chunks {
@@ -143,7 +144,7 @@ func (c *Client) PutStreamChunksForKey(ctx context.Context, namespace, key strin
 
 func (c *Client) GetKV(ctx context.Context, namespace, key string) ([]byte, error) {
 	if namespace == "" || key == "" {
-		return nil, errors.New("namespace or key is empty")
+		return nil, ErrMissingParameters
 	}
 	md := metadata.Pairs("x-namespace", namespace)
 	ctx = metadata.NewOutgoingContext(ctx, md)
