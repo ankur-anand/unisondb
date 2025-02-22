@@ -90,6 +90,12 @@ func (c *Client) PutStreamChunksForKey(ctx context.Context, namespace, key strin
 		return errors.New("namespace or key is empty")
 	}
 
+	for _, chunk := range chunks {
+		if len(chunk) > capValueSize {
+			return ErrValueSizeLimitExceeded
+		}
+	}
+
 	md := metadata.Pairs("x-namespace", namespace)
 	ctx = metadata.NewOutgoingContext(ctx, md)
 	stream, err := c.writerClient.PutStreamChunksForKey(ctx)
