@@ -51,8 +51,10 @@ type walRecord struct {
 	value []byte
 	op    wrecord.LogOperation
 
-	batchID      []byte
-	lastBatchPos *wal.ChunkPosition
+	valueType    wrecord.ValueType
+	txnStatus    wrecord.TxnStatus
+	txnID        []byte
+	prevTxnChunk *wal.ChunkPosition
 }
 
 func (w *walRecord) fbEncode() ([]byte, error) {
@@ -78,12 +80,12 @@ func (w *walRecord) fbEncode() ([]byte, error) {
 	var batchOffset flatbuffers.UOffsetT
 	var lastBatchPosOffset flatbuffers.UOffsetT
 
-	if w.lastBatchPos != nil {
-		lastBatchPosOffset = builder.CreateByteVector(w.lastBatchPos.Encode())
+	if w.prevTxnChunk != nil {
+		lastBatchPosOffset = builder.CreateByteVector(w.prevTxnChunk.Encode())
 	}
 
-	if len(w.batchID) > 0 {
-		batchOffset = builder.CreateByteVector(w.batchID)
+	if len(w.txnID) > 0 {
+		batchOffset = builder.CreateByteVector(w.txnID)
 	} else {
 		batchOffset = builder.CreateByteVector([]byte{}) // Assign an empty vector
 	}
@@ -97,9 +99,11 @@ func (w *walRecord) fbEncode() ([]byte, error) {
 	wrecord.WalRecordAddOperation(builder, w.op)
 	wrecord.WalRecordAddKey(builder, keyOffset)
 	wrecord.WalRecordAddValue(builder, valueOffset)
-	wrecord.WalRecordAddBatchId(builder, batchOffset)
-	wrecord.WalRecordAddRecordChecksum(builder, checksum)
-	wrecord.WalRecordAddLastBatchPos(builder, lastBatchPosOffset)
+	wrecord.WalRecordAddTxnId(builder, batchOffset)
+	wrecord.WalRecordAddCrc32Checksum(builder, checksum)
+	wrecord.WalRecordAddPrevTxnWalIndex(builder, lastBatchPosOffset)
+	wrecord.WalRecordAddTxnStatus(builder, w.txnStatus)
+	wrecord.WalRecordAddValueType(builder, w.valueType)
 
 	walRecordOffset := wrecord.WalRecordEnd(builder)
 

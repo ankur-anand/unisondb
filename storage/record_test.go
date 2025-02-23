@@ -53,16 +53,16 @@ func TestUnmarshalMetadataHandlesInvalidData(t *testing.T) {
 
 func TestEncodeDecodeWalRecord(t *testing.T) {
 
-	BatchID, err := uuid.New().MarshalBinary()
+	txnID, err := uuid.New().MarshalBinary()
 	assert.NoError(t, err)
 
 	wr := walRecord{
-		index:   12,
-		hlc:     123456789,
-		key:     []byte("test_key"),
-		value:   []byte("test_value"),
-		op:      wrecord.LogOperationOpInsert,
-		batchID: BatchID,
+		index: 12,
+		hlc:   123456789,
+		key:   []byte("test_key"),
+		value: []byte("test_value"),
+		op:    wrecord.LogOperationInsert,
+		txnID: txnID,
 	}
 
 	encoded, err := wr.fbEncode()
@@ -74,10 +74,10 @@ func TestEncodeDecodeWalRecord(t *testing.T) {
 	// Validate that all fields are correctly restored
 	assert.Equal(t, uint64(12), record.Index(), "Wal Index mismatch")
 	assert.Equal(t, uint64(123456789), record.Hlc(), "WAL RecordProcessed mismatch")
-	assert.Equal(t, wrecord.LogOperationOpInsert, record.Operation(), "Operation mismatch")
+	assert.Equal(t, wrecord.LogOperationInsert, record.Operation(), "Operation mismatch")
 	assert.Equal(t, []byte("test_key"), record.KeyBytes(), "Key mismatch")
 	assert.Equal(t, []byte("test_value"), data, "Value mismatch")
-	assert.Equal(t, BatchID, record.BatchIdBytes(), "BatchID mismatch")
+	assert.Equal(t, txnID, record.TxnIdBytes(), "txnID mismatch")
 }
 
 func TestDecodeWalRecordHandlesInvalidData(t *testing.T) {
@@ -101,7 +101,7 @@ func TestWalRecordFbEncode(t *testing.T) {
 			hlc:   1,
 			key:   []byte("test-key"),
 			value: []byte("test-value"),
-			op:    wrecord.LogOperationOpInsert,
+			op:    wrecord.LogOperationInsert,
 		}
 
 		encoded, err := record.fbEncode()
@@ -111,11 +111,11 @@ func TestWalRecordFbEncode(t *testing.T) {
 
 	t.Run("empty_kv", func(t *testing.T) {
 		record := &walRecord{
-			hlc:     2,
-			key:     []byte{},
-			value:   []byte{},
-			op:      wrecord.LogOperationOpInsert,
-			batchID: []byte{},
+			hlc:   2,
+			key:   []byte{},
+			value: []byte{},
+			op:    wrecord.LogOperationInsert,
+			txnID: []byte{},
 		}
 
 		encoded, err := record.fbEncode()
@@ -127,12 +127,12 @@ func TestWalRecordFbEncode(t *testing.T) {
 		largeValue := gofakeit.LetterN(1024) // Generate a large value
 
 		record := &walRecord{
-			hlc:     3,
-			key:     []byte("large-key"),
-			value:   []byte(largeValue),
-			op:      wrecord.LogOperationOpInsert,
-			batchID: []byte("batch-456"),
-			lastBatchPos: &wal.ChunkPosition{
+			hlc:   3,
+			key:   []byte("large-key"),
+			value: []byte(largeValue),
+			op:    wrecord.LogOperationInsert,
+			txnID: []byte("batch-456"),
+			prevTxnChunk: &wal.ChunkPosition{
 				SegmentId:   2,
 				ChunkOffset: 100,
 			},
@@ -147,9 +147,9 @@ func TestWalRecordFbEncode(t *testing.T) {
 		calculatedChecksum := crc32.ChecksumIEEE(record.value)
 		wr := wrecord.GetRootAsWalRecord(encoded, 0)
 		assert.Equal(t, wr.ValueBytes(), compressed, "Value should be compressed")
-		assert.Equal(t, wr.BatchIdBytes(), []byte("batch-456"), "BatchId should be batch-456")
-		assert.Equal(t, wr.RecordChecksum(), calculatedChecksum, "Checksum should be calculated")
-		assert.Equal(t, wr.LastBatchPosBytes(), record.lastBatchPos.Encode(), "last batch post should match")
+		assert.Equal(t, wr.TxnIdBytes(), []byte("batch-456"), "BatchId should be batch-456")
+		assert.Equal(t, wr.Crc32Checksum(), calculatedChecksum, "Checksum should be calculated")
+		assert.Equal(t, wr.PrevTxnWalIndexBytes(), record.prevTxnChunk.Encode(), "last batch post should match")
 	})
 
 }

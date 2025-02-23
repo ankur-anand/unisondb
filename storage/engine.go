@@ -289,8 +289,8 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op wrecord.LogOperati
 		key:          key,
 		value:        value,
 		op:           op,
-		batchID:      batchID,
-		lastBatchPos: pos,
+		txnID:        batchID,
+		prevTxnChunk: pos,
 	}
 
 	encoded, err := record.fbEncode()
@@ -307,16 +307,10 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op wrecord.LogOperati
 
 	var memValue []byte
 
-	switch op {
-	case wrecord.LogOperationOpBatchCommit:
-		memValue = append(directValuePrefix, encoded...)
-
-	case wrecord.LogOperationOpInsert, wrecord.LogOperationOpDelete:
-		if int64(len(value)) <= e.storageConfig.ValueThreshold {
-			memValue = append(directValuePrefix, encoded...) // Store directly
-		} else {
-			memValue = append(walReferencePrefix, chunkPos.Encode()...) // Store reference
-		}
+	if int64(len(value)) <= e.storageConfig.ValueThreshold {
+		memValue = append(directValuePrefix, encoded...) // Store directly
+	} else {
+		memValue = append(walReferencePrefix, chunkPos.Encode()...) // Store reference
 	}
 
 	if len(memValue) > 0 {
@@ -400,7 +394,7 @@ func (e *Engine) Put(key, value []byte) error {
 		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "put", "latency", "msec"}, startTime, e.label)
 	}()
 
-	return e.persistKeyValue(key, value, wrecord.LogOperationOpInsert, nil, nil)
+	return e.persistKeyValue(key, value, wrecord.LogOperationInsert, nil, nil)
 }
 
 // Delete removes a key and its value pair from WAL and MemTable.
@@ -415,7 +409,7 @@ func (e *Engine) Delete(key []byte) error {
 		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "delete", "latency", "msec"}, startTime, e.label)
 	}()
 
-	return e.persistKeyValue(key, nil, wrecord.LogOperationOpDelete, nil, nil)
+	return e.persistKeyValue(key, nil, wrecord.LogOperationDelete, nil, nil)
 }
 
 // TotalOpsReceived return total number of Put and Del operation received.
@@ -453,9 +447,9 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 			return y.ValueStruct{}, ErrKeyNotFound
 		}
 		it := e.currentMemTable.get(key)
-		if it.Meta == byte(wrecord.LogOperationOpNoop) {
+		if it.Meta == byte(wrecord.LogOperationNoop) {
 			for i := len(e.sealedMemTables) - 1; i >= 0; i-- {
-				if val := e.sealedMemTables[i].get(key); val.Meta != byte(wrecord.LogOperationOpNoop) {
+				if val := e.sealedMemTables[i].get(key); val.Meta != byte(wrecord.LogOperationNoop) {
 					return val, nil
 				}
 			}
@@ -470,13 +464,14 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 
 	// if the mem table doesn't have this key associated action or log.
 	// directly go to the boltdb to fetch the same.
-	if it.Meta == byte(wrecord.LogOperationOpNoop) {
+	if it.Meta == byte(wrecord.LogOperationNoop) {
 		return e.bTreeStore.Get(key)
 	}
 
 	// key deleted
-	if it.Meta == byte(wrecord.LogOperationOpDelete) {
-		return nil, ErrKeyNotFound
+	if it.Meta == byte(wrecord.LogOperationDelete) {
+		return nil,
+			ErrKeyNotFound
 	}
 
 	record, err := getWalRecord(it, e.walIO)
@@ -484,7 +479,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	if record.Operation() == wrecord.LogOperationOpBatchCommit {
+	if record.ValueType() == wrecord.ValueTypeChunked {
 		return e.reconstructBatchValue(key, record)
 	}
 
@@ -494,7 +489,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("failed to decompress value for key %s: %w", string(key), err)
 	}
 
-	if crc32.ChecksumIEEE(decompressed) != record.RecordChecksum() {
+	if crc32.ChecksumIEEE(decompressed) != record.Crc32Checksum() {
 		return nil, ErrRecordCorrupted
 	}
 
@@ -502,7 +497,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 }
 
 func (e *Engine) reconstructBatchValue(key []byte, record *wrecord.WalRecord) ([]byte, error) {
-	lastPos := record.LastBatchPosBytes()
+	lastPos := record.PrevTxnWalIndexBytes()
 	if len(lastPos) == 0 {
 		return nil, ErrRecordCorrupted
 	}
@@ -518,7 +513,7 @@ func (e *Engine) reconstructBatchValue(key []byte, record *wrecord.WalRecord) ([
 	}
 	checksum := unmarshalChecksum(sum)
 
-	data, err := readChunksFromWal(e.walIO, pos, record.BatchIdBytes(), checksum)
+	data, err := readChunksFromWal(e.walIO, pos, record.TxnIdBytes(), checksum)
 	if err != nil {
 		return nil, err
 	}

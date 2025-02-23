@@ -1,26 +1,39 @@
 // FlatBuffer schema for Write-Ahead Log (WAL) records with chunked support and checksums
 namespace storage.wrecord;
 
+enum TxnStatus: ubyte {
+  TxnNone = 0,
+  Begin = 1,
+  Prepare = 2,
+  Commit = 3,
+}
+
 enum LogOperation : ubyte {
-  OpNoop = 0,
-  OpInsert = 1,
-  OpDelete = 2,
-  OpBatchStart = 3,
-  OPBatchInsert = 4,
-  OpBatchCommit = 5,
+  Noop = 0,
+  Insert = 1,
+  Delete = 2,
+  TxnMarker = 3,
+}
+
+enum ValueType : ubyte {
+  Full = 0,      // Not a chunked value
+  Chunked = 1,
 }
 
 table WalRecord {
   index: uint64;
   hlc: uint64;
+  crc32_checksum: uint32;
+
   operation: LogOperation;
+  txn_status: TxnStatus;
+  value_type: ValueType;
+
+  txn_id: [ubyte];
+  prev_txn_wal_index: [ubyte]; // index of the previous entry in the same transaction
 
   key: [ubyte] (required);
   value: [ubyte];
-  record_checksum: uint32;
-
-  batch_id: [ubyte];
-  last_batch_pos: [ubyte]; // If batched, position of the batch in WAL
 }
 
 root_type WalRecord;

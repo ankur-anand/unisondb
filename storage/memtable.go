@@ -172,7 +172,7 @@ func (table *memTable) flush() (int, error) {
 		key := y.ParseKey(it.Key())
 		entry := it.Value()
 
-		if entry.Meta == byte(wrecord.LogOperationOpDelete) {
+		if entry.Meta == byte(wrecord.LogOperationDelete) {
 			deleteKeys = append(deleteKeys, key)
 			continue
 		}
@@ -182,8 +182,8 @@ func (table *memTable) flush() (int, error) {
 			return 0, err
 		}
 
-		if record.Operation() == wrecord.LogOperationOpBatchCommit {
-			n, err := table.flushBatchCommit(record)
+		if record.ValueType() == wrecord.ValueTypeChunked {
+			n, err := table.flushChunkedTxnCommit(record)
 			if err != nil {
 				return 0, err
 			}
@@ -243,8 +243,8 @@ func getWalRecord(entry y.ValueStruct, wIO *walIO) (*wrecord.WalRecord, error) {
 	return wrecord.GetRootAsWalRecord(walValue, 0), nil
 }
 
-// flushBatchCommit returns the number of batch record that was inserted.
-func (table *memTable) flushBatchCommit(record *wrecord.WalRecord) (int, error) {
+// flushChunkedTxnCommit returns the number of batch record that was inserted.
+func (table *memTable) flushChunkedTxnCommit(record *wrecord.WalRecord) (int, error) {
 	data, checksum, err := table.readCompleteBatch(record)
 	if err != nil {
 		return 0, fmt.Errorf("failed to reconstruct batch value: %w", err)
@@ -254,7 +254,7 @@ func (table *memTable) flushBatchCommit(record *wrecord.WalRecord) (int, error) 
 }
 
 func (table *memTable) readCompleteBatch(record *wrecord.WalRecord) ([][]byte, uint32, error) {
-	lastPos := record.LastBatchPosBytes()
+	lastPos := record.PrevTxnWalIndexBytes()
 	if len(lastPos) == 0 {
 		return nil, 0, ErrRecordCorrupted
 	}
@@ -275,7 +275,6 @@ func (table *memTable) readCompleteBatch(record *wrecord.WalRecord) ([][]byte, u
 	if err != nil {
 		return nil, 0, err
 	}
-
 	return data, checksum, nil
 }
 
@@ -298,11 +297,11 @@ func readChunks(wIO *walIO, startPos *wal.ChunkPosition) ([][]byte, error) {
 		wr := wrecord.GetRootAsWalRecord(record, 0)
 		value := wr.ValueBytes()
 
-		if wr.Operation() == wrecord.LogOperationOPBatchInsert {
+		if wr.Operation() == wrecord.LogOperationInsert {
 			values = append(values, value)
 		}
 
-		next := wr.LastBatchPosBytes()
+		next := wr.PrevTxnWalIndexBytes()
 		// We hit the last record.
 		if next == nil {
 			break

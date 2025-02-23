@@ -209,7 +209,7 @@ func TestArenaReplacementAndFlush(t *testing.T) {
 	batchKey := []byte(gofakeit.FirstName())
 
 	// open a batch writer:
-	batch, err := engine.NewBatch(batchKey)
+	batch, err := engine.NewTxn(wrecord.LogOperationInsert, wrecord.ValueTypeChunked)
 	assert.NoError(t, err, "NewBatch operation should succeed")
 	assert.NotNil(t, batch, "NewBatch operation should succeed")
 
@@ -222,7 +222,7 @@ func TestArenaReplacementAndFlush(t *testing.T) {
 		batchValues = append(batchValues, value)
 		fullValue.Write([]byte(batchValues[i]))
 		checksum = crc32.Update(checksum, crc32.IEEETable, []byte(value))
-		err := batch.Put([]byte(value))
+		err := batch.AppendTxnEntry(batchKey, []byte(value))
 		assert.NoError(t, err, "NewBatch operation should succeed")
 
 	}
@@ -332,7 +332,7 @@ func TestArenaReplacement_Uncommited_batch(t *testing.T) {
 	batchKey := []byte(gofakeit.FirstName())
 
 	// open a batch writer:
-	batch, err := engine.NewBatch(batchKey)
+	batch, err := engine.NewTxn(wrecord.LogOperationInsert, wrecord.ValueTypeChunked)
 	assert.NoError(t, err, "NewBatch operation should succeed")
 	assert.NotNil(t, batch, "NewBatch operation should succeed")
 
@@ -345,7 +345,7 @@ func TestArenaReplacement_Uncommited_batch(t *testing.T) {
 		batchValues = append(batchValues, value)
 		fullValue.Write([]byte(batchValues[i]))
 		checksum = crc32.Update(checksum, crc32.IEEETable, []byte(value))
-		err := batch.Put([]byte(value))
+		err := batch.AppendTxnEntry(batchKey, []byte(value))
 		assert.NoError(t, err, "NewBatch operation should succeed")
 
 	}
