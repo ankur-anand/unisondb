@@ -59,15 +59,16 @@ func TestWALChunkRead(t *testing.T) {
 	id := []byte(gofakeit.UUID())
 	key := []byte(gofakeit.Name())
 
-	// insert a batch start marker.
-	// start the batch marker in wal
+	// insert a txn start marker.
 	record := walRecord{
 		hlc:          1,
 		key:          key,
 		value:        nil,
-		op:           wrecord.LogOperationOpBatchStart,
-		batchID:      id,
-		lastBatchPos: nil,
+		op:           wrecord.LogOperationTxnMarker,
+		valueType:    wrecord.ValueTypeChunked,
+		txnStatus:    wrecord.TxnStatusBegin,
+		txnID:        id,
+		prevTxnChunk: nil,
 	}
 
 	encoded, err := record.fbEncode()
@@ -88,9 +89,11 @@ func TestWALChunkRead(t *testing.T) {
 			hlc:          uint64(i),
 			key:          key,
 			value:        chunk,
-			op:           wrecord.LogOperationOPBatchInsert,
-			batchID:      id,
-			lastBatchPos: chunkPos,
+			op:           wrecord.LogOperationTxnMarker,
+			valueType:    wrecord.ValueTypeChunked,
+			txnStatus:    wrecord.TxnStatusPrepare,
+			txnID:        id,
+			prevTxnChunk: chunkPos,
 		}
 		encoded, err := record.fbEncode()
 		assert.NoError(t, err)
@@ -104,9 +107,11 @@ func TestWALChunkRead(t *testing.T) {
 		hlc:          10,
 		key:          key,
 		value:        marshalChecksum(checksum),
-		op:           wrecord.LogOperationOpBatchCommit,
-		batchID:      id,
-		lastBatchPos: chunkPos,
+		op:           wrecord.LogOperationTxnMarker,
+		valueType:    wrecord.ValueTypeChunked,
+		txnStatus:    wrecord.TxnStatusCommit,
+		txnID:        id,
+		prevTxnChunk: chunkPos,
 	}
 	encoded, err = record.fbEncode()
 	assert.NoError(t, err)

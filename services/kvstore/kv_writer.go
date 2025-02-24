@@ -10,6 +10,7 @@ import (
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
 	"github.com/ankur-anand/kvalchemy/services"
 	"github.com/ankur-anand/kvalchemy/storage"
+	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"google.golang.org/grpc"
 )
 
@@ -88,9 +89,9 @@ func (k *KVWriterService) PutStreamChunksForKey(g grpc.ClientStreamingServer[v1.
 		return services.ToGRPCError(namespace, reqID, method, services.ErrNamespaceNotExists)
 	}
 
-	var batch *storage.Batch
+	var txn *storage.Txn
 	var committed bool
-
+	var key []byte
 	for {
 		select {
 		case <-ctx.Done():
@@ -110,11 +111,12 @@ func (k *KVWriterService) PutStreamChunksForKey(g grpc.ClientStreamingServer[v1.
 
 			switch req := msg.GetRequestType().(type) {
 			case *v1.PutStreamChunksForKeyRequest_StartMarker:
-				batch, err = k.handleStartMarker(engine, g, req)
+				key = req.StartMarker.GetKey()
+				txn, err = k.handleStartMarker(engine, g, req)
 			case *v1.PutStreamChunksForKeyRequest_Chunk:
-				err = k.handleChunk(batch, req)
+				err = k.handleChunk(txn, key, req)
 			case *v1.PutStreamChunksForKeyRequest_CommitMarker:
-				err = k.handleCommitMarker(batch, req)
+				err = k.handleCommitMarker(txn, req)
 				committed = err == nil
 			}
 
@@ -127,10 +129,8 @@ func (k *KVWriterService) PutStreamChunksForKey(g grpc.ClientStreamingServer[v1.
 
 func (k *KVWriterService) handleStartMarker(engine *storage.Engine,
 	g grpc.ClientStreamingServer[v1.PutStreamChunksForKeyRequest, v1.PutStreamChunksForKeyResponse],
-	req *v1.PutStreamChunksForKeyRequest_StartMarker) (*storage.Batch, error) {
-	key := req.StartMarker.GetKey()
-
-	batch, err := engine.NewBatch(key)
+	req *v1.PutStreamChunksForKeyRequest_StartMarker) (*storage.Txn, error) {
+	batch, err := engine.NewTxn(wrecord.LogOperationInsert, wrecord.ValueTypeChunked)
 	if err != nil {
 		return nil, err
 	}
@@ -142,27 +142,27 @@ func (k *KVWriterService) handleStartMarker(engine *storage.Engine,
 	return batch, nil
 }
 
-func (k *KVWriterService) handleChunk(batch *storage.Batch, req *v1.PutStreamChunksForKeyRequest_Chunk) error {
-	if batch == nil {
+func (k *KVWriterService) handleChunk(txn *storage.Txn, key []byte, req *v1.PutStreamChunksForKeyRequest_Chunk) error {
+	if txn == nil {
 		return services.ErrPutChunkPrecondition
 	}
 
 	value := req.Chunk.GetValue()
-	return batch.Put(value)
+	return txn.AppendTxnEntry(key, value)
 }
 
-func (k *KVWriterService) handleCommitMarker(batch *storage.Batch,
+func (k *KVWriterService) handleCommitMarker(txn *storage.Txn,
 	req *v1.PutStreamChunksForKeyRequest_CommitMarker) error {
-	if batch == nil {
+	if txn == nil {
 		return services.ErrPutChunkPrecondition
 	}
 
 	checksum := req.CommitMarker.GetFinalCrc32Checksum()
-	if batch.Checksum() != checksum {
+	if txn.Checksum() != checksum {
 		return services.ErrPutChunkCheckSumMismatch
 	}
 
-	return batch.Commit()
+	return txn.Commit()
 }
 
 func (k *KVWriterService) Delete(ctx context.Context, request *v1.DeleteRequest) (*v1.DeleteResponse, error) {

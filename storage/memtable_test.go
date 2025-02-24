@@ -119,7 +119,7 @@ func TestFlush_Success(t *testing.T) {
 			hlc:   uint64(i),
 			key:   key,
 			value: value,
-			op:    wrecord.LogOperationOpInsert,
+			op:    wrecord.LogOperationInsert,
 		}
 
 		encodedRecord, err := record.fbEncode()
@@ -129,7 +129,7 @@ func TestFlush_Success(t *testing.T) {
 
 		// Store WAL ChunkPosition in MemTable
 		mmTable.skipList.Put(y.KeyWithTs(key, 0), y.ValueStruct{
-			Meta:  byte(wrecord.LogOperationOpInsert),
+			Meta:  byte(wrecord.LogOperationInsert),
 			Value: append([]byte{0}, walPos.Encode()...), // Storing WAL position
 		})
 	}
@@ -168,7 +168,7 @@ func TestFlush_Deletes(t *testing.T) {
 	record := walRecord{
 		hlc: uint64(1),
 		key: key,
-		op:  wrecord.LogOperationOpDelete,
+		op:  wrecord.LogOperationDelete,
 	}
 
 	data, err := record.fbEncode()
@@ -179,7 +179,7 @@ func TestFlush_Deletes(t *testing.T) {
 
 	// Store WAL ChunkPosition in MemTable
 	err = mmTable.put(key, y.ValueStruct{
-		Meta:  byte(wrecord.LogOperationOpDelete),
+		Meta:  byte(wrecord.LogOperationDelete),
 		Value: append([]byte{0}, walPos.Encode()...), // Storing WAL position
 	}, walPos)
 
@@ -202,7 +202,7 @@ func TestFlush_WALLookup(t *testing.T) {
 		hlc:   1,
 		key:   key,
 		value: value,
-		op:    wrecord.LogOperationOpInsert,
+		op:    wrecord.LogOperationInsert,
 	}
 	data, err := record.fbEncode()
 	assert.NoError(t, err)
@@ -246,7 +246,7 @@ func TestProcessFlushQueue_WithTimer(t *testing.T) {
 		hlc:   1,
 		key:   key,
 		value: value,
-		op:    wrecord.LogOperationOpInsert,
+		op:    wrecord.LogOperationInsert,
 	}
 
 	data, err := record.fbEncode()
@@ -306,7 +306,7 @@ func TestProcessHandleFlush(t *testing.T) {
 		hlc:   1,
 		key:   key,
 		value: value,
-		op:    wrecord.LogOperationOpInsert,
+		op:    wrecord.LogOperationInsert,
 	}
 
 	data, err := record.fbEncode()
@@ -394,13 +394,13 @@ func TestChunkFlush_Persistent(t *testing.T) {
 	}
 
 	// open a batch writer:
-	batch, err := engine.NewBatch(batchKey)
+	batch, err := engine.NewTxn(wrecord.LogOperationInsert, wrecord.ValueTypeChunked)
 	assert.NoError(t, err, "NewBatch operation should succeed")
 	assert.NotNil(t, batch, "NewBatch operation should succeed")
 
 	var checksum uint32
 	for _, batchValue := range batchValues {
-		err := batch.Put([]byte(batchValue))
+		err := batch.AppendTxnEntry(batchKey, []byte(batchValue))
 		checksum = crc32.Update(checksum, crc32.IEEETable, []byte(batchValue))
 		assert.NoError(t, err, "NewBatch operation should succeed")
 	}

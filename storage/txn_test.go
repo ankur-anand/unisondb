@@ -6,13 +6,14 @@ import (
 	"testing"
 
 	"github.com/ankur-anand/kvalchemy/storage"
+	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestBatch_PutGet(t *testing.T) {
+func TestTxn_Chunked_Commit(t *testing.T) {
 	baseDir := t.TempDir()
-	namespace := "test__batch_put_get"
+	namespace := "test__txn_put_get"
 
 	engine, err := storage.NewStorageEngine(baseDir, namespace, nil)
 	assert.NoError(t, err)
@@ -45,14 +46,14 @@ func TestBatch_PutGet(t *testing.T) {
 		fullValue.Write([]byte(batchValues[i]))
 	}
 
-	// open a batch writer:
-	batch, err := engine.NewBatch(batchKey)
+	// open a txn writer:
+	txn, err := engine.NewTxn(wrecord.LogOperationInsert, wrecord.ValueTypeChunked)
 	assert.NoError(t, err, "NewBatch operation should succeed")
-	assert.NotNil(t, batch, "NewBatch operation should succeed")
+	assert.NotNil(t, txn, "NewBatch operation should succeed")
 
 	var checksum uint32
 	for _, batchValue := range batchValues {
-		err := batch.Put([]byte(batchValue))
+		err := txn.AppendTxnEntry(batchKey, []byte(batchValue))
 		checksum = crc32.Update(checksum, crc32.IEEETable, []byte(batchValue))
 		assert.NoError(t, err, "NewBatch operation should succeed")
 	}
@@ -63,11 +64,10 @@ func TestBatch_PutGet(t *testing.T) {
 	assert.ErrorIs(t, err, storage.ErrKeyNotFound, "Key not Found Error should be present.")
 	assert.Nil(t, got, "Get operation should succeed")
 
-	err = batch.Commit()
+	err = txn.Commit()
 	assert.NoError(t, err, "Commit operation should succeed")
 
 	// get value without commit
-	// write should not be visible for now.
 	got, err = engine.Get(batchKey)
 	assert.NoError(t, err, "Get operation should succeed")
 	assert.NotNil(t, got, "Get operation should succeed")

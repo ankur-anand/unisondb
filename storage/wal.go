@@ -81,8 +81,16 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 
 		record := wrecord.GetRootAsWalRecord(data, 0)
 
+		// if wal record TxnStatus is Commited.
+		// check if valueType is full.
+		// follow all the txn link and send it to the mem table.
+		// TxnStatus is Commited Chunked Value Type.
+		// Just Send the Commited entry.
+
 		// Store in MemTable
-		if isMemTableOperation(record.Operation()) {
+		// if wal record TxnStatus is TxnNone || (wal record TxnStatus is Commited && valueType is Chunked).
+		// send it to WAL.
+		if isMemTableOperation(record) {
 			var memValue []byte
 			if int64(len(data)) <= e.storageConfig.ValueThreshold {
 				memValue = append([]byte{1}, data...) // Directly store small values
@@ -105,12 +113,10 @@ func (e *Engine) recoverWAL(metadata Metadata, namespace string) error {
 	return nil
 }
 
-func isMemTableOperation(op wrecord.LogOperation) bool {
-	switch op {
-	case wrecord.LogOperationOpInsert, wrecord.LogOperationOpDelete, wrecord.LogOperationOpBatchCommit:
-		return true
-	}
-	return false
+// isMemTableOperation check if this entry should be put directly into wal.
+func isMemTableOperation(record *wrecord.WalRecord) bool {
+	return (record.TxnStatus() == wrecord.TxnStatusCommit && record.ValueType() == wrecord.ValueTypeChunked) ||
+		record.TxnStatus() == wrecord.TxnStatusTxnNone
 }
 
 // readChunksFromWal from Wal reads the chunks value from the wIO entries and return all the chunks value.
@@ -131,10 +137,10 @@ func readChunksFromWal(w *walIO, startPos *wal.ChunkPosition, startID []byte, co
 		}
 		wr := wrecord.GetRootAsWalRecord(record, 0)
 		value := wr.ValueBytes()
-		id := wr.BatchIdBytes()
-		checksum := wr.RecordChecksum()
+		id := wr.TxnIdBytes()
+		checksum := wr.Crc32Checksum()
 
-		if wr.Operation() != wrecord.LogOperationOPBatchInsert && wr.Operation() != wrecord.LogOperationOpBatchStart {
+		if wr.TxnStatus() != wrecord.TxnStatusPrepare && wr.Operation() != wrecord.LogOperationTxnMarker {
 			return nil, fmt.Errorf("unexpected WAL operation %d at position %+v: %w", wr.Operation(), nextPos, ErrRecordCorrupted)
 		}
 
@@ -142,7 +148,7 @@ func readChunksFromWal(w *walIO, startPos *wal.ChunkPosition, startID []byte, co
 			return nil, fmt.Errorf("mismatched batch ID at position %+v: expected %x, got %x: %w", nextPos, startID, id, ErrRecordCorrupted)
 		}
 
-		if wr.Operation() == wrecord.LogOperationOPBatchInsert {
+		if wr.TxnStatus() == wrecord.TxnStatusPrepare {
 			decompressed, err := DecompressLZ4(value)
 			if err != nil {
 				return nil, fmt.Errorf("failed to decompress WAL value at position %+v: %w", nextPos, ErrRecordCorrupted)
@@ -158,7 +164,7 @@ func readChunksFromWal(w *walIO, startPos *wal.ChunkPosition, startID []byte, co
 			decompressValues = append(decompressValues, decompressed)
 		}
 
-		next := wr.LastBatchPosBytes()
+		next := wr.PrevTxnWalIndexBytes()
 		// We hit the last record.
 		if next == nil {
 			break

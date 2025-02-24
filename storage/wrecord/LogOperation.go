@@ -7,30 +7,24 @@ import "strconv"
 type LogOperation byte
 
 const (
-	LogOperationOpNoop        LogOperation = 0
-	LogOperationOpInsert      LogOperation = 1
-	LogOperationOpDelete      LogOperation = 2
-	LogOperationOpBatchStart  LogOperation = 3
-	LogOperationOPBatchInsert LogOperation = 4
-	LogOperationOpBatchCommit LogOperation = 5
+	LogOperationNoop      LogOperation = 0
+	LogOperationInsert    LogOperation = 1
+	LogOperationDelete    LogOperation = 2
+	LogOperationTxnMarker LogOperation = 3
 )
 
 var EnumNamesLogOperation = map[LogOperation]string{
-	LogOperationOpNoop:        "OpNoop",
-	LogOperationOpInsert:      "OpInsert",
-	LogOperationOpDelete:      "OpDelete",
-	LogOperationOpBatchStart:  "OpBatchStart",
-	LogOperationOPBatchInsert: "OPBatchInsert",
-	LogOperationOpBatchCommit: "OpBatchCommit",
+	LogOperationNoop:      "Noop",
+	LogOperationInsert:    "Insert",
+	LogOperationDelete:    "Delete",
+	LogOperationTxnMarker: "TxnMarker",
 }
 
 var EnumValuesLogOperation = map[string]LogOperation{
-	"OpNoop":        LogOperationOpNoop,
-	"OpInsert":      LogOperationOpInsert,
-	"OpDelete":      LogOperationOpDelete,
-	"OpBatchStart":  LogOperationOpBatchStart,
-	"OPBatchInsert": LogOperationOPBatchInsert,
-	"OpBatchCommit": LogOperationOpBatchCommit,
+	"Noop":      LogOperationNoop,
+	"Insert":    LogOperationInsert,
+	"Delete":    LogOperationDelete,
+	"TxnMarker": LogOperationTxnMarker,
 }
 
 func (v LogOperation) String() string {
