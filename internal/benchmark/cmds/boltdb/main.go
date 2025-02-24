@@ -106,8 +106,24 @@ func batchInsertRandom(db *bbolt.DB, n int, batchSize int) time.Duration {
 	return time.Since(start)
 }
 
+func getKeyCount(db *bbolt.DB) int {
+	var keyCount int
+	err := db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket(bucket)
+		if b == nil {
+			return fmt.Errorf("bucket not found")
+		}
+		keyCount = b.Stats().KeyN
+		return nil
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	return keyCount
+}
+
 func main() {
-	sizes := []int{10000, 50000, 100000, 500000}
+	sizes := []int{10000, 50000, 100000}
 	pageSizes := []int{4096}
 
 	file, err := os.Create("benchmark_results.csv")
@@ -118,7 +134,7 @@ func main() {
 
 	writer := csv.NewWriter(file)
 	defer writer.Flush()
-	writer.Write([]string{"Size", "Page Size", "random", "sorted", "batch_sorted", "batch_random"})
+	writer.Write([]string{"Size", "Page Size", "Key Count", "random", "sorted", "batch_sorted", "batch_random"})
 
 	for _, pageSize := range pageSizes {
 		for _, size := range sizes {
@@ -132,10 +148,10 @@ func main() {
 			sortedTime := sortedInsert(db, size).Seconds()
 			batchSortedTime := batchInsertSorted(db, size, 50).Seconds()
 			batchRandomTime := batchInsertRandom(db, size, 50).Seconds()
-
+			keyCount := getKeyCount(db)
 			db.Close()
 
-			fmt.Printf("Size: %d, Page Size: %d\n", size, pageSize)
+			fmt.Printf("Size: %d, Page Size: %d, Key Count: %d\n", size, pageSize, keyCount)
 			fmt.Printf("Random Insert: %.4f sec\n", randomTime)
 			fmt.Printf("Sorted Insert: %.4f sec\n", sortedTime)
 			fmt.Printf("Batch Insert Sorted: %.4f sec\n", batchSortedTime)
@@ -144,6 +160,7 @@ func main() {
 			writer.Write([]string{
 				fmt.Sprintf("%d", size),
 				fmt.Sprintf("%d", pageSize),
+				fmt.Sprintf("%d", keyCount),
 				fmt.Sprintf("%.4f", randomTime),
 				fmt.Sprintf("%.4f", sortedTime),
 				fmt.Sprintf("%.4f", batchSortedTime),
