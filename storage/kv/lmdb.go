@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -71,7 +71,7 @@ func NewLmdb(conf Config) (*LmdbEmbed, error) {
 		return nil, fmt.Errorf("failed to check for stale readers: %w", err)
 	}
 	if staleReaders > 0 {
-		log.Printf("Cleared %d reader slots from dead processes", staleReaders)
+		slog.Warn("Cleared reader slots from dead processes", "stale_readers", staleReaders)
 	}
 
 	var db lmdb.DBI

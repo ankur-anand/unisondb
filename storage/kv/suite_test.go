@@ -49,74 +49,79 @@ type bTreeStore interface {
 	Close() error
 }
 
-// TestSuite defines all the test cases that is common in both the lmdb and boltdb.
-type TestSuite struct {
-	t             *testing.T
+// testSuite defines all the test cases that is common in both the lmdb and boltdb.
+type testSuite struct {
 	dbConstructor func(config kv.Config) (bTreeStore, error)
 	store         bTreeStore
 }
 
-func RunTestSuite(t *testing.T, name string, factory *TestSuite) {
-	t.Run(name, func(t *testing.T) {
-		t.Run("get_set", func(t *testing.T) {
-			factory.TestSetAndGet()
-		})
-
-		t.Run("set_get_delete", func(t *testing.T) {
-			factory.TestSetGetAndDelete()
-		})
-
-		t.Run("many_set_get_and_delete_many", func(t *testing.T) {
-			factory.TestManySetGetAndDeleteMany()
-		})
-
-		t.Run("chunk_set_get_and_delete", func(t *testing.T) {
-			factory.TestChunkSetAndDelete()
-		})
-
-		t.Run("snapshot_and_retrieve", func(t *testing.T) {
-			factory.TestSnapshotAndRetrieve()
-		})
-
-		t.Run("empty_value_set", func(t *testing.T) {
-			factory.TestEmptyValueSet()
-		})
-
-		t.Run("non_existent_value_delete", func(t *testing.T) {
-			factory.TestNonExistentDelete()
-		})
-
-		t.Run("store_and_retrieve_metadata", func(t *testing.T) {
-			factory.TestStoreMetadataAndRetrieveMetadata()
-		})
-	})
+type suite struct {
+	name    string
+	runFunc func(*testing.T)
 }
 
-func (s *TestSuite) TestSetAndGet() {
+func getTestSuites(factory *testSuite) []suite {
+	return []suite{
+		{
+			name:    "get_set",
+			runFunc: factory.TestSetAndGet,
+		},
+		{
+			name:    "set_get_delete",
+			runFunc: factory.TestSetAndGet,
+		},
+		{
+			name:    "many_set_get_and_delete_many",
+			runFunc: factory.TestManySetGetAndDeleteMany,
+		},
+		{
+			name:    "chunk_set_get_and_delete",
+			runFunc: factory.TestChunkSetAndDelete,
+		},
+		{
+			name:    "snapshot_and_retrieve",
+			runFunc: factory.TestSnapshotAndRetrieve,
+		},
+		{
+			name:    "empty_value_set",
+			runFunc: factory.TestEmptyValueSet,
+		},
+		{
+			name:    "non_existent_value_delete",
+			runFunc: factory.TestNonExistentDelete,
+		},
+		{
+			name:    "store_and_retrieve_metadata",
+			runFunc: factory.TestStoreMetadataAndRetrieveMetadata,
+		},
+	}
+}
+
+func (s *testSuite) TestSetAndGet(t *testing.T) {
 	key := []byte("test_key")
 	value := []byte("hello world")
 	err := s.store.Set(key, value)
-	assert.NoError(s.t, err, "Failed to insert full value")
+	assert.NoError(t, err, "Failed to insert full value")
 	retrievedValue, err := s.store.Get(key)
-	assert.NoError(s.t, err, "Failed to retrieve value")
-	assert.Equal(s.t, value, retrievedValue, "retrieved value should be the same")
+	assert.NoError(t, err, "Failed to retrieve value")
+	assert.Equal(t, value, retrievedValue, "retrieved value should be the same")
 }
 
-func (s *TestSuite) TestSetGetAndDelete() {
+func (s *testSuite) TestSetGetAndDelete(t *testing.T) {
 	key := []byte("test_key")
 	value := []byte("hello world")
 	err := s.store.Set(key, value)
-	assert.NoError(s.t, err, "Failed to insert full value")
+	assert.NoError(t, err, "Failed to insert full value")
 	retrievedValue, err := s.store.Get(key)
-	assert.NoError(s.t, err, "Failed to retrieve value")
-	assert.Equal(s.t, value, retrievedValue, "retrieved value should be the same")
+	assert.NoError(t, err, "Failed to retrieve value")
+	assert.Equal(t, value, retrievedValue, "retrieved value should be the same")
 	err = s.store.Delete(key)
-	assert.NoError(s.t, err, "Failed to delete key")
+	assert.NoError(t, err, "Failed to delete key")
 	retrievedValue, err = s.store.Get(key)
-	assert.ErrorIs(s.t, err, kv.ErrKeyNotFound, "error should be ErrKeyNotFound")
+	assert.ErrorIs(t, err, kv.ErrKeyNotFound, "error should be ErrKeyNotFound")
 }
 
-func (s *TestSuite) TestManySetGetAndDeleteMany() {
+func (s *testSuite) TestManySetGetAndDeleteMany(t *testing.T) {
 	var keys [][]byte
 	var values [][]byte
 	for i := 0; i < 10; i++ {
@@ -125,24 +130,24 @@ func (s *TestSuite) TestManySetGetAndDeleteMany() {
 	}
 
 	err := s.store.SetMany(keys, values)
-	assert.NoError(s.t, err, "Failed to insert values")
+	assert.NoError(t, err, "Failed to insert values")
 
 	for i, key := range keys {
 		retrievedValue, err := s.store.Get(key)
-		assert.NoError(s.t, err, "Failed to retrieve value")
-		assert.Equal(s.t, values[i], retrievedValue, "retrieved value should be the same")
+		assert.NoError(t, err, "Failed to retrieve value")
+		assert.Equal(t, values[i], retrievedValue, "retrieved value should be the same")
 	}
 
 	err = s.store.DeleteMany(keys)
-	assert.NoError(s.t, err, "Failed to delete keys")
+	assert.NoError(t, err, "Failed to delete keys")
 	for _, key := range keys {
 		retrievedValue, err := s.store.Get(key)
-		assert.Empty(s.t, retrievedValue, "retrieved value should be empty")
-		assert.ErrorIs(s.t, err, kv.ErrKeyNotFound, "error should be ErrKeyNotFound")
+		assert.Empty(t, retrievedValue, "retrieved value should be empty")
+		assert.ErrorIs(t, err, kv.ErrKeyNotFound, "error should be ErrKeyNotFound")
 	}
 }
 
-func (s *TestSuite) TestChunkSetAndDelete() {
+func (s *testSuite) TestChunkSetAndDelete(t *testing.T) {
 
 	key := []byte("chunked_key")
 	chunks := [][]byte{
@@ -157,13 +162,13 @@ func (s *TestSuite) TestChunkSetAndDelete() {
 	}
 
 	err := s.store.SetChunks(key, chunks, checksum)
-	assert.NoError(s.t, err, "Failed to insert chunked value")
+	assert.NoError(t, err, "Failed to insert chunked value")
 
 	retrievedValue, err := s.store.Get(key)
-	assert.NoError(s.t, err, "Failed to retrieve chunked value")
+	assert.NoError(t, err, "Failed to retrieve chunked value")
 
 	expectedValue := bytes.Join(chunks, nil)
-	assert.Equal(s.t, expectedValue, retrievedValue, "Retrieved chunked value does not match")
+	assert.Equal(t, expectedValue, retrievedValue, "Retrieved chunked value does not match")
 
 	chunks = [][]byte{
 		[]byte("chunk_1_"),
@@ -176,13 +181,13 @@ func (s *TestSuite) TestChunkSetAndDelete() {
 	}
 
 	err = s.store.SetChunks(key, chunks, checksum)
-	assert.NoError(s.t, err, "Failed to insert chunked value")
+	assert.NoError(t, err, "Failed to insert chunked value")
 
 	retrievedValue, err = s.store.Get(key)
-	assert.NoError(s.t, err, "Failed to retrieve chunked value")
+	assert.NoError(t, err, "Failed to retrieve chunked value")
 
 	expectedValue = bytes.Join(chunks, nil)
-	assert.Equal(s.t, expectedValue, retrievedValue, "Retrieved chunked value does not match")
+	assert.Equal(t, expectedValue, retrievedValue, "Retrieved chunked value does not match")
 
 	keys := make(map[string]error)
 	keys["chunked_key_chunk_0"] = kv.ErrInvalidDataFormat // as we are fetching the stored chunk value
@@ -191,20 +196,20 @@ func (s *TestSuite) TestChunkSetAndDelete() {
 
 	for key, e := range keys {
 		_, err := s.store.Get([]byte(key))
-		assert.ErrorIs(s.t, err, e, "error should be match")
+		assert.ErrorIs(t, err, e, "error should be match")
 	}
 
 	err = s.store.Delete(key)
-	assert.NoError(s.t, err, "Failed to delete key")
+	assert.NoError(t, err, "Failed to delete key")
 	retrievedValue, err = s.store.Get(key)
-	assert.ErrorIs(s.t, err, kv.ErrKeyNotFound, "error should be ErrKeyNotFound")
+	assert.ErrorIs(t, err, kv.ErrKeyNotFound, "error should be ErrKeyNotFound")
 	for key := range keys {
 		_, err := s.store.Get([]byte(key))
-		assert.ErrorIs(s.t, err, kv.ErrKeyNotFound, "error should be match")
+		assert.ErrorIs(t, err, kv.ErrKeyNotFound, "error should be match")
 	}
 }
 
-func (s *TestSuite) TestSnapshotAndRetrieve() {
+func (s *testSuite) TestSnapshotAndRetrieve(t *testing.T) {
 	testData := make(map[string][]byte)
 	for i := 0; i < 100; i++ {
 		key := gofakeit.LetterN(uint(i + 1))
@@ -214,14 +219,14 @@ func (s *TestSuite) TestSnapshotAndRetrieve() {
 
 	for key := range testData {
 		err := s.store.Set([]byte(key), testData[key])
-		assert.NoError(s.t, err, "Failed to insert value")
+		assert.NoError(t, err, "Failed to insert value")
 	}
 
 	buf := new(bytes.Buffer)
 	err := s.store.Snapshot(buf)
-	assert.NoError(s.t, err, "Failed to snapshot value")
+	assert.NoError(t, err, "Failed to snapshot value")
 
-	restoreDir := s.t.TempDir()
+	restoreDir := t.TempDir()
 	path := filepath.Join(restoreDir, "snapshot")
 	conf := kv.Config{
 		Path:      path,
@@ -230,51 +235,51 @@ func (s *TestSuite) TestSnapshotAndRetrieve() {
 		MmapSize:  1 << 30,
 	}
 	restoreDB, err := s.dbConstructor(conf)
-	assert.NoError(s.t, err, "Failed to create db constructor")
+	assert.NoError(t, err, "Failed to create db constructor")
 	err = restoreDB.Restore(bytes.NewReader(buf.Bytes()))
-	assert.NoError(s.t, err, "Failed to restore")
+	assert.NoError(t, err, "Failed to restore")
 	for key := range testData {
 		retrievedValue, err := s.store.Get([]byte(key))
-		assert.NoError(s.t, err, "Failed to get value")
-		assert.Equal(s.t, testData[key], retrievedValue, "Retrieved value does not match")
+		assert.NoError(t, err, "Failed to get value")
+		assert.Equal(t, testData[key], retrievedValue, "Retrieved value does not match")
 	}
 }
 
-func (s *TestSuite) TestEmptyValueSet() {
+func (s *testSuite) TestEmptyValueSet(t *testing.T) {
 	var keys [][]byte
 	for i := 0; i < 100; i++ {
 		key := gofakeit.LetterN(uint(i + 1))
 		keys = append(keys, []byte(key))
 		err := s.store.Set([]byte(key), nil)
-		assert.NoError(s.t, err, "Failed to insert value")
+		assert.NoError(t, err, "Failed to insert value")
 	}
 
 	for _, key := range keys {
 		retrievedValue, err := s.store.Get(key)
-		assert.NoError(s.t, err, "Failed to retrieve value")
-		assert.Equal(s.t, []byte(""), retrievedValue, "Retrieved value does not match")
+		assert.NoError(t, err, "Failed to retrieve value")
+		assert.Equal(t, []byte(""), retrievedValue, "Retrieved value does not match")
 	}
 }
 
-func (s *TestSuite) TestNonExistentDelete() {
+func (s *testSuite) TestNonExistentDelete(t *testing.T) {
 	var keys [][]byte
 	for i := 0; i < 100; i++ {
 		key := gofakeit.LetterN(uint(i + 1))
 		keys = append(keys, []byte(key))
 		err := s.store.Delete([]byte(key))
-		assert.NoError(s.t, err, "Failed to delete value")
+		assert.NoError(t, err, "Failed to delete value")
 	}
 
 	err := s.store.DeleteMany(keys)
-	assert.NoError(s.t, err, "Failed to delete")
+	assert.NoError(t, err, "Failed to delete")
 }
 
-func (s *TestSuite) TestStoreMetadataAndRetrieveMetadata() {
+func (s *testSuite) TestStoreMetadataAndRetrieveMetadata(t *testing.T) {
 	metadata := gofakeit.UUID()
 	key := []byte("metadata")
 	err := s.store.StoreMetadata(key, []byte(metadata))
-	assert.NoError(s.t, err, "Failed to store metadata")
+	assert.NoError(t, err, "Failed to store metadata")
 	retrievedValue, err := s.store.RetrieveMetadata(key)
-	assert.NoError(s.t, err, "Failed to retrieve metadata")
-	assert.Equal(s.t, metadata, string(retrievedValue), "Retrieved metadata does not match")
+	assert.NoError(t, err, "Failed to retrieve metadata")
+	assert.Equal(t, metadata, string(retrievedValue), "Retrieved metadata does not match")
 }
