@@ -3,6 +3,7 @@ module github.com/ankur-anand/kvalchemy
 go 1.23.2
 
 require (
+	github.com/PowerDNS/lmdb-go v1.9.3
 	github.com/bits-and-blooms/bloom/v3 v3.7.0
 	github.com/brianvoe/gofakeit/v7 v7.2.1
 	github.com/dgraph-io/badger/v4 v4.5.1
