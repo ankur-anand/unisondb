@@ -19,3 +19,9 @@ tmp
 *.key
 .venv
 *.svg
+venv
+*.db
+*.png
+*.csv
+*.txt
+*.prof
