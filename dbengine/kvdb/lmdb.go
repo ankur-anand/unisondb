@@ -16,6 +16,23 @@ import (
 	"github.com/hashicorp/go-metrics"
 )
 
+var (
+	lmdbSetMetricKeyTotal          = append(packageKey, []string{"lmdb", "set", "total"}...)
+	lmdbGetMetricKeyTotal          = append(packageKey, []string{"lmdb", "get", "total"}...)
+	lmdbDeleteMetricKeyTotal       = append(packageKey, []string{"lmdb", "delete", "total"}...)
+	lmdbSetMetricKeyLatency        = append(packageKey, []string{"lmdb", "set", "durations", "seconds"}...)
+	lmdbGetMetricKeyLatency        = append(packageKey, []string{"lmdb", "get", "durations", "seconds"}...)
+	lmdbDeleteMetricKeyLatency     = append(packageKey, []string{"lmdb", "delete", "durations", "seconds"}...)
+	lmdbSetChunksMetricKeyTotal    = append(packageKey, []string{"lmdb", "set", "chunks", "total"}...)
+	lmdbSetChunksMetricsKeyLatency = append(packageKey, []string{"lmdb", "set", "chunks", "durations", "seconds"}...)
+	lmdbSetManyMetricKeyTotal      = append(packageKey, []string{"lmdb", "set", "many", "total"}...)
+	lmdbSetManyMetricsLatency      = append(packageKey, []string{"lmdb", "set", "many", "durations", "seconds"}...)
+	lmdbDeleteManyMetricKeyTotal   = append(packageKey, []string{"lmdb", "delete", "many", "total"}...)
+	lmdbDeleteManyMetricKeyLatency = append(packageKey, []string{"lmdb", "delete", "many", "durations", "seconds"}...)
+	lmdbSnapshotMetricKeyTotal     = append(packageKey, []string{"lmdb", "snapshot", "total"}...)
+	lmdbSnapshotMetricsKeyLatency  = append(packageKey, []string{"lmdb", "snapshot", "durations", "seconds"}...)
+)
+
 // LmdbEmbed stores an initialized lmdb environment.
 // http://www.lmdb.tech/doc/group__mdb.html
 type LmdbEmbed struct {
@@ -94,10 +111,10 @@ func (l *LmdbEmbed) Close() error {
 
 // Set associates a value with a key within a specific namespace.
 func (l *LmdbEmbed) Set(key []byte, value []byte) error {
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "lmdb", "set", "total"}, 1, l.label)
+	metrics.IncrCounterWithLabels(lmdbSetMetricKeyTotal, 1, l.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "lmdb", "set", "latency", "msec"}, startTime, l.label)
+		metrics.MeasureSinceWithLabels(lmdbSetMetricKeyLatency, startTime, l.label)
 	}()
 
 	return l.env.Update(func(txn *lmdb.Txn) error {
@@ -115,10 +132,10 @@ func (l *LmdbEmbed) SetMany(keys [][]byte, values [][]byte) error {
 		return fmt.Errorf("keys and values length mismatch: keys=%d values=%d", len(keys), len(values))
 	}
 
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "lmdb", "set", "many", "total"}, 1, l.label)
+	metrics.IncrCounterWithLabels(lmdbSetManyMetricKeyTotal, 1, l.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "lmdb", "set", "many", "latency", "msec"}, startTime, l.label)
+		metrics.MeasureSinceWithLabels(lmdbSetManyMetricsLatency, startTime, l.label)
 	}()
 
 	maxValueSize := 0
@@ -149,10 +166,10 @@ func (l *LmdbEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) erro
 		return errors.New("empty chunks array")
 	}
 
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "lmdb", "set", "chunks", "total"}, 1, l.label)
+	metrics.IncrCounterWithLabels(lmdbSetChunksMetricKeyTotal, 1, l.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "lmdb", "set", "chunks", "latency", "msec"}, startTime, l.label)
+		metrics.MeasureSinceWithLabels(lmdbSetChunksMetricsKeyLatency, startTime, l.label)
 	}()
 
 	metaData := make([]byte, 9)
@@ -197,10 +214,10 @@ func (l *LmdbEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) erro
 
 // Delete deletes a value with a key within a specific namespace.
 func (l *LmdbEmbed) Delete(key []byte) error {
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "lmdb", "delete", "total"}, 1, l.label)
+	metrics.IncrCounterWithLabels(lmdbDeleteMetricKeyTotal, 1, l.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "lmdb", "delete", "latency", "msec"}, startTime, l.label)
+		metrics.MeasureSinceWithLabels(lmdbDeleteMetricKeyLatency, startTime, l.label)
 	}()
 
 	return l.env.Update(func(txn *lmdb.Txn) error {
@@ -241,10 +258,10 @@ func (l *LmdbEmbed) DeleteMany(keys [][]byte) error {
 		return nil
 	}
 
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "lmdb", "delete", "many", "total"}, 1, l.label)
+	metrics.IncrCounterWithLabels(lmdbDeleteManyMetricKeyTotal, 1, l.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "lmdb", "delete", "many", "latency", "msec"}, startTime, l.label)
+		metrics.MeasureSinceWithLabels(lmdbDeleteManyMetricKeyLatency, startTime, l.label)
 	}()
 
 	return l.env.Update(func(txn *lmdb.Txn) error {
@@ -298,10 +315,10 @@ func (l *LmdbEmbed) deleteChunk(key []byte, storedValue []byte, txn *lmdb.Txn) e
 
 // Get retrieves a value associated with a key within a specific namespace.
 func (l *LmdbEmbed) Get(key []byte) ([]byte, error) {
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "lmdb", "get", "total"}, 1, l.label)
+	metrics.IncrCounterWithLabels(lmdbGetMetricKeyTotal, 1, l.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "lmdb", "get", "latency", "msec"}, startTime, l.label)
+		metrics.MeasureSinceWithLabels(lmdbGetMetricKeyLatency, startTime, l.label)
 	}()
 
 	var value []byte
@@ -371,6 +388,11 @@ func (l *LmdbEmbed) Get(key []byte) ([]byte, error) {
 }
 
 func (l *LmdbEmbed) Snapshot(w io.Writer) error {
+	startTime := time.Now()
+	metrics.IncrCounterWithLabels(lmdbSnapshotMetricKeyTotal, 1, l.label)
+	defer func() {
+		metrics.MeasureSinceWithLabels(lmdbSnapshotMetricsKeyLatency, startTime, l.label)
+	}()
 	bw := bufio.NewWriter(w)
 	defer bw.Flush()
 

@@ -13,6 +13,21 @@ import (
 	"go.etcd.io/bbolt"
 )
 
+var (
+	boltSetMetricKeyTotal          = append(packageKey, []string{"bolt", "set", "total"}...)
+	boltGetMetricKeyTotal          = append(packageKey, []string{"bolt", "get", "total"}...)
+	boltDeleteMetricKeyTotal       = append(packageKey, []string{"bolt", "delete", "total"}...)
+	boltSetMetricKeyLatency        = append(packageKey, []string{"bolt", "set", "durations", "seconds"}...)
+	boltGetMetricKeyLatency        = append(packageKey, []string{"bolt", "get", "durations", "seconds"}...)
+	boltDeleteMetricKeyLatency     = append(packageKey, []string{"bolt", "delete", "durations", "seconds"}...)
+	boltSetChunksMetricKeyTotal    = append(packageKey, []string{"bolt", "set", "chunks", "total"}...)
+	boltSetChunksMetricsKeyLatency = append(packageKey, []string{"bolt", "set", "chunks", "durations", "seconds"}...)
+	boltSetManyMetricKeyTotal      = append(packageKey, []string{"bolt", "set", "many", "total"}...)
+	boltSetManyMetricsLatency      = append(packageKey, []string{"bolt", "set", "many", "durations", "seconds"}...)
+	boltDeleteManyMetricKeyTotal   = append(packageKey, []string{"bolt", "delete", "many", "total"}...)
+	boltDeleteManyMetricKeyLatency = append(packageKey, []string{"bolt", "delete", "many", "durations", "seconds"}...)
+)
+
 // BoltDBEmbed embed an initialized bolt db and implements PersistenceWriter and PersistenceReader.
 type BoltDBEmbed struct {
 	db        *bbolt.DB
@@ -35,7 +50,11 @@ func NewBoltdb(conf Config) (*BoltDBEmbed, error) {
 		_, err = tx.CreateBucketIfNotExists([]byte(sysBucketMetaData))
 		return err
 	})
-	return &BoltDBEmbed{db: db, namespace: []byte(conf.Namespace), label: l, conf: conf}, err
+	return &BoltDBEmbed{db: db,
+		namespace: []byte(conf.Namespace),
+		label:     l,
+		conf:      conf,
+	}, err
 }
 
 func (b *BoltDBEmbed) FSync() error {
@@ -48,10 +67,10 @@ func (b *BoltDBEmbed) Close() error {
 
 // Set associates a value with a key within a specific namespace.
 func (b *BoltDBEmbed) Set(key []byte, value []byte) error {
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "boltdb", "set", "total"}, 1, b.label)
+	metrics.IncrCounterWithLabels(boltSetMetricKeyTotal, 1, b.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "set", "latency", "msec"}, startTime, b.label)
+		metrics.MeasureSinceWithLabels(boltSetMetricKeyLatency, startTime, b.label)
 	}()
 
 	return b.db.Update(func(tx *bbolt.Tx) error {
@@ -68,10 +87,10 @@ func (b *BoltDBEmbed) Set(key []byte, value []byte) error {
 
 // SetMany associates multiple values with corresponding keys within a namespace.
 func (b *BoltDBEmbed) SetMany(keys [][]byte, value [][]byte) error {
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "boltdb", "set", "many", "total"}, 1, b.label)
+	metrics.IncrCounterWithLabels(boltSetManyMetricKeyTotal, 1, b.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "set", "many", "latency", "msec"}, startTime, b.label)
+		metrics.MeasureSinceWithLabels(boltSetManyMetricsLatency, startTime, b.label)
 	}()
 
 	return b.db.Update(func(tx *bbolt.Tx) error {
@@ -94,10 +113,10 @@ func (b *BoltDBEmbed) SetMany(keys [][]byte, value [][]byte) error {
 
 // SetChunks stores a value that has been split into chunks, associating them with a single key.
 func (b *BoltDBEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) error {
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "boltdb", "set", "chunks", "total"}, 1, b.label)
+	metrics.IncrCounterWithLabels(boltSetChunksMetricKeyTotal, 1, b.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "set", "chunks", "latency", "msec"}, startTime, b.label)
+		metrics.MeasureSinceWithLabels(boltSetChunksMetricsKeyLatency, startTime, b.label)
 	}()
 	return b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
@@ -148,10 +167,10 @@ func (b *BoltDBEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) er
 
 // Delete deletes a value with a key within a specific namespace.
 func (b *BoltDBEmbed) Delete(key []byte) error {
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "boltdb", "delete", "total"}, 1, b.label)
+	metrics.IncrCounterWithLabels(boltDeleteMetricKeyTotal, 1, b.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "delete", "latency", "msec"}, startTime, b.label)
+		metrics.MeasureSinceWithLabels(boltDeleteMetricKeyLatency, startTime, b.label)
 	}()
 	return b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
@@ -193,10 +212,10 @@ func (b *BoltDBEmbed) Delete(key []byte) error {
 
 // DeleteMany delete multiple values with corresponding keys within a namespace.
 func (b *BoltDBEmbed) DeleteMany(keys [][]byte) error {
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "boltdb", "delete", "many", "total"}, 1, b.label)
+	metrics.IncrCounterWithLabels(boltDeleteManyMetricKeyTotal, 1, b.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "delete", "many", "latency", "msec"}, startTime, b.label)
+		metrics.MeasureSinceWithLabels(boltDeleteManyMetricKeyLatency, startTime, b.label)
 	}()
 	return b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
@@ -242,10 +261,10 @@ func (b *BoltDBEmbed) deleteChunk(key []byte, storedValue []byte, bucket *bbolt.
 
 // Get retrieves a value associated with a key within a specific namespace.
 func (b *BoltDBEmbed) Get(key []byte) ([]byte, error) {
-	metrics.IncrCounterWithLabels([]string{"kvalchemy", "storage", "boltdb", "get", "total"}, 1, b.label)
+	metrics.IncrCounterWithLabels(boltGetMetricKeyTotal, 1, b.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "get", "latency", "msec"}, startTime, b.label)
+		metrics.MeasureSinceWithLabels(boltGetMetricKeyLatency, startTime, b.label)
 	}()
 	var value []byte
 

@@ -17,6 +17,7 @@ var (
 
 var (
 	sysBucketMetaData = "storage-metadata"
+	packageKey        = []string{"kvalchemy", "kvdb"}
 )
 
 type Config struct {

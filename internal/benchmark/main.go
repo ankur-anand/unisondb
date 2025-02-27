@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/ankur-anand/kvalchemy/internal/benchmark/store"
-	"github.com/ankur-anand/kvalchemy/internal/xy"
+	"github.com/ankur-anand/kvalchemy/internal/etc"
 	"github.com/ankur-anand/kvalchemy/storage"
 	"github.com/hashicorp/go-metrics"
 	"github.com/tidwall/redcon"
@@ -139,7 +139,7 @@ func main() {
 					conn.WriteBulk(cmd.Args[2])
 					conn.WriteBulkString("")
 				case "metrics":
-					xy.DumpStats(inm, os.Stdout)
+					etc.DumpStats(inm, os.Stdout)
 					conn.WriteNull()
 				}
 			},
