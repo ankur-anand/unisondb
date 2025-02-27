@@ -447,3 +447,10 @@ func generateNChunkFBRecord(t *testing.T, n uint64) (string, []walrecord.Record,
 
 	return key, values, checksum
 }
+
+func TestFlush_EmptyMemTable(t *testing.T) {
+	mmTable := setupMemTableWithBoltDB(t, 1<<10)
+
+	_, err := mmTable.flush()
+	assert.NoError(t, err)
+}
