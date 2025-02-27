@@ -1,4 +1,4 @@
-package kv
+package kvdb
 
 import (
 	"bytes"
@@ -55,14 +55,14 @@ func (b *BoltDBEmbed) Set(key []byte, value []byte) error {
 	}()
 
 	return b.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket(b.namespace)
-		if b == nil {
+		bucket := tx.Bucket(b.namespace)
+		if bucket == nil {
 			return ErrBucketNotFound
 		}
 		// indicate this is a full value, not chunked
 		storedValue := append([]byte{FullValueFlag}, value...)
 
-		return b.Put(key, storedValue)
+		return bucket.Put(key, storedValue)
 	})
 }
 
@@ -75,15 +75,15 @@ func (b *BoltDBEmbed) SetMany(keys [][]byte, value [][]byte) error {
 	}()
 
 	return b.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket(b.namespace)
-		if b == nil {
+		bucket := tx.Bucket(b.namespace)
+		if bucket == nil {
 			return ErrBucketNotFound
 		}
 		for i, key := range keys {
 			// indicate this is a full value, not chunked
 			storedValue := append([]byte{FullValueFlag}, value[i]...)
 
-			err := b.Put(key, storedValue)
+			err := bucket.Put(key, storedValue)
 			if err != nil {
 				return err
 			}
@@ -100,14 +100,14 @@ func (b *BoltDBEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) er
 		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "set", "chunks", "latency", "msec"}, startTime, b.label)
 	}()
 	return b.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket(b.namespace)
-		if b == nil {
+		bucket := tx.Bucket(b.namespace)
+		if bucket == nil {
 			return ErrBucketNotFound
 		}
 
 		// get last stored for keys, if present.
 		// older chunk needs to deleted for not leaking the space.
-		storedValue := b.Get(key)
+		storedValue := bucket.Get(key)
 		if storedValue != nil && storedValue[0] == ChunkedValueFlag {
 			if len(storedValue) < 9 {
 				return ErrInvalidChunkMetadata
@@ -116,7 +116,7 @@ func (b *BoltDBEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) er
 
 			for i := 0; i < int(chunkCount); i++ {
 				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-				if err := b.Delete([]byte(chunkKey)); err != nil {
+				if err := bucket.Delete([]byte(chunkKey)); err != nil {
 					return err
 				}
 			}
@@ -130,14 +130,14 @@ func (b *BoltDBEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) er
 		binary.LittleEndian.PutUint32(metaData[5:], checksum)
 
 		// chunk metadata
-		if err := b.Put(key, metaData); err != nil {
+		if err := bucket.Put(key, metaData); err != nil {
 			return err
 		}
 
 		// individual chunk
 		for i, chunk := range chunks {
 			chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-			if err := b.Put([]byte(chunkKey), chunk); err != nil {
+			if err := bucket.Put([]byte(chunkKey), chunk); err != nil {
 				return err
 			}
 		}
@@ -154,12 +154,12 @@ func (b *BoltDBEmbed) Delete(key []byte) error {
 		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "delete", "latency", "msec"}, startTime, b.label)
 	}()
 	return b.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket(b.namespace)
-		if b == nil {
+		bucket := tx.Bucket(b.namespace)
+		if bucket == nil {
 			return ErrBucketNotFound
 		}
 
-		storedValue := b.Get(key)
+		storedValue := bucket.Get(key)
 		if storedValue == nil {
 			return nil
 		}
@@ -168,7 +168,7 @@ func (b *BoltDBEmbed) Delete(key []byte) error {
 		switch flag {
 		case FullValueFlag:
 
-			return b.Delete(key)
+			return bucket.Delete(key)
 
 		case ChunkedValueFlag:
 			if len(storedValue) < 9 {
@@ -179,12 +179,12 @@ func (b *BoltDBEmbed) Delete(key []byte) error {
 
 			for i := 0; i < int(chunkCount); i++ {
 				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-				if err := b.Delete([]byte(chunkKey)); err != nil {
+				if err := bucket.Delete([]byte(chunkKey)); err != nil {
 					return err
 				}
 			}
 
-			return b.Delete(key)
+			return bucket.Delete(key)
 		}
 
 		return ErrInvalidDataFormat
@@ -199,12 +199,12 @@ func (b *BoltDBEmbed) DeleteMany(keys [][]byte) error {
 		metrics.MeasureSinceWithLabels([]string{"kvalchemy", "storage", "boltdb", "delete", "many", "latency", "msec"}, startTime, b.label)
 	}()
 	return b.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket(b.namespace)
-		if b == nil {
+		bucket := tx.Bucket(b.namespace)
+		if bucket == nil {
 			return ErrBucketNotFound
 		}
 		for _, key := range keys {
-			storedValue := b.Get(key)
+			storedValue := bucket.Get(key)
 			if storedValue == nil {
 				return nil
 			}
@@ -212,7 +212,7 @@ func (b *BoltDBEmbed) DeleteMany(keys [][]byte) error {
 			flag := storedValue[0]
 			switch flag {
 			case FullValueFlag:
-				if err := b.Delete(key); err != nil {
+				if err := bucket.Delete(key); err != nil {
 					return err
 				}
 
@@ -221,21 +221,23 @@ func (b *BoltDBEmbed) DeleteMany(keys [][]byte) error {
 					return ErrInvalidChunkMetadata
 				}
 
-				chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
-
-				for i := 0; i < int(chunkCount); i++ {
-					chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-					if err := b.Delete([]byte(chunkKey)); err != nil {
-						return err
-					}
-				}
-				if err := b.Delete(key); err != nil {
-					return err
-				}
+				return b.deleteChunk(key, storedValue, bucket)
 			}
 		}
 		return nil
 	})
+}
+
+func (b *BoltDBEmbed) deleteChunk(key []byte, storedValue []byte, bucket *bbolt.Bucket) error {
+	chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
+
+	for i := 0; i < int(chunkCount); i++ {
+		chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
+		if err := bucket.Delete([]byte(chunkKey)); err != nil {
+			return err
+		}
+	}
+	return bucket.Delete(key)
 }
 
 // Get retrieves a value associated with a key within a specific namespace.
@@ -248,12 +250,12 @@ func (b *BoltDBEmbed) Get(key []byte) ([]byte, error) {
 	var value []byte
 
 	err := b.db.View(func(tx *bbolt.Tx) error {
-		b := tx.Bucket(b.namespace)
-		if b == nil {
+		bucket := tx.Bucket(b.namespace)
+		if bucket == nil {
 			return ErrBucketNotFound
 		}
 
-		storedValue := b.Get(key)
+		storedValue := bucket.Get(key)
 		if storedValue == nil {
 			return ErrKeyNotFound
 		}
@@ -279,7 +281,7 @@ func (b *BoltDBEmbed) Get(key []byte) ([]byte, error) {
 			for i := 0; i < int(chunkCount); i++ {
 				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
 
-				chunkData := b.Get([]byte(chunkKey))
+				chunkData := bucket.Get([]byte(chunkKey))
 				if chunkData == nil {
 					return fmt.Errorf("chunk %d missing", i)
 				}
@@ -300,7 +302,6 @@ func (b *BoltDBEmbed) Get(key []byte) ([]byte, error) {
 			copy(value, storedValue)
 			return fmt.Errorf("invalid data format for key %s: %w", string(key), ErrInvalidDataFormat)
 		}
-
 	})
 
 	return value, err
@@ -308,11 +309,11 @@ func (b *BoltDBEmbed) Get(key []byte) ([]byte, error) {
 
 func (b *BoltDBEmbed) StoreMetadata(key []byte, value []byte) error {
 	return b.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(sysBucketMetaData))
-		if b == nil {
+		bucket := tx.Bucket([]byte(sysBucketMetaData))
+		if bucket == nil {
 			return ErrBucketNotFound
 		}
-		return b.Put(key, value)
+		return bucket.Put(key, value)
 	})
 }
 

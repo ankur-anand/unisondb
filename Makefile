@@ -37,3 +37,7 @@ lint-check-deps:
 gen-fb:
 	@flatc --go flatbuffer.fbs
 
+
+.PHONY: install
+install:
+	@go install tool

@@ -1,17 +1,17 @@
-package kv_test
+package kvdb_test
 
 import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/kvalchemy/storage/kv"
+	kv2 "github.com/ankur-anand/kvalchemy/dbengine/kvdb"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestBolt_Suite(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "bolt_test.bolt.db")
-	store, err := kv.NewBoltdb(kv.Config{
+	store, err := kv2.NewBoltdb(kv2.Config{
 		Path:      path,
 		Namespace: "test",
 		NoSync:    true,
@@ -20,8 +20,8 @@ func TestBolt_Suite(t *testing.T) {
 	assert.NoError(t, err, "failed to create boltdb")
 	assert.NotNil(t, store, "store should not be nil")
 
-	boltConstructor := func(config kv.Config) (bTreeStore, error) {
-		return kv.NewBoltdb(config)
+	boltConstructor := func(config kv2.Config) (bTreeStore, error) {
+		return kv2.NewBoltdb(config)
 	}
 
 	ts := &testSuite{

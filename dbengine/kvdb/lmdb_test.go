@@ -1,17 +1,17 @@
-package kv_test
+package kvdb_test
 
 import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/kvalchemy/storage/kv"
+	kv2 "github.com/ankur-anand/kvalchemy/dbengine/kvdb"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestLMDB_Suite(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "lmdb_test.lmdb")
-	store, err := kv.NewLmdb(kv.Config{
+	store, err := kv2.NewLmdb(kv2.Config{
 		Path:      path,
 		Namespace: "test",
 		NoSync:    false,
@@ -21,8 +21,8 @@ func TestLMDB_Suite(t *testing.T) {
 	assert.NoError(t, err, "failed to create lmdb")
 	assert.NotNil(t, store, "store should not be nil")
 
-	lmdbConstructor := func(config kv.Config) (bTreeStore, error) {
-		return kv.NewLmdb(config)
+	lmdbConstructor := func(config kv2.Config) (bTreeStore, error) {
+		return kv2.NewLmdb(config)
 	}
 
 	ts := &testSuite{

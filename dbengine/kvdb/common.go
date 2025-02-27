@@ -1,4 +1,4 @@
-package kv
+package kvdb
 
 import "errors"
 

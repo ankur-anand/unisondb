@@ -1,6 +1,6 @@
 module github.com/ankur-anand/kvalchemy
 
-go 1.23.2
+go 1.24.0
 
 require (
 	github.com/PowerDNS/lmdb-go v1.9.3
@@ -51,3 +51,13 @@ require (
 
 // replacing for #https://github.com/rosedblabs/wal/pull/45
 replace github.com/rosedblabs/wal v1.3.8 => github.com/ankur-anand/wal v0.0.2
+
+tool (
+	github.com/ajstarks/svgo/structlayout-svg
+	google.golang.org/grpc/cmd/protoc-gen-go-grpc
+	google.golang.org/protobuf/cmd/protoc-gen-go
+	honnef.co/go/tools/cmd/staticcheck
+	honnef.co/go/tools/cmd/structlayout
+	honnef.co/go/tools/cmd/structlayout-optimize
+	honnef.co/go/tools/cmd/structlayout-pretty
+)

@@ -1,4 +1,4 @@
-package kv
+package kvdb
 
 import (
 	"bufio"
@@ -20,9 +20,9 @@ import (
 // http://www.lmdb.tech/doc/group__mdb.html
 type LmdbEmbed struct {
 	env       *lmdb.Env
-	db        lmdb.DBI
 	namespace []byte
 	label     []metrics.Label
+	db        lmdb.DBI
 }
 
 // FSync Call the underlying Fsync.

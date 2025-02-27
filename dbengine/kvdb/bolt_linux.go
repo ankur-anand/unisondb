@@ -1,6 +1,6 @@
 //go:build linux
 
-package kv
+package kvdb
 
 import (
 	"bufio"

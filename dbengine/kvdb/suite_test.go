@@ -1,4 +1,4 @@
-package kv_test
+package kvdb_test
 
 import (
 	"bytes"
@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/kvalchemy/storage/kv"
+	"github.com/ankur-anand/kvalchemy/dbengine/kvdb"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 )
@@ -51,7 +51,7 @@ type bTreeStore interface {
 
 // testSuite defines all the test cases that is common in both the lmdb and boltdb.
 type testSuite struct {
-	dbConstructor func(config kv.Config) (bTreeStore, error)
+	dbConstructor func(config kvdb.Config) (bTreeStore, error)
 	store         bTreeStore
 }
 
@@ -118,7 +118,8 @@ func (s *testSuite) TestSetGetAndDelete(t *testing.T) {
 	err = s.store.Delete(key)
 	assert.NoError(t, err, "Failed to delete key")
 	retrievedValue, err = s.store.Get(key)
-	assert.ErrorIs(t, err, kv.ErrKeyNotFound, "error should be ErrKeyNotFound")
+	assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "error should be ErrKeyNotFound")
+	assert.Nil(t, retrievedValue, "retrieved value should be nil")
 }
 
 func (s *testSuite) TestManySetGetAndDeleteMany(t *testing.T) {
@@ -143,7 +144,7 @@ func (s *testSuite) TestManySetGetAndDeleteMany(t *testing.T) {
 	for _, key := range keys {
 		retrievedValue, err := s.store.Get(key)
 		assert.Empty(t, retrievedValue, "retrieved value should be empty")
-		assert.ErrorIs(t, err, kv.ErrKeyNotFound, "error should be ErrKeyNotFound")
+		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "error should be ErrKeyNotFound")
 	}
 }
 
@@ -190,9 +191,9 @@ func (s *testSuite) TestChunkSetAndDelete(t *testing.T) {
 	assert.Equal(t, expectedValue, retrievedValue, "Retrieved chunked value does not match")
 
 	keys := make(map[string]error)
-	keys["chunked_key_chunk_0"] = kv.ErrInvalidDataFormat // as we are fetching the stored chunk value
-	keys["chunked_key_chunk_1"] = kv.ErrInvalidDataFormat
-	keys["chunked_key_chunk_2"] = kv.ErrKeyNotFound
+	keys["chunked_key_chunk_0"] = kvdb.ErrInvalidDataFormat // as we are fetching the stored chunk value
+	keys["chunked_key_chunk_1"] = kvdb.ErrInvalidDataFormat
+	keys["chunked_key_chunk_2"] = kvdb.ErrKeyNotFound
 
 	for key, e := range keys {
 		_, err := s.store.Get([]byte(key))
@@ -202,10 +203,11 @@ func (s *testSuite) TestChunkSetAndDelete(t *testing.T) {
 	err = s.store.Delete(key)
 	assert.NoError(t, err, "Failed to delete key")
 	retrievedValue, err = s.store.Get(key)
-	assert.ErrorIs(t, err, kv.ErrKeyNotFound, "error should be ErrKeyNotFound")
+	assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "error should be ErrKeyNotFound")
+	assert.Nil(t, retrievedValue, "retrieved value should be nil")
 	for key := range keys {
 		_, err := s.store.Get([]byte(key))
-		assert.ErrorIs(t, err, kv.ErrKeyNotFound, "error should be match")
+		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "error should be match")
 	}
 }
 
@@ -228,7 +230,7 @@ func (s *testSuite) TestSnapshotAndRetrieve(t *testing.T) {
 
 	restoreDir := t.TempDir()
 	path := filepath.Join(restoreDir, "snapshot")
-	conf := kv.Config{
+	conf := kvdb.Config{
 		Path:      path,
 		Namespace: "test",
 		NoSync:    true,
