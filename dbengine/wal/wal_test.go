@@ -3,6 +3,7 @@ package wal_test
 import (
 	"bytes"
 	"io"
+	"sync"
 	"testing"
 	"time"
 
@@ -94,5 +95,55 @@ func TestWalIO_Suite(t *testing.T) {
 	t.Run("wal_fsync", func(t *testing.T) {
 		err := walInstance.Sync()
 		assert.NoError(t, err)
+	})
+
+	t.Run("concurrent_read_write", func(t *testing.T) {
+		var offsets []wal.Offset
+		var offsetMu sync.Mutex
+
+		numWriters := 4
+		numReaders := 4
+		numOps := 100
+
+		var wg sync.WaitGroup
+
+		for i := 0; i < numWriters; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < numOps; j++ {
+					data := gofakeit.LetterN(128)
+					pos, err := walInstance.Append([]byte(data))
+					assert.NoError(t, err, "append should not fail")
+					assert.NotNil(t, pos, "append should return a valid position")
+
+					offsetMu.Lock()
+					offsets = append(offsets, pos)
+					offsetMu.Unlock()
+				}
+			}()
+		}
+
+		for i := 0; i < numReaders; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for j := 0; j < numOps; j++ {
+					offsetMu.Lock()
+					if len(offsets) == 0 {
+						offsetMu.Unlock()
+						continue
+					}
+					pos := offsets[j%len(offsets)] // Read a recent offset
+					offsetMu.Unlock()
+
+					data, err := walInstance.Read(pos)
+					assert.NoError(t, err, "read should not fail")
+					assert.NotEmpty(t, data, "read should return valid data")
+				}
+			}()
+		}
+
+		wg.Wait()
 	})
 }
