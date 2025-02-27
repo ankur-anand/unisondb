@@ -2,6 +2,7 @@ package wal
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/brianvoe/gofakeit/v7"
@@ -134,6 +135,8 @@ func BenchmarkWalIOReadWriteThroughputConcurrent(b *testing.B) {
 
 	b.ResetTimer()
 
+	var errCount atomic.Uint64
+
 	for i := 0; i < numWriters; i++ {
 		wg.Add(1)
 		go func() {
@@ -141,7 +144,9 @@ func BenchmarkWalIOReadWriteThroughputConcurrent(b *testing.B) {
 			for j := 0; j < b.N; j++ {
 				pos, err := walInstance.Append(data)
 				if err != nil {
-					b.Fatal(err)
+					errCount.Add(1)
+					b.Errorf("wal append failed %v", err)
+					return
 				}
 				mu.Lock()
 				totalBytesWritten += int64(len(data))
@@ -170,7 +175,9 @@ func BenchmarkWalIOReadWriteThroughputConcurrent(b *testing.B) {
 
 				readData, err := walInstance.Read(pos)
 				if err != nil {
-					b.Fatal(err)
+					errCount.Add(1)
+					b.Errorf("wal read failed %v", err)
+					return
 				}
 
 				mu.Lock()
@@ -181,7 +188,9 @@ func BenchmarkWalIOReadWriteThroughputConcurrent(b *testing.B) {
 	}
 
 	wg.Wait()
-
+	if errCount.Load() > 0 {
+		b.Fail()
+	}
 	b.ReportMetric(float64(totalBytesWritten)/b.Elapsed().Seconds(), "write_bytes/sec")
 	b.ReportMetric(float64(totalBytesRead)/b.Elapsed().Seconds(), "read_bytes/sec")
 }

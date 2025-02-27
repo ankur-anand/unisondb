@@ -22,6 +22,7 @@ func TestLMDB_Suite(t *testing.T) {
 		MmapSize:  1 << 20,
 	})
 
+	assert.NoError(t, err)
 	inm := metrics.NewInmemSink(1*time.Millisecond, time.Minute)
 	cfg := metrics.DefaultConfig("lmdb_test")
 	cfg.TimerGranularity = time.Second

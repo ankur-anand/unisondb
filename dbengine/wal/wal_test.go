@@ -84,7 +84,7 @@ func TestWalIO_Suite(t *testing.T) {
 		reader, err := walInstance.NewReaderWithStart(pos)
 		assert.NoError(t, err)
 		assert.NotNil(t, reader)
-		value, pos, err := reader.Next()
+		value, _, err := reader.Next()
 		assert.NoError(t, err)
 		assert.Equal(t, appendData2, string(value))
 
