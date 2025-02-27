@@ -1,5 +1,5 @@
 // FlatBuffer schema for Write-Ahead Log (WAL) records with chunked support and checksums
-namespace storage.wrecord;
+namespace dbengine.wal.walrecord;
 
 enum TxnStatus: ubyte {
   TxnNone = 0,

@@ -126,7 +126,7 @@ func BenchmarkWalIOReadWriteThroughputConcurrent(b *testing.B) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
-	var offsets []Offset
+	var offsets []*Offset
 	var offsetMu sync.Mutex
 
 	numWriters := 4

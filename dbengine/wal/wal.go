@@ -1,9 +1,12 @@
 package wal
 
 import (
+	"fmt"
 	"io"
+	"slices"
 	"time"
 
+	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
 	"github.com/hashicorp/go-metrics"
 	"github.com/pkg/errors"
 	"github.com/rosedblabs/wal"
@@ -24,7 +27,11 @@ var (
 )
 
 // Offset is a type alias to underlying wal implementation.
-type Offset = *wal.ChunkPosition
+type Offset = wal.ChunkPosition
+
+func DecodeOffset(b []byte) *Offset {
+	return wal.DecodeChunkPosition(b)
+}
 
 // WalIO provides a write and read to underlying file based wal store.
 type WalIO struct {
@@ -67,7 +74,7 @@ func (w *WalIO) Close() error {
 	return w.appendLog.Close()
 }
 
-func (w *WalIO) Read(pos Offset) ([]byte, error) {
+func (w *WalIO) Read(pos *Offset) ([]byte, error) {
 	w.metrics.IncrCounterWithLabels(walMetricsReadTotal, 1, w.label)
 	startTime := time.Now()
 	defer func() {
@@ -81,7 +88,7 @@ func (w *WalIO) Read(pos Offset) ([]byte, error) {
 	return value, err
 }
 
-func (w *WalIO) Append(data []byte) (Offset, error) {
+func (w *WalIO) Append(data []byte) (*Offset, error) {
 	w.metrics.IncrCounterWithLabels(walMetricsAppendTotal, 1, w.label)
 	startTime := time.Now()
 	defer func() {
@@ -104,7 +111,7 @@ type Reader struct {
 // Next returns the next chunk data and its position in the WAL.
 // If there is no data, io. EOF will be returned.
 // The position can be used to read the data from the segment file.
-func (r *Reader) Next() ([]byte, Offset, error) {
+func (r *Reader) Next() ([]byte, *Offset, error) {
 	startTime := time.Now()
 	defer func() {
 		r.metrics.MeasureSinceWithLabels(walMetricsReadLatency, startTime, r.label)
@@ -121,7 +128,7 @@ func (r *Reader) CurrentSegmentID() uint32 {
 	return r.appendReader.CurrentSegmentId()
 }
 
-func (r *Reader) CurrentOffset() Offset {
+func (r *Reader) CurrentOffset() *Offset {
 	return r.appendReader.CurrentChunkPosition()
 }
 
@@ -136,11 +143,40 @@ func (w *WalIO) NewReader() (*Reader, error) {
 }
 
 // NewReaderWithStart returns a new instance of WIOReader from the provided Offset.
-func (w *WalIO) NewReaderWithStart(offset Offset) (*Reader, error) {
+func (w *WalIO) NewReaderWithStart(offset *Offset) (*Reader, error) {
 	reader, err := w.appendLog.NewReaderWithStart(offset)
 	return &Reader{
 		appendReader: reader,
 		label:        w.label,
 		metrics:      w.metrics,
 	}, err
+}
+
+// GetTransactionRecords returns all the WalRecord that is part of the particular Txn.
+func (w *WalIO) GetTransactionRecords(startOffset *Offset) ([]*walrecord.WalRecord, error) {
+	if startOffset == nil {
+		return nil, nil
+	}
+
+	var records []*walrecord.WalRecord
+	nextOffset := startOffset
+
+	for {
+		walEntry, err := w.Read(nextOffset)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read WAL at offset %+v: %w", nextOffset, err)
+		}
+
+		record := walrecord.GetRootAsWalRecord(walEntry, 0)
+		records = append(records, record)
+
+		if record.PrevTxnWalIndexLength() == 0 {
+			break
+		}
+
+		nextOffset = DecodeOffset(record.PrevTxnWalIndexBytes())
+	}
+
+	slices.Reverse(records)
+	return records, nil
 }
