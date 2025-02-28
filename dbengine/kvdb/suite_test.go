@@ -98,6 +98,10 @@ func getTestSuites(factory *testSuite) []suite {
 			name:    "store_and_retrieve_metadata",
 			runFunc: factory.TestStoreMetadataAndRetrieveMetadata,
 		},
+		{
+			name:    "store_and_delete_many_chunk_full_value",
+			runFunc: factory.TestSetGetAndDeleteMany_Combined,
+		},
 	}
 }
 
@@ -296,4 +300,44 @@ func (s *testSuite) TestRetrieveMetadata(t *testing.T) {
 	assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
 	assert.Nil(t, retrievedValue, "Retrieved value should be nil")
 
+}
+
+func (s *testSuite) TestSetGetAndDeleteMany_Combined(t *testing.T) {
+	key := []byte("chunked_key_to_be_deleted")
+	chunks := [][]byte{
+		[]byte("chunk_1_"),
+		[]byte("chunk_2_"),
+		[]byte("chunk_3"),
+	}
+
+	var checksum uint32
+	for i := 0; i < len(chunks); i++ {
+		checksum = crc32.Update(checksum, crc32.IEEETable, chunks[i])
+	}
+
+	keys := make([][]byte, len(chunks))
+	values := make([][]byte, len(chunks))
+	for i := 0; i < len(chunks); i++ {
+		keys[i] = []byte(gofakeit.UUID())
+		values[i] = []byte(gofakeit.LetterN(uint(i + 1)))
+		assert.NoError(t, s.store.Set(keys[i], values[i]), "Failed to set value")
+	}
+
+	assert.NoError(t, s.store.SetChunks(key, chunks, checksum), "Failed to set chunks")
+
+	nonExistentKey := gofakeit.UUID()
+	keysToBeDeleted := make([][]byte, 0)
+
+	keysToBeDeleted = append(keysToBeDeleted, keys...)
+	keysToBeDeleted = append(keysToBeDeleted, key)
+	keysToBeDeleted = append(keysToBeDeleted, []byte(nonExistentKey))
+	
+	err := s.store.DeleteMany(keysToBeDeleted)
+	assert.NoError(t, err, "Failed to delete many keys")
+
+	for _, key := range keysToBeDeleted {
+		retrievedValue, err := s.store.Get(key)
+		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "Failed to retrieve value")
+		assert.Nil(t, retrievedValue, "Retrieved value should be nil")
+	}
 }

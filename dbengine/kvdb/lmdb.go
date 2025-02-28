@@ -295,7 +295,10 @@ func (l *LmdbEmbed) DeleteMany(keys [][]byte) error {
 				if len(storedValue) < 9 {
 					return fmt.Errorf("invalid chunk metadata for key %s: %w", string(key), ErrInvalidChunkMetadata)
 				}
-				return l.deleteChunk(key, storedValue, txn)
+
+				if err := l.deleteChunk(key, storedValue, txn); err != nil {
+					return err
+				}
 			default:
 				return fmt.Errorf("invalid data format for key %s: %w", string(key), ErrInvalidDataFormat)
 			}

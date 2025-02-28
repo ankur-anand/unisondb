@@ -240,7 +240,9 @@ func (b *BoltDBEmbed) DeleteMany(keys [][]byte) error {
 					return ErrInvalidChunkMetadata
 				}
 
-				return b.deleteChunk(key, storedValue, bucket)
+				if err := b.deleteChunk(key, storedValue, bucket); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
