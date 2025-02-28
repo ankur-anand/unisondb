@@ -16,7 +16,7 @@ var (
 )
 
 var (
-	sysBucketMetaData = "storage-metadata"
+	sysBucketMetaData = "sys.kv.alchemy.wal.metadata.bucket"
 	packageKey        = []string{"kvalchemy", "kvdb"}
 )
 

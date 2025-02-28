@@ -2,7 +2,6 @@ package dbengine
 
 import (
 	"errors"
-	"fmt"
 	"log/slog"
 
 	"github.com/ankur-anand/kvalchemy/dbengine/wal"
@@ -81,9 +80,7 @@ func (table *memTable) opsCount() int {
 	return table.opCount
 }
 
-// flush writes all entries from MemTable to BoltDB.
-//
-//nolint:unused
+// flush writes all entries from MemTable to BtreeStore.
 func (table *memTable) flush() (int, error) {
 	slog.Debug("Flushing MemTable to BtreeStore...", "namespace", table.namespace)
 
@@ -158,16 +155,5 @@ func (table *memTable) processBatch(setKeys, setValues, deleteKeys *[][]byte) er
 
 // flushChunkedTxnCommit returns the number of batch record that was inserted.
 func (table *memTable) flushChunkedTxnCommit(record *walrecord.WalRecord) (int, error) {
-	checksum := unmarshalChecksum(record.ValueBytes())
-	records, err := table.wIO.GetTransactionRecords(wal.DecodeOffset(record.PrevTxnWalIndexBytes()))
-	if err != nil {
-		return 0, fmt.Errorf("failed to reconstruct batch value: %w", err)
-	}
-
-	var values [][]byte
-	for _, record := range records {
-		values = append(values, record.ValueBytes())
-	}
-
-	return len(records), table.db.SetChunks(record.KeyBytes(), values, checksum)
+	return handleChunkedValuesTxn(record, table.wIO, table.db)
 }

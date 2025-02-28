@@ -386,7 +386,7 @@ func generateNFBRecord(t *testing.T, n uint64) map[string][]byte {
 
 	kv := make(map[string][]byte)
 	for i := uint64(0); i < n; i++ {
-		key := gofakeit.FirstName()
+		key := gofakeit.UUID()
 		val := gofakeit.LetterN(110)
 		record := walrecord.Record{
 			Index:         i,
@@ -409,7 +409,7 @@ func generateNFBRecord(t *testing.T, n uint64) map[string][]byte {
 }
 
 func generateNChunkFBRecord(t *testing.T, n uint64) (string, []walrecord.Record, uint32) {
-	key := gofakeit.FirstName()
+	key := gofakeit.UUID()
 	values := make([]walrecord.Record, 0, n)
 
 	startRecord := walrecord.Record{

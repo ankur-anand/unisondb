@@ -37,6 +37,11 @@ var (
 	metaValueInsert         = byte(walrecord.LogOperationInsert)
 )
 
+var (
+	sysKeyWalCheckPoint = []byte("sys.kv.alchemy.key.wal.checkpoint")
+	sysKeyBloomFilter   = []byte("sys.kv.alchemy.key.bloom-filter")
+)
+
 // BtreeWriter defines the interface for interacting with a B-tree based storage
 // for setting individual values, chunks and many value at once.
 type BtreeWriter interface {
@@ -141,4 +146,12 @@ func unmarshalChecksum(data []byte) uint32 {
 		return 0
 	}
 	return binary.LittleEndian.Uint32(data)
+}
+
+// EngineConfig embeds all the config needed for Engine.
+type EngineConfig struct {
+	ValueThreshold int64       `toml:"value_threshold"`
+	ArenaSize      int64       `toml:"arena_size"`
+	WalConfig      wal.Config  `toml:"wal_config"`
+	BtreeConfig    kvdb.Config `toml:"btree_config"`
 }
