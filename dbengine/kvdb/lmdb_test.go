@@ -15,8 +15,7 @@ import (
 func TestLMDB_Suite(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "lmdb_test.lmdb")
-	store, err := kv2.NewLmdb(kv2.Config{
-		Path:      path,
+	store, err := kv2.NewLmdb(path, kv2.Config{
 		Namespace: "test",
 		NoSync:    false,
 		MmapSize:  1 << 20,
@@ -36,8 +35,8 @@ func TestLMDB_Suite(t *testing.T) {
 	assert.NoError(t, err, "failed to create lmdb")
 	assert.NotNil(t, store, "store should not be nil")
 
-	lmdbConstructor := func(config kv2.Config) (bTreeStore, error) {
-		return kv2.NewLmdb(config)
+	lmdbConstructor := func(path string, config kv2.Config) (bTreeStore, error) {
+		return kv2.NewLmdb(path, config)
 	}
 
 	ts := &testSuite{

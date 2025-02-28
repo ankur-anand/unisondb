@@ -51,7 +51,7 @@ type bTreeStore interface {
 
 // testSuite defines all the test cases that is common in both the lmdb and boltdb.
 type testSuite struct {
-	dbConstructor func(config kvdb.Config) (bTreeStore, error)
+	dbConstructor func(path string, config kvdb.Config) (bTreeStore, error)
 	store         bTreeStore
 }
 
@@ -239,12 +239,11 @@ func (s *testSuite) TestSnapshotAndRetrieve(t *testing.T) {
 	restoreDir := t.TempDir()
 	path := filepath.Join(restoreDir, "snapshot")
 	conf := kvdb.Config{
-		Path:      path,
 		Namespace: "test",
 		NoSync:    true,
 		MmapSize:  1 << 30,
 	}
-	restoreDB, err := s.dbConstructor(conf)
+	restoreDB, err := s.dbConstructor(path, conf)
 	assert.NoError(t, err, "Failed to create db constructor")
 	err = restoreDB.Restore(bytes.NewReader(buf.Bytes()))
 	assert.NoError(t, err, "Failed to restore")
@@ -331,7 +330,7 @@ func (s *testSuite) TestSetGetAndDeleteMany_Combined(t *testing.T) {
 	keysToBeDeleted = append(keysToBeDeleted, keys...)
 	keysToBeDeleted = append(keysToBeDeleted, key)
 	keysToBeDeleted = append(keysToBeDeleted, []byte(nonExistentKey))
-	
+
 	err := s.store.DeleteMany(keysToBeDeleted)
 	assert.NoError(t, err, "Failed to delete many keys")
 

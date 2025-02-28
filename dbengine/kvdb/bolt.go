@@ -34,10 +34,11 @@ type BoltDBEmbed struct {
 	namespace []byte
 	label     []metrics.Label
 	conf      Config
+	path      string
 }
 
-func NewBoltdb(conf Config) (*BoltDBEmbed, error) {
-	db, err := bbolt.Open(conf.Path, 0600, nil)
+func NewBoltdb(path string, conf Config) (*BoltDBEmbed, error) {
+	db, err := bbolt.Open(path, 0600, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -54,6 +55,7 @@ func NewBoltdb(conf Config) (*BoltDBEmbed, error) {
 		namespace: []byte(conf.Namespace),
 		label:     l,
 		conf:      conf,
+		path:      path,
 	}, err
 }
 
@@ -362,11 +364,11 @@ func (b *BoltDBEmbed) Restore(reader io.Reader) error {
 		return err
 	}
 
-	if err := os.Remove(b.conf.Path); err != nil {
+	if err := os.Remove(b.path); err != nil {
 		return err
 	}
 
-	newDBFile, err := os.Create(b.conf.Path)
+	newDBFile, err := os.Create(b.path)
 	if err != nil {
 		return fmt.Errorf("failed to create new database file: %w", err)
 	}
@@ -380,7 +382,7 @@ func (b *BoltDBEmbed) Restore(reader io.Reader) error {
 		return fmt.Errorf("failed to close new database file: %w", err)
 	}
 
-	db, err := bbolt.Open(b.conf.Path, 0600, nil)
+	db, err := bbolt.Open(b.path, 0600, nil)
 	if err != nil {
 		return fmt.Errorf("failed to open new database file: %w", err)
 	}

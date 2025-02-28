@@ -15,8 +15,7 @@ import (
 func TestBolt_Suite(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "bolt_test.bolt.db")
-	store, err := kv2.NewBoltdb(kv2.Config{
-		Path:      path,
+	store, err := kv2.NewBoltdb(path, kv2.Config{
 		Namespace: "test",
 		NoSync:    true,
 	})
@@ -33,8 +32,8 @@ func TestBolt_Suite(t *testing.T) {
 		panic(err)
 	}
 
-	boltConstructor := func(config kv2.Config) (bTreeStore, error) {
-		return kv2.NewBoltdb(config)
+	boltConstructor := func(path string, config kv2.Config) (bTreeStore, error) {
+		return kv2.NewBoltdb(path, config)
 	}
 
 	ts := &testSuite{

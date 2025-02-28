@@ -17,8 +17,7 @@ func setupTestDB(t *testing.T) *BoltDBEmbed {
 	dir := t.TempDir()
 	tempFile := filepath.Join(dir, "test.db")
 
-	db, err := NewBoltdb(Config{
-		Path:      tempFile,
+	db, err := NewBoltdb(tempFile, Config{
 		Namespace: testNamespace,
 		NoSync:    false,
 	})

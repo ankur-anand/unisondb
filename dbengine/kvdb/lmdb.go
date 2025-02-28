@@ -48,10 +48,10 @@ func (l *LmdbEmbed) FSync() error {
 }
 
 // NewLmdb returns an initialized Lmdb Env with the provided configuration Parameter.
-func NewLmdb(conf Config) (*LmdbEmbed, error) {
+func NewLmdb(path string, conf Config) (*LmdbEmbed, error) {
 	// Create directory if it doesn't exist
-	if err := os.MkdirAll(conf.Path, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create directory %s: %w", conf.Path, err)
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create directory %s: %w", path, err)
 	}
 
 	env, err := lmdb.NewEnv()
@@ -70,7 +70,7 @@ func NewLmdb(conf Config) (*LmdbEmbed, error) {
 		return nil, fmt.Errorf("failed to set map size: %w", err)
 	}
 
-	err = env.Open(conf.Path, lmdb.Create|lmdb.NoReadahead, 0644)
+	err = env.Open(path, lmdb.Create|lmdb.NoReadahead, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open environment: %w", err)
 	}

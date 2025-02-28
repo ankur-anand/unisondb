@@ -21,7 +21,6 @@ var (
 )
 
 type Config struct {
-	Path      string
 	Namespace string
 	NoSync    bool
 	MmapSize  int64
