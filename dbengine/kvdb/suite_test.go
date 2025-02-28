@@ -91,6 +91,10 @@ func getTestSuites(factory *testSuite) []suite {
 			runFunc: factory.TestNonExistentDelete,
 		},
 		{
+			name:    "retrieve_empty_metadata",
+			runFunc: factory.TestRetrieveMetadata,
+		},
+		{
 			name:    "store_and_retrieve_metadata",
 			runFunc: factory.TestStoreMetadataAndRetrieveMetadata,
 		},
@@ -284,4 +288,12 @@ func (s *testSuite) TestStoreMetadataAndRetrieveMetadata(t *testing.T) {
 	retrievedValue, err := s.store.RetrieveMetadata(key)
 	assert.NoError(t, err, "Failed to retrieve metadata")
 	assert.Equal(t, metadata, string(retrievedValue), "Retrieved metadata does not match")
+}
+
+func (s *testSuite) TestRetrieveMetadata(t *testing.T) {
+	key := []byte("hello")
+	retrievedValue, err := s.store.RetrieveMetadata(key)
+	assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
+	assert.Nil(t, retrievedValue, "Retrieved value should be nil")
+
 }

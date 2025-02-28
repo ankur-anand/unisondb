@@ -101,6 +101,16 @@ func NewLmdb(conf Config) (*LmdbEmbed, error) {
 		return nil, err
 	}
 
+	// created for storing system metadata.
+	err = env.Update(func(txn *lmdb.Txn) error {
+		var err error
+		db, err = txn.OpenDBI(sysBucketMetaData, lmdb.Create)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	l := []metrics.Label{{Name: "namespace", Value: conf.Namespace}}
 	return &LmdbEmbed{env: env, db: db, namespace: []byte(conf.Namespace), label: l}, nil
 }
