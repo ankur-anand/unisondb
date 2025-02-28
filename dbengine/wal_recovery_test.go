@@ -8,6 +8,7 @@ import (
 	"github.com/ankur-anand/kvalchemy/dbengine/kvdb"
 	"github.com/ankur-anand/kvalchemy/dbengine/wal"
 	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
+	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/assert"
@@ -32,8 +33,7 @@ func TestWalRecovery(t *testing.T) {
 
 	dbFile := filepath.Join(tdir, "test_flush.db")
 
-	db, err := kvdb.NewLmdb(kvdb.Config{
-		Path:      dbFile,
+	db, err := kvdb.NewLmdb(dbFile, kvdb.Config{
 		Namespace: testNamespace,
 		NoSync:    true,
 		MmapSize:  1 << 30,
@@ -48,7 +48,7 @@ func TestWalRecovery(t *testing.T) {
 	allCommitedKeys := make(map[string]struct{})
 	unCommitedKeys := make(map[string]struct{})
 	allCommitedDeleteKeys := make(map[string]struct{})
-
+	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001)
 	// 50 full insert value.
 	recordCount := 50
 	kv := generateNFBRecord(t, uint64(recordCount))
@@ -93,6 +93,7 @@ func TestWalRecovery(t *testing.T) {
 	recoveryInstance := &walRecovery{
 		store: db,
 		walIO: walInstance,
+		bloom: bloomFilter,
 	}
 
 	t.Run("full_value_insert_chunk_recovery", func(t *testing.T) {
@@ -265,6 +266,7 @@ func TestWalRecovery(t *testing.T) {
 		recovery := &walRecovery{
 			store: db,
 			walIO: walInstance,
+			bloom: bloomFilter,
 		}
 		err = recovery.recoverWAL()
 		assert.NoError(t, err, "failed to recover wal")
@@ -340,6 +342,7 @@ func TestWalRecovery(t *testing.T) {
 		recovery := &walRecovery{
 			store: db,
 			walIO: walInstance,
+			bloom: bloomFilter,
 		}
 		err = recovery.recoverWAL()
 		assert.NoError(t, err, "failed to recover wal")

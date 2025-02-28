@@ -8,6 +8,7 @@ import (
 	"github.com/ankur-anand/kvalchemy/dbengine/kvdb"
 	"github.com/ankur-anand/kvalchemy/dbengine/wal"
 	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
+	"github.com/bits-and-blooms/bloom/v3"
 )
 
 type walRecovery struct {
@@ -15,6 +16,7 @@ type walRecovery struct {
 	walIO            *wal.WalIO
 	recoveredCount   int
 	lastRecoveredPos *wal.Offset
+	bloom            *bloom.BloomFilter
 }
 
 // recoverWAL recover wal from last check point saved in btree store.
@@ -72,6 +74,7 @@ func (wr *walRecovery) handleRecord(record *walrecord.WalRecord) error {
 		wr.recoveredCount++
 		switch record.Operation() {
 		case walrecord.LogOperationInsert:
+			wr.bloom.Add(record.KeyBytes())
 			return wr.store.Set(record.KeyBytes(), record.ValueBytes())
 		case walrecord.LogOperationDelete:
 			return wr.store.Delete(record.KeyBytes())
@@ -114,6 +117,7 @@ func (wr *walRecovery) handleFullValuesTxn(record *walrecord.WalRecord) error {
 	values := make([][]byte, len(preparedRecords))
 	keys := make([][]byte, len(preparedRecords))
 	for i, pRecord := range preparedRecords {
+		wr.bloom.Add(pRecord.KeyBytes())
 		keys[i] = pRecord.KeyBytes()
 		values[i] = pRecord.ValueBytes()
 	}
@@ -133,5 +137,6 @@ func (wr *walRecovery) handleFullValuesTxn(record *walrecord.WalRecord) error {
 func (wr *walRecovery) handleChunkedValuesTxn(record *walrecord.WalRecord) error {
 	count, err := handleChunkedValuesTxn(record, wr.walIO, wr.store)
 	wr.recoveredCount += count
+	wr.bloom.Add(record.KeyBytes())
 	return err
 }

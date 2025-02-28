@@ -24,8 +24,7 @@ func setupMemTableWithLMDB(t *testing.T, capacity int64) *memTable {
 
 	dbFile := filepath.Join(dir, "test_flush.db")
 
-	db, err := kvdb.NewLmdb(kvdb.Config{
-		Path:      dbFile,
+	db, err := kvdb.NewLmdb(dbFile, kvdb.Config{
 		Namespace: testNamespace,
 		NoSync:    true,
 		MmapSize:  1 << 30,
@@ -57,8 +56,7 @@ func setupMemTableWithBoltDB(t *testing.T, capacity int64) *memTable {
 
 	dbFile := filepath.Join(dir, "test_flush.db")
 
-	db, err := kvdb.NewBoltdb(kvdb.Config{
-		Path:      dbFile,
+	db, err := kvdb.NewBoltdb(dbFile, kvdb.Config{
 		Namespace: testNamespace,
 		NoSync:    true,
 		MmapSize:  1 << 30,
