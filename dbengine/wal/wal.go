@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
+	"github.com/ankur-anand/wal"
 	"github.com/hashicorp/go-metrics"
 	"github.com/pkg/errors"
-	"github.com/rosedblabs/wal"
 )
 
 var (

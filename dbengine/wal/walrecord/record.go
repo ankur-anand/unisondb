@@ -3,8 +3,8 @@ package walrecord
 import (
 	"hash/crc32"
 
+	"github.com/ankur-anand/wal"
 	flatbuffers "github.com/google/flatbuffers/go"
-	"github.com/rosedblabs/wal"
 )
 
 // Record is what gets encoded for flat-buffer schema.

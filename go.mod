@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/PowerDNS/lmdb-go v1.9.3
+	github.com/ankur-anand/wal v0.0.3
 	github.com/bits-and-blooms/bloom/v3 v3.7.0
 	github.com/brianvoe/gofakeit/v7 v7.2.1
 	github.com/dgraph-io/badger/v4 v4.5.1
@@ -17,7 +18,6 @@ require (
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.21.0
 	github.com/prometheus/common v0.62.0
-	github.com/rosedblabs/wal v1.3.8
 	github.com/segmentio/ksuid v1.0.4
 	github.com/stretchr/testify v1.10.0
 	go.etcd.io/bbolt v1.4.0
@@ -48,9 +48,6 @@ require (
 	google.golang.org/genproto v0.0.0-20230410155749-daa745c078e1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-// replacing for #https://github.com/rosedblabs/wal/pull/45
-replace github.com/rosedblabs/wal v1.3.8 => github.com/ankur-anand/wal v0.0.2
 
 //tool (
 //	github.com/ajstarks/svgo/structlayout-svg
