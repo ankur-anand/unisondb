@@ -282,3 +282,17 @@ func (e *Engine) Close(ctx context.Context) error {
 
 	return e.close(ctx)
 }
+
+type Reader = wal.Reader
+
+// NewReader return a reader that reads from the beginning, until EOF is encountered.
+// It returns io.EOF when it reaches end of file.
+func (e *Engine) NewReader() (*Reader, error) {
+	return e.walIO.NewReader()
+}
+
+// NewReaderWithStart return a reader that reads from provided offset, until EOF is encountered.
+// It returns io.EOF when it reaches end of file.
+func (e *Engine) NewReaderWithStart(startPos *Offset) (*Reader, error) {
+	return e.walIO.NewReaderWithStart(startPos)
+}

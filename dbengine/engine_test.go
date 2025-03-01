@@ -188,7 +188,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	_, err = engine.BtreeSnapshot(f)
 	assert.NoError(t, err)
 	err = f.Close()
-
+	assert.NoError(t, err)
 	name := f.Name()
 	f.Close()
 

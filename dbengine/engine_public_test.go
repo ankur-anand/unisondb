@@ -2,12 +2,16 @@ package dbengine_test
 
 import (
 	"context"
+	"errors"
+	"io"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/ankur-anand/kvalchemy/dbengine"
+	"github.com/ankur-anand/kvalchemy/dbengine/compress"
+	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 )
@@ -252,4 +256,75 @@ func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
 	err = engine.Put(key, value)
 	assert.NoError(t, err, "Put operation should succeed")
 	wg.Wait()
+}
+
+func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_persistence"
+
+	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.Close(context.Background())
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+
+	putKey := []byte("test-key")
+	putValue := []byte("test-value")
+
+	putKV := make(map[string][]byte)
+	putKV[string(putKey)] = putValue
+
+	eof := make(chan struct{})
+	read := func(reader *dbengine.Reader) {
+		err := engine.WaitForAppend(context.Background(), 1*time.Minute, nil)
+		assert.NoError(t, err, "WaitForAppend should return without timeout after Put")
+		for {
+			value, _, err := reader.Next()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					eof <- struct{}{}
+					break
+				}
+				assert.NoError(t, err, "Reader should only return EOF Error")
+			}
+			record := walrecord.GetRootAsWalRecord(value, 0)
+			decompressed, err := compress.DecompressLZ4(record.ValueBytes())
+			assert.NoError(t, err, "Decompress should not fail for valid compressed value")
+			assert.Equal(t, putKV[string(record.KeyBytes())], decompressed, "decompressed value should be equal to put value")
+		}
+	}
+
+	reader, err := engine.NewReader()
+	assert.NoError(t, err, "NewReader should return without error")
+	go read(reader)
+
+	err = engine.Put(putKey, putValue)
+	assert.NoError(t, err, "Put operation should succeed")
+
+	select {
+	case <-eof:
+	case <-time.After(5 * time.Second):
+		t.Errorf("timeout waiting for eof error")
+	}
+
+	for i := 0; i < 10; i++ {
+		putKV[gofakeit.UUID()] = []byte(gofakeit.Sentence(20))
+	}
+
+	reader, err = engine.NewReaderWithStart(engine.CurrentOffset())
+	assert.NoError(t, err, "NewReader should return without error")
+	go read(reader)
+
+	for k, v := range putKV {
+		err = engine.Put([]byte(k), v)
+		assert.NoError(t, err, "Put operation should succeed")
+	}
+	select {
+	case <-eof:
+	case <-time.After(5 * time.Second):
+		t.Errorf("timeout waiting for eof error")
+	}
 }
