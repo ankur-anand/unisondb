@@ -436,19 +436,19 @@ type flushedMetadata struct {
 }
 
 type pendingMetadata struct {
-	sync.Mutex
+	mu                    sync.Mutex
 	pendingMetadataWrites []*flushedMetadata
 }
 
 func (p *pendingMetadata) queueMetadata(metadata *flushedMetadata) {
-	p.Lock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.pendingMetadataWrites = append(p.pendingMetadataWrites, metadata)
-	p.Unlock()
 }
 
 func (p *pendingMetadata) dequeueMetadata() (*flushedMetadata, int) {
-	p.Lock()
-	defer p.Unlock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if len(p.pendingMetadataWrites) == 0 {
 		return nil, 0
 	}
