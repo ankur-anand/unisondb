@@ -31,6 +31,9 @@ var (
 	engineMetricsSnapshotBytesTotal = append(packageKey, "snapshot", "bytes", "total")
 )
 
+// Offset represents the offset in the wal.
+type Offset = wal.Offset
+
 // RecoveredWALCount returns the number of WAL entries successfully recovered.
 func (e *Engine) RecoveredWALCount() int {
 	return e.recoveredEntriesCount
@@ -73,6 +76,11 @@ func (e *Engine) OpsReceivedCount() uint64 {
 // OpsFlushedCount returns the total number of Put and Delete operations flushed to BtreeStore.
 func (e *Engine) OpsFlushedCount() uint64 {
 	return e.opsFlushedCounter.Load()
+}
+
+// CurrentOffset returns the current offset that it has seen.
+func (e *Engine) CurrentOffset() *Offset {
+	return e.currentOffset.Load()
 }
 
 // GetWalCheckPoint returns the last checkpoint metadata saved in the database.
@@ -119,18 +127,17 @@ func (e *Engine) Delete(key []byte) error {
 	return e.persistKeyValue(key, nil, walrecord.LogOperationDelete)
 }
 
-// WaitForAppend blocks until a put/delete operation occurs or timeout/context is reached.
-func (e *Engine) WaitForAppend(ctx context.Context, timeout time.Duration, lastSeen *wal.Offset) error {
+// WaitForAppend blocks until a put/delete operation occurs or timeout happens or context cancelled is done.
+func (e *Engine) WaitForAppend(ctx context.Context, timeout time.Duration, lastSeen *Offset) error {
 	currentPos := e.currentOffset.Load()
 	if currentPos != nil && isNewChunkPosition(currentPos, lastSeen) {
 		return nil
 	}
 
-	e.notifierMu.Lock()
-	defer e.notifierMu.Unlock()
-
 	done := make(chan struct{})
 	go func() {
+		e.notifierMu.Lock()
+		defer e.notifierMu.Unlock()
 		e.notifier.Wait()
 		close(done)
 	}()
@@ -145,7 +152,7 @@ func (e *Engine) WaitForAppend(ctx context.Context, timeout time.Duration, lastS
 	}
 }
 
-func isNewChunkPosition(current, lastSeen *wal.Offset) bool {
+func isNewChunkPosition(current, lastSeen *Offset) bool {
 	if lastSeen == nil {
 		return true
 	}
