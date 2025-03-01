@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // nolint
-package xy
+package etc
 
 import (
 	"bytes"

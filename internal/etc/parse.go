@@ -1,4 +1,4 @@
-package xy
+package etc
 
 import (
 	"strconv"

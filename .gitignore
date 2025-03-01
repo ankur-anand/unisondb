@@ -18,3 +18,10 @@ tmp
 *.crt
 *.key
 .venv
+*.svg
+venv
+*.db
+*.png
+*.csv
+*.txt
+*.prof

@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"github.com/ankur-anand/kvalchemy/cmd/replicator/config"
+	"github.com/ankur-anand/kvalchemy/internal/etc"
 	"github.com/ankur-anand/kvalchemy/internal/middleware"
-	"github.com/ankur-anand/kvalchemy/internal/xy"
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
 	"github.com/ankur-anand/kvalchemy/services/kvstore"
 	"github.com/ankur-anand/kvalchemy/services/replicator"
@@ -138,7 +138,7 @@ func (ms *mainServer) setupStorageConfig(ctx context.Context) error {
 
 	for field, value := range storageSettings {
 		if value != "" {
-			*field = xy.ParseSize(value)
+			*field = etc.ParseSize(value)
 		}
 	}
 	ms.storageConfig = storeConfig
