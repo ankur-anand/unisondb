@@ -230,7 +230,7 @@ func TestWalRecovery(t *testing.T) {
 		assert.NoError(t, err, "failed to save metadata")
 	})
 
-	t.Run("validate btree store", func(t *testing.T) {
+	t.Run("validate btree dataStore", func(t *testing.T) {
 		assert.NoError(t, db.FSync())
 		for k := range allCommitedKeys {
 			value, err := db.Get([]byte(k))

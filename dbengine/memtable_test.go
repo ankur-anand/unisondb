@@ -1,6 +1,7 @@
 package dbengine
 
 import (
+	"context"
 	"hash/crc32"
 	"os"
 	"path/filepath"
@@ -135,7 +136,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 			assert.NoError(t, err)
 		}
 
-		count, err := memTable.flush()
+		count, err := memTable.flush(context.Background())
 		assert.NoError(t, err, "failed to flush")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
@@ -183,7 +184,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		err = memTable.put([]byte(key), vs, offset)
 		assert.NoError(t, err)
 
-		count, err := memTable.flush()
+		count, err := memTable.flush(context.Background())
 		assert.NoError(t, err, "failed to flush")
 		assert.Equal(t, recordCount+2, count, "expected records to be flushed")
 
@@ -205,7 +206,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 			assert.NoError(t, err)
 		}
 
-		count, err := memTable.flush()
+		count, err := memTable.flush(context.Background())
 		assert.NoError(t, err, "failed to flush")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
@@ -232,7 +233,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 			assert.NoError(t, err)
 		}
 
-		count, err := memTable.flush()
+		count, err := memTable.flush(context.Background())
 		assert.NoError(t, err, "failed to flush")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
@@ -280,7 +281,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		err = memTable.put([]byte(key), vs, offset)
 		assert.NoError(t, err)
 
-		count, err := memTable.flush()
+		count, err := memTable.flush(context.Background())
 		assert.NoError(t, err, "failed to flush")
 		assert.Equal(t, recordCount+2, count, "expected records to be flushed")
 
@@ -302,7 +303,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 			assert.NoError(t, err)
 		}
 
-		count, err := memTable.flush()
+		count, err := memTable.flush(context.Background())
 		assert.NoError(t, err, "failed to flush")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
@@ -331,7 +332,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 			assert.NoError(t, err)
 		}
 
-		count, err := memTable.flush()
+		count, err := memTable.flush(context.Background())
 		assert.NoError(t, err, "failed to flush")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
@@ -369,7 +370,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 			assert.NoError(t, err)
 		}
 
-		count, err := memTable.flush()
+		count, err := memTable.flush(context.Background())
 		assert.NoError(t, err, "failed to flush")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k := range kv {
@@ -449,6 +450,6 @@ func generateNChunkFBRecord(t *testing.T, n uint64) (string, []walrecord.Record,
 func TestFlush_EmptyMemTable(t *testing.T) {
 	mmTable := setupMemTableWithBoltDB(t, 1<<10)
 
-	_, err := mmTable.flush()
+	_, err := mmTable.flush(context.Background())
 	assert.NoError(t, err)
 }

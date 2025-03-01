@@ -3,6 +3,7 @@ package wal
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"slices"
 	"time"
 
@@ -71,6 +72,16 @@ func (w *WalIO) Sync() error {
 }
 
 func (w *WalIO) Close() error {
+	_, err := w.appendLog.WriteAll()
+	if err != nil {
+		slog.Error("[kvalchemy.wal] write to log file failed]", "error", err)
+		w.metrics.IncrCounterWithLabels(walMetricsAppendErrors, 1, w.label)
+	}
+	err = w.Sync()
+	if err != nil {
+		slog.Error("[kvalchemy.wal] Fsync to log file failed]", "error", err)
+		w.metrics.IncrCounterWithLabels(walMetricsFSyncErrors, 1, w.label)
+	}
 	return w.appendLog.Close()
 }
 

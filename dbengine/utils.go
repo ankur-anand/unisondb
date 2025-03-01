@@ -10,7 +10,7 @@ import (
 )
 
 // handleChunkedValuesTxn saves all the chunked value that is part of the current commit txn.
-// to the provided btree based store.
+// to the provided btree based dataStore.
 // extracted in util as both memTable and wal recovery instance uses it.
 func handleChunkedValuesTxn(record *walrecord.WalRecord, walIO *wal.WalIO, store BTreeStore) (int, error) {
 	checksum := unmarshalChecksum(record.ValueBytes())

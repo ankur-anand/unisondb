@@ -1,6 +1,7 @@
 package dbengine
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 
@@ -76,12 +77,8 @@ func (table *memTable) get(key []byte) y.ValueStruct {
 	return table.skipList.Get(y.KeyWithTs(key, 0))
 }
 
-func (table *memTable) opsCount() int {
-	return table.opCount
-}
-
 // flush writes all entries from MemTable to BtreeStore.
-func (table *memTable) flush() (int, error) {
+func (table *memTable) flush(ctx context.Context) (int, error) {
 	slog.Debug("Flushing MemTable to BtreeStore...", "namespace", table.namespace)
 
 	// Create an iterator for the MemTable
@@ -95,6 +92,9 @@ func (table *memTable) flush() (int, error) {
 	var setKeys, setValues, deleteKeys [][]byte
 
 	for it.SeekToFirst(); it.Valid(); it.Next() {
+		if ctx.Err() != nil {
+			return count, ctx.Err()
+		}
 		count++
 		key := y.ParseKey(it.Key())
 		entry := it.Value()
