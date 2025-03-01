@@ -15,12 +15,11 @@ import (
 	"time"
 
 	"github.com/ankur-anand/kvalchemy/cmd/replicator/config"
-	"github.com/ankur-anand/kvalchemy/internal/etc"
+	storage "github.com/ankur-anand/kvalchemy/dbengine"
 	"github.com/ankur-anand/kvalchemy/internal/middleware"
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
 	"github.com/ankur-anand/kvalchemy/services/kvstore"
 	"github.com/ankur-anand/kvalchemy/services/replicator"
-	"github.com/ankur-anand/kvalchemy/storage"
 	"github.com/hashicorp/go-metrics"
 	hashiprom "github.com/hashicorp/go-metrics/prometheus"
 	"github.com/pelletier/go-toml/v2"
@@ -90,7 +89,7 @@ type mainServer struct {
 	engines       map[string]*storage.Engine
 	grpcServer    *grpc.Server
 	httpServer    *http.Server
-	storageConfig *storage.StorageConfig
+	storageConfig *storage.EngineConfig
 
 	// callbacks when shutdown.
 	deferCallback []func(ctx context.Context)
@@ -127,20 +126,8 @@ func (ms *mainServer) initTelemetry(ctx context.Context) error {
 }
 
 func (ms *mainServer) setupStorageConfig(ctx context.Context) error {
-	storeConfig := storage.DefaultConfig()
+	storeConfig := storage.NewDefaultEngineConfig()
 
-	storageSettings := map[*int64]string{
-		&storeConfig.SegmentSize:    ms.cfg.Storage.SegmentSize,
-		&storeConfig.ValueThreshold: ms.cfg.Storage.ValueThreshold,
-		&storeConfig.ArenaSize:      ms.cfg.Storage.ArenaSize,
-		&storeConfig.BytesPerSync:   ms.cfg.Storage.BytesPerSync,
-	}
-
-	for field, value := range storageSettings {
-		if value != "" {
-			*field = etc.ParseSize(value)
-		}
-	}
 	ms.storageConfig = storeConfig
 	return nil
 }
@@ -151,7 +138,7 @@ func (ms *mainServer) setupStorage(ctx context.Context) error {
 		fatalIfErr(err)
 		ms.engines[namespace] = store
 		ms.deferCallback = append(ms.deferCallback, func(ctx context.Context) {
-			err := store.Close()
+			err := store.Close(ctx)
 			if err != nil {
 				slog.Error("[main] mainServer.setupStorage: close storage engine failed", "error", err)
 			}

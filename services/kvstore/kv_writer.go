@@ -6,11 +6,11 @@ import (
 	"io"
 	"time"
 
+	storage "github.com/ankur-anand/kvalchemy/dbengine"
+	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
 	"github.com/ankur-anand/kvalchemy/internal/middleware"
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
 	"github.com/ankur-anand/kvalchemy/services"
-	"github.com/ankur-anand/kvalchemy/storage"
-	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"google.golang.org/grpc"
 )
 
@@ -130,7 +130,7 @@ func (k *KVWriterService) PutStreamChunksForKey(g grpc.ClientStreamingServer[v1.
 func (k *KVWriterService) handleStartMarker(engine *storage.Engine,
 	g grpc.ClientStreamingServer[v1.PutStreamChunksForKeyRequest, v1.PutStreamChunksForKeyResponse],
 	req *v1.PutStreamChunksForKeyRequest_StartMarker) (*storage.Txn, error) {
-	batch, err := engine.NewTxn(wrecord.LogOperationInsert, wrecord.ValueTypeChunked)
+	batch, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.ValueTypeChunked)
 	if err != nil {
 		return nil, err
 	}

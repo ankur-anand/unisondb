@@ -9,9 +9,9 @@ import (
 	"math/rand/v2"
 	"time"
 
+	storage "github.com/ankur-anand/kvalchemy/dbengine"
+	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
-	"github.com/ankur-anand/kvalchemy/storage"
-	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/prometheus/common/helpers/templates"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -35,7 +35,7 @@ func NewStorageIO(engine *storage.Engine, namespace string) *StorageIO {
 }
 
 func (io *StorageIO) Write(data *v1.WALRecord) {
-	record := wrecord.GetRootAsWalRecord(data.Record, 0)
+	record := walrecord.GetRootAsWalRecord(data.Record, 0)
 	err := io.engine.Put(record.KeyBytes(), record.ValueBytes())
 	if err != nil {
 		slog.Error("[REPLICATOR] WalIO.Write error", "error", err)
