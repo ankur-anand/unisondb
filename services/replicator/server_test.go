@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
+	storage "github.com/ankur-anand/kvalchemy/dbengine"
+	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
 	"github.com/ankur-anand/kvalchemy/internal/middleware"
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
 	"github.com/ankur-anand/kvalchemy/services"
-	"github.com/ankur-anand/kvalchemy/storage"
-	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sync/errgroup"
@@ -52,7 +52,7 @@ func TestServer_Invalid_Request(t *testing.T) {
 
 	closeEngines := func(t *testing.T) {
 		for _, engine := range engines {
-			err := engine.Close()
+			err := engine.Close(context.Background())
 			if err != nil {
 				assert.NoError(t, err)
 			}
@@ -66,7 +66,7 @@ func TestServer_Invalid_Request(t *testing.T) {
 	}
 	defer os.RemoveAll(temp)
 	for _, nameSpace := range nameSpaces {
-		se, err := storage.NewStorageEngine(temp, nameSpace, nil)
+		se, err := storage.NewStorageEngine(temp, nameSpace, storage.NewDefaultEngineConfig())
 		if err != nil {
 			panic(err)
 		}
@@ -154,7 +154,7 @@ func TestServer_StreamWAL(t *testing.T) {
 
 	closeEngines := func(t *testing.T) {
 		for _, engine := range engines {
-			err := engine.Close()
+			err := engine.Close(context.Background())
 			if err != nil {
 				assert.NoError(t, err)
 			}
@@ -168,7 +168,7 @@ func TestServer_StreamWAL(t *testing.T) {
 	}
 	defer os.RemoveAll(temp)
 	for _, nameSpace := range nameSpaces {
-		se, err := storage.NewStorageEngine(temp, nameSpace, nil)
+		se, err := storage.NewStorageEngine(temp, nameSpace, storage.NewDefaultEngineConfig())
 		assert.NoError(t, err)
 		assert.NotNil(t, se)
 		// for each engine write the records, few of them being more than 1 MB in size.
@@ -262,7 +262,7 @@ func TestServer_StreamWAL(t *testing.T) {
 			valuesCount = +len(val.WalRecords)
 			for _, record := range val.WalRecords {
 				lastRecvIndex++
-				wr := wrecord.GetRootAsWalRecord(record.Record, 0)
+				wr := walrecord.GetRootAsWalRecord(record.Record, 0)
 				assert.NotNil(t, wr, "error converting to wal record")
 				assert.Equal(t, lastRecvIndex, wr.Index(), "last recv index does not match")
 			}

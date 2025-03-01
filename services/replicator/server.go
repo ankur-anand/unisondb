@@ -8,11 +8,11 @@ import (
 	"log/slog"
 	"time"
 
+	storage "github.com/ankur-anand/kvalchemy/dbengine"
+	"github.com/ankur-anand/kvalchemy/dbengine/wal"
 	"github.com/ankur-anand/kvalchemy/internal/middleware"
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
 	"github.com/ankur-anand/kvalchemy/services"
-	"github.com/ankur-anand/kvalchemy/storage"
-	"github.com/rosedblabs/wal"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -22,7 +22,7 @@ const (
 	eofRetryInterval       = 30 * time.Second
 	dynamicTimeout         = 1 * time.Minute
 	backPressureBufferSize = 5
-	batchFlushThreshold    = 500 * wal.KB
+	batchFlushThreshold    = 500 * 1024
 	batchFlushTimeout      = 50 * time.Millisecond
 )
 
@@ -64,13 +64,15 @@ func (s *WalReplicatorServer) StreamWAL(request *v1.StreamWALRequest, g grpc.Ser
 		return services.ToGRPCError(namespace, reqID, method, services.ErrInvalidMetadata)
 	}
 
-	wr := engine.NewWalReader()
-	var reader *wal.Reader
+	var reader *storage.Reader
 	var rErr error
 	if meta.RecordProcessed == 0 {
-		reader = wr.NewReader()
+		reader, rErr = engine.NewReader()
+		if rErr != nil {
+			return services.ToGRPCError(namespace, reqID, method, rErr)
+		}
 	} else {
-		reader, rErr = wr.NewReaderWithStart(meta.Pos)
+		reader, rErr = engine.NewReaderWithStart(meta.Pos)
 		if rErr != nil {
 			return services.ToGRPCError(namespace, reqID, method, rErr)
 		}
@@ -187,7 +189,7 @@ func (s *WalReplicatorServer) prefetchWalRecord(ctx context.Context, namespace s
 	// Track the last valid WAL record time
 	lastValidRecordTime := time.Now()
 	eofCount := 0
-	var lastValidChunkPos *wal.ChunkPosition // Store last valid position
+	var lastValidChunkPos *storage.Offset // Store last valid position
 	currentReader := reader
 
 	// skip1 when a new reader is rotated.
@@ -228,7 +230,7 @@ func (s *WalReplicatorServer) prefetchWalRecord(ctx context.Context, namespace s
 				time.Sleep(s.eofRetryInterval)
 				if lastValidChunkPos != nil {
 					// Try creating a new reader from last known valid position
-					newReader, err := s.storageEngines[namespace].NewWalReader().NewReaderWithStart(lastValidChunkPos)
+					newReader, err := s.storageEngines[namespace].NewReaderWithStart(lastValidChunkPos)
 					if err != nil {
 						slog.Error("[replicator] Failed to fetch new WAL reader", "err", err, "namespace", namespace)
 						select {

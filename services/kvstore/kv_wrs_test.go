@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	storage "github.com/ankur-anand/kvalchemy/dbengine"
 	"github.com/ankur-anand/kvalchemy/internal/middleware"
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
 	"github.com/ankur-anand/kvalchemy/services/kvstore"
 	"github.com/ankur-anand/kvalchemy/splitter"
-	"github.com/ankur-anand/kvalchemy/storage"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc"
@@ -54,7 +54,7 @@ func TestClient_PutKV_GetKV_DeleteKV(t *testing.T) {
 
 	closeEngines := func(t *testing.T) {
 		for _, engine := range engines {
-			err := engine.Close()
+			err := engine.Close(context.Background())
 			if err != nil {
 				assert.NoError(t, err)
 			}
@@ -68,7 +68,7 @@ func TestClient_PutKV_GetKV_DeleteKV(t *testing.T) {
 	}
 	defer os.RemoveAll(temp)
 	for _, nameSpace := range nameSpaces {
-		se, err := storage.NewStorageEngine(temp, nameSpace, nil)
+		se, err := storage.NewStorageEngine(temp, nameSpace, storage.NewDefaultEngineConfig())
 		if err != nil {
 			panic(err)
 		}
@@ -204,7 +204,7 @@ func TestClient_PutStreamChunksForKey(t *testing.T) {
 
 	closeEngines := func(t *testing.T) {
 		for _, engine := range engines {
-			err := engine.Close()
+			err := engine.Close(context.Background())
 			if err != nil {
 				assert.NoError(t, err)
 			}
@@ -218,7 +218,7 @@ func TestClient_PutStreamChunksForKey(t *testing.T) {
 	}
 	defer os.RemoveAll(temp)
 	for _, nameSpace := range nameSpaces {
-		se, err := storage.NewStorageEngine(temp, nameSpace, nil)
+		se, err := storage.NewStorageEngine(temp, nameSpace, storage.NewDefaultEngineConfig())
 		if err != nil {
 			panic(err)
 		}
