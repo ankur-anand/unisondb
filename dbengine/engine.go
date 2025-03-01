@@ -500,7 +500,6 @@ func (e *Engine) asyncFSync() {
 }
 
 func (e *Engine) close(ctx context.Context) error {
-	slog.Info("[kvalchemy.dbengine]: Closing down", "namespace", e.namespace)
 	e.shutdown.Store(true)
 	// cancel the context:
 	e.cancel()
