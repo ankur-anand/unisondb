@@ -3,7 +3,7 @@ package wal
 import (
 	"time"
 
-	"github.com/rosedblabs/wal"
+	"github.com/ankur-anand/wal"
 )
 
 var (
