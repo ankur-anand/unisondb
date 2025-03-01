@@ -132,3 +132,21 @@ func TestSnapshot(t *testing.T) {
 	assert.Equal(t, uint64(1), engine.OpsReceivedCount())
 	assert.NoError(t, engine.Close(context.Background()))
 }
+
+func TestNoMultiple_ProcessNot_Allowed(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_persistence"
+
+	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.Close(context.Background())
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+
+	// Second run: should error out.
+	_, err = dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	assert.ErrorIs(t, err, dbengine.ErrDatabaseDirInUse, "expected pid lock err")
+}

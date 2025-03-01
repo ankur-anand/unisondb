@@ -3,6 +3,9 @@ package dbengine
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"hash/crc32"
+	"os"
 	"testing"
 	"time"
 
@@ -10,6 +13,7 @@ import (
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
+	"go.etcd.io/bbolt"
 )
 
 func TestStorageEngine_Suite(t *testing.T) {
@@ -116,4 +120,119 @@ func TestStorageEngine_Suite(t *testing.T) {
 		assert.Equal(t, engine.opsFlushedCounter.Load(), metadata.RecordProcessed, "flushed counter should match")
 
 	})
+}
+
+func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_arena_flush"
+
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 200 * 1024
+	config.ValueThreshold = 50
+	config.DBEngine = BoltDBEngine
+	config.BtreeConfig.Namespace = namespace
+
+	engine, err := NewStorageEngine(baseDir, namespace, config)
+	assert.NoError(t, err)
+
+	signal := make(chan struct{}, 10)
+	engine.callback = func() {
+		signal <- struct{}{}
+	}
+	assert.NoError(t, err)
+	valueSize := 1024 // 1KB per value (approx.)
+
+	// create a batch records.
+	batchKey := []byte(gofakeit.UUID())
+
+	// open a batch writer:
+	batch, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.ValueTypeChunked)
+	assert.NoError(t, err, "NewBatch operation should succeed")
+	assert.NotNil(t, batch, "NewBatch operation should succeed")
+
+	var batchValues []string
+	fullValue := new(bytes.Buffer)
+	var checksum uint32
+
+	for i := 0; i < 1000; i++ {
+		value := gofakeit.LetterN(uint(valueSize))
+		batchValues = append(batchValues, value)
+		fullValue.Write([]byte(batchValues[i]))
+		checksum = crc32.Update(checksum, crc32.IEEETable, []byte(value))
+		err := batch.AppendTxnEntry(batchKey, []byte(value))
+		assert.NoError(t, err, "NewBatch operation should succeed")
+	}
+
+	keyPrefix := "flush_test_key_"
+
+	value := []byte(gofakeit.LetterN(uint(valueSize)))
+	for i := 0; i < 4000; i++ {
+		key := []byte(fmt.Sprintf("%s%d", keyPrefix, i))
+
+		err := engine.Put(key, value)
+		assert.NoError(t, err, "Put operation should not fail")
+
+		if i%20 == 0 {
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	select {
+	case <-signal:
+	case <-time.After(5 * time.Second):
+		t.Errorf("Timed out waiting for flush")
+	}
+
+	f, err := os.CreateTemp("", "backup.bolt")
+	assert.NoError(t, err)
+	_, err = engine.BtreeSnapshot(f)
+	assert.NoError(t, err)
+	err = f.Close()
+
+	name := f.Name()
+	f.Close()
+
+	// Open BoltDB
+	db, err := bbolt.Open(name, 0600, nil)
+	assert.NoError(t, err)
+	defer db.Close()
+	keysCount := 0
+	db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(namespace))
+		assert.NotNil(t, bucket)
+		bucket.ForEach(func(k, v []byte) error {
+			keysCount++
+			return nil
+		})
+		return nil
+	})
+	err = engine.Close(context.Background())
+	assert.NoError(t, err, "Failed to close engine")
+
+	engine, err = NewStorageEngine(baseDir, namespace, config)
+	assert.NoError(t, err)
+	assert.NotNil(t, engine)
+	// 4000 keys, total boltdb keys, batch is never commited.
+	assert.Equal(t, 4000, keysCount+engine.RecoveredWALCount())
+
+	defer func() {
+		err := engine.Close(context.Background())
+		assert.NoError(t, err, "Failed to close engine")
+	}()
+
+	for i := 0; i < 4000; i++ {
+		key := []byte(fmt.Sprintf("%s%d", keyPrefix, i))
+		retrievedValue, err := engine.Get(key)
+
+		assert.NoError(t, err, "Get operation should succeed")
+		assert.NotNil(t, retrievedValue, "Retrieved value should not be nil")
+		assert.Equal(t, len(retrievedValue), valueSize, "Value length mismatch")
+	}
+
+	// 4000 ops, for keys, > As Batch is not Commited, (1 batch start + (not 1 batch commit.) not included)
+	assert.Equal(t, uint64(4000), engine.OpsReceivedCount())
+
+	value, err = engine.Get(batchKey)
+	assert.ErrorIs(t, err, ErrKeyNotFound, "Get operation should not succeed")
+	assert.Nil(t, value, "Get value should not be nil")
 }
