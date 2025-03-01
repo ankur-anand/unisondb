@@ -14,7 +14,6 @@ import (
 	"github.com/ankur-anand/kvalchemy/dbengine/kvdb"
 	"github.com/ankur-anand/kvalchemy/dbengine/wal"
 	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
-	"github.com/ankur-anand/kvalchemy/storage/wrecord"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/hashicorp/go-metrics"
 )
@@ -205,7 +204,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 
 	// if the mem table doesn't have this key associated action or log.
 	// directly go to the boltdb to fetch the same.
-	if it.Meta == byte(wrecord.LogOperationNoop) {
+	if it.Meta == byte(walrecord.LogOperationNoop) {
 		compressedValue, err := e.dataStore.Get(key)
 		if err != nil {
 			return nil, err
@@ -214,7 +213,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	}
 
 	// key deleted
-	if it.Meta == byte(wrecord.LogOperationDelete) {
+	if it.Meta == byte(walrecord.LogOperationDelete) {
 		return nil,
 			ErrKeyNotFound
 	}
