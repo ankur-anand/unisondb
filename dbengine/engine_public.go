@@ -199,7 +199,11 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	// if the mem table doesn't have this key associated action or log.
 	// directly go to the boltdb to fetch the same.
 	if it.Meta == byte(wrecord.LogOperationNoop) {
-		return e.dataStore.Get(key)
+		compressedValue, err := e.dataStore.Get(key)
+		if err != nil {
+			return nil, err
+		}
+		return compress.DecompressLZ4(compressedValue)
 	}
 
 	// key deleted
