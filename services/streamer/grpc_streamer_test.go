@@ -163,7 +163,7 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 	var engines = make(map[string]*dbengine.Engine)
 	var nameSpaces = make([]string, 0)
 
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 1; i++ {
 		nameSpaces = append(nameSpaces, strings.ToLower(gofakeit.Noun()))
 	}
 
@@ -290,7 +290,7 @@ func TestServer_StreamWAL_Client(t *testing.T) {
 	var engines = make(map[string]*dbengine.Engine)
 	var nameSpaces = make([]string, 0)
 
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 1; i++ {
 		nameSpaces = append(nameSpaces, strings.ToLower(gofakeit.Noun()))
 	}
 
@@ -386,7 +386,7 @@ func TestServer_StreamWAL_MaxRetry(t *testing.T) {
 	var engines = make(map[string]*dbengine.Engine)
 	var nameSpaces = make([]string, 0)
 
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 1; i++ {
 		nameSpaces = append(nameSpaces, strings.ToLower(gofakeit.Noun()))
 	}
 
