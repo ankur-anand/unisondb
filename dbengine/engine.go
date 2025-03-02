@@ -253,7 +253,7 @@ func (e *Engine) recoverWAL() error {
 		"recovered_count", recovery.recoveredCount,
 		"namespace", e.namespace,
 		"btree_engine", e.config.DBEngine,
-		"durations", humanizeDuration(time.Since(startTime).Seconds()),
+		"durations", humanizeDuration(time.Since(startTime)),
 	)
 	metrics.IncrCounterWithLabels(mKeyWalRecoveryRecordTotal, float32(recovery.recoveredCount), e.metricsLabel)
 	metrics.MeasureSinceWithLabels(mKeyWalRecoveryDuration, startTime, e.metricsLabel)
@@ -468,7 +468,7 @@ func (e *Engine) handleFlush(ctx context.Context) {
 
 		slog.Debug("[kvalchemy.dbengine] Flushed MemTable",
 			"ops_flushed", recordProcessed, "namespace", e.namespace,
-			"duration", humanizeDuration(time.Since(startTime).Seconds()), "bytes_flushed", humanize.Bytes(uint64(mt.bytesStored)))
+			"duration", humanizeDuration(time.Since(startTime)), "bytes_flushed", humanize.Bytes(uint64(mt.bytesStored)))
 	}
 }
 
@@ -533,7 +533,7 @@ func (e *Engine) asyncFSync() {
 
 			slog.Debug("[kvalchemy.dbengine]: Flushed mem table and created WAL checkpoint",
 				"ops_flushed", fm.recordProcessed, "namespace", e.namespace,
-				"duration", humanizeDuration(time.Since(startTime).Seconds()), "bytes_flushed", humanize.Bytes(fm.bytesFlushed))
+				"duration", humanizeDuration(time.Since(startTime)), "bytes_flushed", humanize.Bytes(fm.bytesFlushed))
 			if e.callback != nil {
 				e.callback()
 			}

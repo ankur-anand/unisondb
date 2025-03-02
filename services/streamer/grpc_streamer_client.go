@@ -1,4 +1,4 @@
-package replicator
+package streamer
 
 import (
 	"context"
@@ -9,9 +9,8 @@ import (
 	"math/rand/v2"
 	"time"
 
-	storage "github.com/ankur-anand/kvalchemy/dbengine"
-	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
+	"github.com/ankur-anand/kvalchemy/services"
 	"github.com/prometheus/common/helpers/templates"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -25,36 +24,29 @@ const (
 	maxRetries     = 5
 )
 
-type StorageIO struct {
-	engine    *storage.Engine
-	namespace string
-}
-
-func NewStorageIO(engine *storage.Engine, namespace string) *StorageIO {
-	return &StorageIO{}
-}
-
-func (io *StorageIO) Write(data *v1.WALRecord) {
-	record := walrecord.GetRootAsWalRecord(data.Record, 0)
-	err := io.engine.Put(record.KeyBytes(), record.ValueBytes())
-	if err != nil {
-		slog.Error("[REPLICATOR] WalIO.Write error", "error", err)
-	}
-}
-
 // WalIO provide.
 type WalIO interface {
 	Write(data *v1.WALRecord) error
 }
 
-type Client struct {
+type GrpcStreamerClient struct {
 	gcc       *grpc.ClientConn
 	namespace string
 	wIO       WalIO
-	metadata  []byte
+	// offset of the record that was last received.
+	offset []byte
 }
 
-func (c *Client) StreamWAL(ctx context.Context) error {
+func NewGrpcStreamerClient(gcc *grpc.ClientConn, namespace string, wIO WalIO, offset []byte) *GrpcStreamerClient {
+	return &GrpcStreamerClient{
+		gcc:       gcc,
+		namespace: namespace,
+		wIO:       wIO,
+		offset:    offset,
+	}
+}
+
+func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 	md := metadata.Pairs("x-namespace", c.namespace)
 	ctx = metadata.NewOutgoingContext(ctx, md)
 
@@ -63,21 +55,26 @@ func (c *Client) StreamWAL(ctx context.Context) error {
 	streamStartTime := time.Now()
 
 	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 		if retryCount > maxRetries {
-			slog.Error("[REPLICATOR] Max retries reached, aborting WAL stream",
+			slog.Error("[kvalchemy.streamer.grpc.client] Max retries reached, aborting WAL stream",
 				"namespace", c.namespace, "retries", retryCount)
-			clientWalStreamErrTotal.WithLabelValues(c.namespace, "max_retries_reached").Inc()
-			return fmt.Errorf("max retries [%d] exceeded", maxRetries)
+			clientWalStreamErrTotal.WithLabelValues(c.namespace, "grpc", "max_retries_reached").Inc()
+			return fmt.Errorf("%w [%d]", services.ErrClientMaxRetriesExceeded, maxRetries)
 		}
 
 		client, err := v1.NewWALReplicationServiceClient(c.gcc).StreamWAL(ctx, &v1.StreamWALRequest{
-			Metadata: c.metadata,
+			Offset: c.offset,
 		})
 
 		if err != nil {
 			if shouldRetry(err) {
 				retryCount++
-				slog.Warn("[REPLICATOR] StreamWAL failed, retrying",
+				slog.Warn("[kvalchemy.streamer.grpc.client] StreamWAL failed, retrying",
 					"namespace", c.namespace, "error", err,
 					"retry_count", retryCount)
 				time.Sleep(getJitteredBackoff(&backoff))
@@ -89,7 +86,7 @@ func (c *Client) StreamWAL(ctx context.Context) error {
 		if err := c.receiveWALRecords(client, streamStartTime); err != nil {
 			if shouldRetry(err) {
 				retryCount++
-				slog.Warn("[REPLICATOR] StreamWAL failed, retrying",
+				slog.Warn("[kvalchemy.streamer.grpc.client] StreamWAL failed, retrying",
 					"namespace", c.namespace, "error", err,
 					"retry_count", retryCount)
 				time.Sleep(getJitteredBackoff(&backoff))
@@ -103,12 +100,12 @@ func (c *Client) StreamWAL(ctx context.Context) error {
 	}
 }
 
-func (c *Client) receiveWALRecords(client v1.WALReplicationService_StreamWALClient, startTime time.Time) error {
+func (c *GrpcStreamerClient) receiveWALRecords(client v1.WALReplicationService_StreamWALClient, startTime time.Time) error {
 	for {
 		res, err := client.Recv()
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
-				slog.Info("[REPLICATOR] stream closed",
+				slog.Info("[kvalchemy.streamer.grpc.client] stream closed",
 					"namespace", c.namespace,
 					"stream_duration", humanizeDuration(time.Since(startTime)),
 				)
@@ -117,10 +114,10 @@ func (c *Client) receiveWALRecords(client v1.WALReplicationService_StreamWALClie
 			return err
 		}
 
-		clientWalRecvTotal.WithLabelValues(c.namespace).Add(float64(len(res.WalRecords)))
+		clientWalRecvTotal.WithLabelValues(c.namespace, "grpc").Add(float64(len(res.WalRecords)))
 
 		for _, record := range res.WalRecords {
-			c.metadata = record.ChunkPos
+			c.offset = record.Offset
 			if err := c.wIO.Write(record); err != nil {
 				return err
 			}
@@ -131,7 +128,7 @@ func (c *Client) receiveWALRecords(client v1.WALReplicationService_StreamWALClie
 func handleStreamError(namespace string, err error) error {
 	sErr := status.Convert(err)
 	clientWalStreamErrTotal.WithLabelValues(namespace, sErr.Code().String()).Inc()
-	slog.Error("[REPLICATOR] Stream error", "namespace", namespace, "error", err)
+	slog.Error("[kvalchemy.streamer.grpc.client] Stream error", "namespace", namespace, "error", err)
 	return err
 }
 

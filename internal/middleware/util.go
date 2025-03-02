@@ -3,7 +3,9 @@ package middleware
 import (
 	"context"
 	"strings"
+	"time"
 
+	"github.com/prometheus/common/helpers/templates"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 )
@@ -64,4 +66,12 @@ func getClientIP(ctx context.Context) string {
 		return maskClientPort(ip)
 	}
 	return "unknown"
+}
+
+func humanizeDuration(d time.Duration) string {
+	s, err := templates.HumanizeDuration(d)
+	if err != nil {
+		return d.String()
+	}
+	return s
 }

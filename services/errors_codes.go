@@ -14,11 +14,12 @@ var (
 	ErrNamespaceNotExists         = errors.New("namespace is not found on the current server")
 	ErrInvalidMetadata            = errors.New("bad metadata in request")
 	ErrMissingNamespaceInMetadata = errors.New("missing required metadata: x-namespace")
-	ErrStreamTimeout              = errors.New("stream timeout: no records received within 60 seconds")
+	ErrStreamTimeout              = errors.New("stream timeout: no records received within dynamic threshold seconds")
 	ErrKeyNotFound                = status.Error(codes.NotFound, "key not found")
 	ErrPutChunkPrecondition       = errors.New("invalid sequence: StartMarker must be sent before sending chunks or calling CommitMarker")
 	ErrPutChunkCheckSumMismatch   = errors.New("invalid checksum: checksum mismatch")
 	ErrPutChunkAlreadyCommited    = errors.New("put chunk stream already commited")
+	ErrClientMaxRetriesExceeded   = errors.New("max retries exceeded")
 )
 
 // ToGRPCError Convert business error to gRPC error.
