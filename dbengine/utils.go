@@ -3,10 +3,12 @@ package dbengine
 import (
 	"encoding/binary"
 	"fmt"
+	"log"
 
 	"github.com/ankur-anand/kvalchemy/dbengine/wal"
 	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
 	"github.com/dgraph-io/badger/v4/y"
+	"github.com/prometheus/common/helpers/templates"
 )
 
 // handleChunkedValuesTxn saves all the chunked value that is part of the current commit txn.
@@ -100,4 +102,12 @@ func unmarshalChecksum(data []byte) uint32 {
 		return 0
 	}
 	return binary.LittleEndian.Uint32(data)
+}
+
+func humanizeDuration(d float64) string {
+	s, err := templates.HumanizeDuration(d)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return s
 }

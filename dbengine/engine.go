@@ -112,27 +112,10 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		return nil, err
 	}
 
-	recovery := &walRecovery{
-		store: engine.dataStore,
-		walIO: engine.walIO,
-		bloom: engine.bloom,
-	}
-
-	startTime := time.Now()
-	if err := recovery.recoverWAL(); err != nil {
+	if err := engine.recoverWAL(); err != nil {
 		return nil, err
 	}
-	slog.Info("[kvalchemy.dbengine] wal recovered]",
-		"recovered_count", recovery.recoveredCount,
-		"namespace", engine.namespace,
-		"btree_engine", conf.DBEngine,
-	)
-	metrics.IncrCounterWithLabels(mKeyWalRecoveryRecordTotal, float32(recovery.recoveredCount), engine.metricsLabel)
-	metrics.MeasureSinceWithLabels(mKeyWalRecoveryDuration, startTime, engine.metricsLabel)
-	
-	engine.writeSeenCounter.Add(uint64(recovery.recoveredCount))
-	engine.recoveredEntriesCount = recovery.recoveredCount
-	engine.opsFlushedCounter.Add(uint64(recovery.recoveredCount))
+
 	engine.notifier = sync.NewCond(&engine.notifierMu)
 
 	return engine, nil
@@ -251,6 +234,55 @@ func (e *Engine) loadBloomFilter() error {
 	}
 
 	return err
+}
+
+// recoverWAL recovers the wal if any pending writes are still not visible.
+func (e *Engine) recoverWAL() error {
+	recovery := &walRecovery{
+		store: e.dataStore,
+		walIO: e.walIO,
+		bloom: e.bloom,
+	}
+
+	startTime := time.Now()
+	if err := recovery.recoverWAL(); err != nil {
+		return err
+	}
+
+	slog.Info("[kvalchemy.dbengine] wal recovered",
+		"recovered_count", recovery.recoveredCount,
+		"namespace", e.namespace,
+		"btree_engine", e.config.DBEngine,
+		"durations", humanizeDuration(time.Since(startTime).Seconds()),
+	)
+	metrics.IncrCounterWithLabels(mKeyWalRecoveryRecordTotal, float32(recovery.recoveredCount), e.metricsLabel)
+	metrics.MeasureSinceWithLabels(mKeyWalRecoveryDuration, startTime, e.metricsLabel)
+
+	e.writeSeenCounter.Add(uint64(recovery.recoveredCount))
+	e.recoveredEntriesCount = recovery.recoveredCount
+	e.opsFlushedCounter.Add(uint64(recovery.recoveredCount))
+	e.currentOffset.Store(recovery.lastRecoveredPos)
+
+	if recovery.recoveredCount > 0 {
+		// once recovered update the metadata table again.
+		e.pendingMetadata.queueMetadata(&flushedMetadata{
+			metadata: &Metadata{
+				RecordProcessed: uint64(recovery.recoveredCount),
+				Pos:             recovery.lastRecoveredPos,
+			},
+			recordProcessed: recovery.recoveredCount,
+		})
+
+		select {
+		case e.fsyncReqSignal <- struct{}{}:
+		default:
+			// this path should not happen in normal code base.
+			slog.Error("[kvalchemy.dbengine] fsync req signal channel is full while recovering itself")
+			panic("[kvalchemy.dbengine] fsync req signal channel is full while recovering itself")
+		}
+	}
+
+	return nil
 }
 
 // persistKeyValue writes a key-value pair to WAL and MemTable, ensuring durability.
@@ -434,9 +466,9 @@ func (e *Engine) handleFlush(ctx context.Context) {
 			slog.Debug("fsync queue signal channel full")
 		}
 
-		slog.Debug("Flushed MemTable",
+		slog.Debug("[kvalchemy.dbengine] Flushed MemTable",
 			"ops_flushed", recordProcessed, "namespace", e.namespace,
-			"duration", time.Since(startTime), "bytes_flushed", humanize.Bytes(uint64(mt.bytesStored)))
+			"duration", humanizeDuration(time.Since(startTime).Seconds()), "bytes_flushed", humanize.Bytes(uint64(mt.bytesStored)))
 	}
 }
 
@@ -498,9 +530,10 @@ func (e *Engine) asyncFSync() {
 				log.Fatalln(fmt.Errorf("[kvalchemy.dbengine]: FSync operation failed: %w", err))
 			}
 			metrics.MeasureSinceWithLabels(mKeyFSyncDurations, startTime, e.metricsLabel)
+
 			slog.Debug("[kvalchemy.dbengine]: Flushed mem table and created WAL checkpoint",
 				"ops_flushed", fm.recordProcessed, "namespace", e.namespace,
-				"duration", time.Since(startTime), "bytes_flushed", humanize.Bytes(fm.bytesFlushed))
+				"duration", humanizeDuration(time.Since(startTime).Seconds()), "bytes_flushed", humanize.Bytes(fm.bytesFlushed))
 			if e.callback != nil {
 				e.callback()
 			}

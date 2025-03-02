@@ -136,7 +136,7 @@ func (e *Engine) WaitForAppend(ctx context.Context, timeout time.Duration, lastS
 	defer func() {
 		metrics.MeasureSinceWithLabels(mKeyWaitForAppendDuration, startTime, e.metricsLabel)
 	}()
-	
+
 	currentPos := e.currentOffset.Load()
 	if currentPos != nil && isNewChunkPosition(currentPos, lastSeen) {
 		return nil
