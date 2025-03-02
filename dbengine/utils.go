@@ -3,7 +3,7 @@ package dbengine
 import (
 	"encoding/binary"
 	"fmt"
-	"log"
+	"time"
 
 	"github.com/ankur-anand/kvalchemy/dbengine/wal"
 	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
@@ -104,10 +104,10 @@ func unmarshalChecksum(data []byte) uint32 {
 	return binary.LittleEndian.Uint32(data)
 }
 
-func humanizeDuration(d float64) string {
+func humanizeDuration(d time.Duration) string {
 	s, err := templates.HumanizeDuration(d)
 	if err != nil {
-		log.Fatal(err)
+		return d.String()
 	}
 	return s
 }

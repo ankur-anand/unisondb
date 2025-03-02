@@ -76,14 +76,14 @@ func TelemetryUnaryInterceptor(ctx context.Context, req interface{}, info *grpc.
 		slog.Error("[GRPC] Request Failed", "method",
 			info.FullMethod,
 			"status", grpcStatus,
-			"duration_sec", duration.Seconds(),
+			"durations", humanizeDuration(duration),
 			"error", err.Error(), reqIDKey, requestID,
 			"namespace", ns)
 	} else {
 		slog.Info("[GRPC] Request Completed",
 			"method", info.FullMethod,
 			"status", grpcStatus, "duration_sec",
-			duration.Seconds(), reqIDKey, requestID,
+			humanizeDuration(duration), reqIDKey, requestID,
 			"namespace", ns)
 	}
 
