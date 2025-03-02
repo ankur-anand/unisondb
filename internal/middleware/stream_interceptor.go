@@ -142,7 +142,6 @@ func TelemetryInterceptor(
 	},
 	}
 
-	metrics.SetGaugeWithLabels([]string{"grpc", "active", "server", "stream"}, float32(totalActiveStream.Value()), label)
 	// handler
 	err := handler(srv, ss)
 
@@ -164,7 +163,7 @@ func TelemetryInterceptor(
 			"method", info.FullMethod,
 			"client_ip", clientIP,
 			"status", grpcStatus,
-			"duration_sec", duration.Seconds(),
+			"durations", humanizeDuration(duration),
 			"error", err.Error(),
 			reqIDKey, requestID,
 			"namespace", ns,
@@ -174,7 +173,7 @@ func TelemetryInterceptor(
 			"method", info.FullMethod,
 			"client_ip", clientIP,
 			"status", grpcStatus,
-			"duration_sec", duration.Seconds(),
+			"durations", humanizeDuration(duration),
 			reqIDKey, requestID,
 			"namespace", ns,
 		)

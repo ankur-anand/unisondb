@@ -36,7 +36,7 @@ var (
 // Offset represents the offset in the wal.
 type Offset = wal.Offset
 
-// DecodeOffset decodes the offset position from a byte slice
+// DecodeOffset decodes the offset position from a byte slice.
 func DecodeOffset(b []byte) *Offset {
 	return wal.DecodeOffset(b)
 }
@@ -311,5 +311,28 @@ func (e *Engine) NewReader() (*Reader, error) {
 // NewReaderWithStart return a reader that reads from provided offset, until EOF is encountered.
 // It returns io.EOF when it reaches end of file.
 func (e *Engine) NewReaderWithStart(startPos *Offset) (*Reader, error) {
+	// get current offset.
+	curOffset := e.currentOffset.Load()
+	if startPos == nil {
+		return e.NewReader()
+	}
+	
+	if curOffset == nil {
+		return nil, ErrInvalidOffset
+	}
+
+	if startPos.SegmentId > curOffset.SegmentId {
+		return nil, ErrInvalidOffset
+	}
+
+	if startPos.SegmentId == curOffset.SegmentId {
+		if startPos.BlockNumber > curOffset.BlockNumber {
+			return nil, ErrInvalidOffset
+		}
+		if startPos.ChunkOffset > curOffset.ChunkOffset {
+			return nil, ErrInvalidOffset
+		}
+	}
+
 	return e.walIO.NewReaderWithStart(startPos)
 }
