@@ -29,15 +29,18 @@ const (
 )
 
 var (
-	engineMetricsPendingFsyncTotal = append(packageKey, "btree", "fsync", "pending", "total")
-	engineMetricsFSyncTotal        = append(packageKey, "btree", "fsync", "total")
-	engineMetricsFSyncErrorsTotal  = append(packageKey, "btree", "fsync", "errors", "total")
-	engineMetricsFSyncDurations    = append(packageKey, "btree", "fsync", "durations", "seconds")
+	mKeyPendingFsyncTotal     = append(packageKey, "btree", "fsync", "pending", "total")
+	mKeyFSyncTotal            = append(packageKey, "btree", "fsync", "total")
+	mKeyFSyncErrorsTotal      = append(packageKey, "btree", "fsync", "errors", "total")
+	mKeyFSyncDurations        = append(packageKey, "btree", "fsync", "durations", "seconds")
+	mKeyMemTableRotationTotal = append(packageKey, "active", "mem", "table", "rotation", "total")
 
-	engineMetricsSealedMemTableTotal       = append(packageKey, "sealed", "mem", "table", "pending", "total")
-	engineMetricsSealedMemFlushTotal       = append(packageKey, "sealed", "mem", "table", "flush", "total")
-	engineMetricsSealedMemFlushDuration    = append(packageKey, "sealed", "mem", "table", "flush", "durations", "seconds")
-	engineMetricsSealedMemFlushRecordTotal = append(packageKey, "sealed", "mem", "table", "flush", "record", "total")
+	mKeySealedMemTableTotal       = append(packageKey, "sealed", "mem", "table", "pending", "total")
+	mKeySealedMemFlushTotal       = append(packageKey, "sealed", "mem", "table", "flush", "total")
+	mKeySealedMemFlushDuration    = append(packageKey, "sealed", "mem", "table", "flush", "durations", "seconds")
+	mKeySealedMemFlushRecordTotal = append(packageKey, "sealed", "mem", "table", "flush", "record", "total")
+	mKeyWalRecoveryDuration       = append(packageKey, "wal", "recovery", "durations", "seconds")
+	mKeyWalRecoveryRecordTotal    = append(packageKey, "wal", "recovery", "record", "total")
 )
 
 var (
@@ -109,19 +112,10 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		return nil, err
 	}
 
-	recovery := &walRecovery{
-		store: engine.dataStore,
-		walIO: engine.walIO,
-		bloom: engine.bloom,
-	}
-
-	if err := recovery.recoverWAL(); err != nil {
+	if err := engine.recoverWAL(); err != nil {
 		return nil, err
 	}
 
-	engine.writeSeenCounter.Add(uint64(recovery.recoveredCount))
-	engine.recoveredEntriesCount = recovery.recoveredCount
-	engine.opsFlushedCounter.Add(uint64(recovery.recoveredCount))
 	engine.notifier = sync.NewCond(&engine.notifierMu)
 
 	return engine, nil
@@ -242,6 +236,55 @@ func (e *Engine) loadBloomFilter() error {
 	return err
 }
 
+// recoverWAL recovers the wal if any pending writes are still not visible.
+func (e *Engine) recoverWAL() error {
+	recovery := &walRecovery{
+		store: e.dataStore,
+		walIO: e.walIO,
+		bloom: e.bloom,
+	}
+
+	startTime := time.Now()
+	if err := recovery.recoverWAL(); err != nil {
+		return err
+	}
+
+	slog.Info("[kvalchemy.dbengine] wal recovered",
+		"recovered_count", recovery.recoveredCount,
+		"namespace", e.namespace,
+		"btree_engine", e.config.DBEngine,
+		"durations", humanizeDuration(time.Since(startTime).Seconds()),
+	)
+	metrics.IncrCounterWithLabels(mKeyWalRecoveryRecordTotal, float32(recovery.recoveredCount), e.metricsLabel)
+	metrics.MeasureSinceWithLabels(mKeyWalRecoveryDuration, startTime, e.metricsLabel)
+
+	e.writeSeenCounter.Add(uint64(recovery.recoveredCount))
+	e.recoveredEntriesCount = recovery.recoveredCount
+	e.opsFlushedCounter.Add(uint64(recovery.recoveredCount))
+	e.currentOffset.Store(recovery.lastRecoveredPos)
+
+	if recovery.recoveredCount > 0 {
+		// once recovered update the metadata table again.
+		e.pendingMetadata.queueMetadata(&flushedMetadata{
+			metadata: &Metadata{
+				RecordProcessed: uint64(recovery.recoveredCount),
+				Pos:             recovery.lastRecoveredPos,
+			},
+			recordProcessed: recovery.recoveredCount,
+		})
+
+		select {
+		case e.fsyncReqSignal <- struct{}{}:
+		default:
+			// this path should not happen in normal code base.
+			slog.Error("[kvalchemy.dbengine] fsync req signal channel is full while recovering itself")
+			panic("[kvalchemy.dbengine] fsync req signal channel is full while recovering itself")
+		}
+	}
+
+	return nil
+}
+
 // persistKeyValue writes a key-value pair to WAL and MemTable, ensuring durability.
 // multistep process to persist the key-value pair:
 // 1. Encodes the record.
@@ -310,7 +353,7 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, offset *wal.Offset) 
 	err = e.activeMemTable.put(key, v, offset)
 	if err != nil {
 		if errors.Is(err, errArenaSizeWillExceed) {
-			metrics.IncrCounterWithLabels([]string{"kvalchemy", "memtable", "rotation", "total"}, 1, e.metricsLabel)
+			metrics.IncrCounterWithLabels(mKeyMemTableRotationTotal, 1, e.metricsLabel)
 			e.rotateMemTable()
 			err = e.activeMemTable.put(key, v, offset)
 			// :(
@@ -387,7 +430,7 @@ func (e *Engine) asyncMemTableFlusher(ctx context.Context) {
 func (e *Engine) handleFlush(ctx context.Context) {
 	var mt *memTable
 	e.mu.Lock()
-	metrics.SetGaugeWithLabels(engineMetricsSealedMemTableTotal, float32(len(e.sealedMemTables)), e.metricsLabel)
+	metrics.SetGaugeWithLabels(mKeySealedMemTableTotal, float32(len(e.sealedMemTables)), e.metricsLabel)
 	if len(e.sealedMemTables) > 0 {
 		mt = e.sealedMemTables[0]
 	}
@@ -413,9 +456,9 @@ func (e *Engine) handleFlush(ctx context.Context) {
 		e.sealedMemTables = e.sealedMemTables[1:]
 		e.mu.Unlock()
 
-		metrics.MeasureSinceWithLabels(engineMetricsSealedMemFlushDuration, startTime, e.metricsLabel)
-		metrics.IncrCounterWithLabels(engineMetricsSealedMemFlushRecordTotal, float32(recordProcessed), e.metricsLabel)
-		metrics.IncrCounterWithLabels(engineMetricsSealedMemFlushTotal, 1, e.metricsLabel)
+		metrics.MeasureSinceWithLabels(mKeySealedMemFlushDuration, startTime, e.metricsLabel)
+		metrics.IncrCounterWithLabels(mKeySealedMemFlushRecordTotal, float32(recordProcessed), e.metricsLabel)
+		metrics.IncrCounterWithLabels(mKeySealedMemFlushTotal, 1, e.metricsLabel)
 
 		select {
 		case e.fsyncReqSignal <- struct{}{}:
@@ -423,9 +466,9 @@ func (e *Engine) handleFlush(ctx context.Context) {
 			slog.Debug("fsync queue signal channel full")
 		}
 
-		slog.Debug("Flushed MemTable",
+		slog.Debug("[kvalchemy.dbengine] Flushed MemTable",
 			"ops_flushed", recordProcessed, "namespace", e.namespace,
-			"duration", time.Since(startTime), "bytes_flushed", humanize.Bytes(uint64(mt.bytesStored)))
+			"duration", humanizeDuration(time.Since(startTime).Seconds()), "bytes_flushed", humanize.Bytes(uint64(mt.bytesStored)))
 	}
 }
 
@@ -462,14 +505,14 @@ func (p *pendingMetadata) dequeueMetadata() (*flushedMetadata, int) {
 // accumulate over the time in the memory, even if large values are stored inside the mem table,
 // configured via value threshold.
 func (e *Engine) asyncFSync() {
-	slog.Info("[kvalchemy.dbengine]: FSync Metadata eventloop", "namespace", e.namespace)
+	slog.Debug("[kvalchemy.dbengine]: FSync Metadata eventloop", "namespace", e.namespace)
 	for {
 		select {
 		case <-e.fsyncReqSignal:
 			fm, n := e.pendingMetadata.dequeueMetadata()
-			metrics.IncrCounterWithLabels(engineMetricsPendingFsyncTotal, float32(n), e.metricsLabel)
+			metrics.IncrCounterWithLabels(mKeyPendingFsyncTotal, float32(n), e.metricsLabel)
 			startTime := time.Now()
-			metrics.IncrCounterWithLabels(engineMetricsFSyncTotal, 1, e.metricsLabel)
+			metrics.IncrCounterWithLabels(mKeyFSyncTotal, 1, e.metricsLabel)
 			err := SaveMetadata(e.dataStore, fm.metadata.Pos, fm.metadata.RecordProcessed)
 			if err != nil {
 				log.Fatal("[kvalchemy.dbengine] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
@@ -480,16 +523,17 @@ func (e *Engine) asyncFSync() {
 			}
 			err = e.dataStore.FSync()
 			if err != nil {
-				metrics.IncrCounterWithLabels(engineMetricsFSyncErrorsTotal, 1, e.metricsLabel)
+				metrics.IncrCounterWithLabels(mKeyFSyncErrorsTotal, 1, e.metricsLabel)
 				// There is no way to recover from the underlying Fsync Issue.
 				// https://archive.fosdem.org/2019/schedule/event/postgresql_fsync/
 				// How is it possible that PostgreSQL used fsync incorrectly for 20 years.
 				log.Fatalln(fmt.Errorf("[kvalchemy.dbengine]: FSync operation failed: %w", err))
 			}
-			metrics.MeasureSinceWithLabels(engineMetricsFSyncDurations, startTime, e.metricsLabel)
+			metrics.MeasureSinceWithLabels(mKeyFSyncDurations, startTime, e.metricsLabel)
+
 			slog.Debug("[kvalchemy.dbengine]: Flushed mem table and created WAL checkpoint",
 				"ops_flushed", fm.recordProcessed, "namespace", e.namespace,
-				"duration", time.Since(startTime), "bytes_flushed", humanize.Bytes(fm.bytesFlushed))
+				"duration", humanizeDuration(time.Since(startTime).Seconds()), "bytes_flushed", humanize.Bytes(fm.bytesFlushed))
 			if e.callback != nil {
 				e.callback()
 			}

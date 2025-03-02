@@ -79,7 +79,9 @@ func (table *memTable) get(key []byte) y.ValueStruct {
 
 // flush writes all entries from MemTable to BtreeStore.
 func (table *memTable) flush(ctx context.Context) (int, error) {
-	slog.Debug("Flushing MemTable to BtreeStore...", "namespace", table.namespace)
+	slog.Debug("[kvalchemy.dbengine] Flushing MemTable to BtreeStore...",
+		"namespace", table.namespace, "start_offset", table.firstOffset,
+		"end_offset", table.lastOffset)
 
 	// Create an iterator for the MemTable
 	it := table.skipList.NewIterator()

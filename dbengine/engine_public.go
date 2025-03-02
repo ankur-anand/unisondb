@@ -19,15 +19,18 @@ import (
 )
 
 var (
-	engineMetricsPutTotal           = append(packageKey, "put", "total")
-	engineMetricsGetTotal           = append(packageKey, "get", "total")
-	engineMetricsDeleteTotal        = append(packageKey, "delete", "total")
-	engineMetricsPutDuration        = append(packageKey, "put", "durations", "seconds")
-	engineMetricsGetDuration        = append(packageKey, "get", "durations", "seconds")
-	engineMetricsDeleteDuration     = append(packageKey, "delete", "durations", "seconds")
-	engineMetricsSnapshotTotal      = append(packageKey, "snapshot", "total")
-	engineMetricsSnapshotDuration   = append(packageKey, "snapshot", "durations", "seconds")
-	engineMetricsSnapshotBytesTotal = append(packageKey, "snapshot", "bytes", "total")
+	mKeyPutTotal           = append(packageKey, "put", "total")
+	mKeyGetTotal           = append(packageKey, "get", "total")
+	mKeyDeleteTotal        = append(packageKey, "delete", "total")
+	mKeyPutDuration        = append(packageKey, "put", "durations", "seconds")
+	mKeyGetDuration        = append(packageKey, "get", "durations", "seconds")
+	mKeyDeleteDuration     = append(packageKey, "delete", "durations", "seconds")
+	mKeySnapshotTotal      = append(packageKey, "snapshot", "total")
+	mKeySnapshotDuration   = append(packageKey, "snapshot", "durations", "seconds")
+	mKeySnapshotBytesTotal = append(packageKey, "snapshot", "bytes", "total")
+
+	mKeyWaitForAppendTotal    = append(packageKey, "wait", "append", "total")
+	mKeyWaitForAppendDuration = append(packageKey, "wait", "append", "durations", "seconds")
 )
 
 // Offset represents the offset in the wal.
@@ -54,10 +57,10 @@ func (e *Engine) BtreeSnapshot(w io.Writer) (int64, error) {
 	slog.Info("[kvalchemy.dbengine] BTree snapshot received")
 	startTime := time.Now()
 	cw := &countingWriter{w: w}
-	metrics.IncrCounterWithLabels(engineMetricsSnapshotTotal, 1, e.metricsLabel)
+	metrics.IncrCounterWithLabels(mKeySnapshotTotal, 1, e.metricsLabel)
 	defer func() {
-		metrics.MeasureSinceWithLabels(engineMetricsSnapshotDuration, startTime, e.metricsLabel)
-		metrics.IncrCounterWithLabels(engineMetricsSnapshotBytesTotal, float32(cw.count), e.metricsLabel)
+		metrics.MeasureSinceWithLabels(mKeySnapshotDuration, startTime, e.metricsLabel)
+		metrics.IncrCounterWithLabels(mKeySnapshotBytesTotal, float32(cw.count), e.metricsLabel)
 	}()
 
 	err := e.dataStore.Snapshot(cw)
@@ -97,10 +100,10 @@ func (e *Engine) Put(key, value []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	metrics.IncrCounterWithLabels(engineMetricsPutTotal, 1, e.metricsLabel)
+	metrics.IncrCounterWithLabels(mKeyPutTotal, 1, e.metricsLabel)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels(engineMetricsPutDuration, startTime, e.metricsLabel)
+		metrics.MeasureSinceWithLabels(mKeyPutDuration, startTime, e.metricsLabel)
 	}()
 
 	compressed, err := compress.CompressLZ4(value)
@@ -117,10 +120,10 @@ func (e *Engine) Delete(key []byte) error {
 		return ErrInCloseProcess
 	}
 
-	metrics.IncrCounterWithLabels(engineMetricsDeleteTotal, 1, e.metricsLabel)
+	metrics.IncrCounterWithLabels(mKeyDeleteTotal, 1, e.metricsLabel)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels(engineMetricsDeleteDuration, startTime, e.metricsLabel)
+		metrics.MeasureSinceWithLabels(mKeyDeleteDuration, startTime, e.metricsLabel)
 	}()
 
 	return e.persistKeyValue(key, nil, walrecord.LogOperationDelete)
@@ -128,6 +131,12 @@ func (e *Engine) Delete(key []byte) error {
 
 // WaitForAppend blocks until a put/delete operation occurs or timeout happens or context cancelled is done.
 func (e *Engine) WaitForAppend(ctx context.Context, timeout time.Duration, lastSeen *Offset) error {
+	metrics.IncrCounterWithLabels(mKeyWaitForAppendTotal, 1, e.metricsLabel)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels(mKeyWaitForAppendDuration, startTime, e.metricsLabel)
+	}()
+
 	currentPos := e.currentOffset.Load()
 	if currentPos != nil && isNewChunkPosition(currentPos, lastSeen) {
 		return nil
@@ -170,11 +179,11 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, ErrInCloseProcess
 	}
 
-	metrics.IncrCounterWithLabels(engineMetricsGetTotal, 1, e.metricsLabel)
+	metrics.IncrCounterWithLabels(mKeyGetTotal, 1, e.metricsLabel)
 	startTime := time.Now()
 
 	defer func() {
-		metrics.MeasureSinceWithLabels(engineMetricsGetDuration, startTime, e.metricsLabel)
+		metrics.MeasureSinceWithLabels(mKeyGetDuration, startTime, e.metricsLabel)
 	}()
 
 	checkFunc := func() (y.ValueStruct, error) {

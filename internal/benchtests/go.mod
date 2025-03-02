@@ -18,7 +18,7 @@ require (
 
 require (
 	github.com/PowerDNS/lmdb-go v1.9.3 // indirect
-	github.com/ankur-anand/wal v0.0.3 // indirect
+	github.com/ankur-anand/wal v0.0.4 // indirect
 	github.com/bits-and-blooms/bitset v1.20.0 // indirect
 	github.com/bits-and-blooms/bloom/v3 v3.7.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

@@ -236,3 +236,47 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	assert.ErrorIs(t, err, ErrKeyNotFound, "Get operation should not succeed")
 	assert.Nil(t, value, "Get value should not be nil")
 }
+
+func TestEngine_RecoveredWalShouldNotRecoverAgain(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "testnamespace"
+
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 30
+	engine, err := NewStorageEngine(dir, namespace, config)
+	assert.NoError(t, err, "NewStorage should not error")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	insertedKV := make(map[string]string)
+	t.Run("persist_key_value", func(t *testing.T) {
+		for i := 0; i < 100; i++ {
+			key := gofakeit.UUID()
+			value := gofakeit.LetterN(100)
+			insertedKV[key] = value
+			err := engine.persistKeyValue([]byte(key), []byte(value), walrecord.LogOperationInsert)
+			assert.NoError(t, err, "persistKeyValue should not error")
+		}
+	})
+
+	t.Run("engine_close", func(t *testing.T) {
+		err := engine.close(ctx)
+		assert.NoError(t, err, "storage engine close should not error")
+	})
+
+	t.Run("restart_engine_and_close", func(t *testing.T) {
+		engine, err = NewStorageEngine(dir, namespace, config)
+		assert.NoError(t, err, "NewStorageEngine should not error")
+		assert.Equal(t, 100, engine.RecoveredWALCount(), "recovered wal count should match")
+		err := engine.close(ctx)
+		assert.NoError(t, err, "storage engine close should not error")
+	})
+
+	t.Run("restart_engine_and_close", func(t *testing.T) {
+		engine, err = NewStorageEngine(dir, namespace, config)
+		assert.NoError(t, err, "NewStorageEngine should not error")
+		assert.Equal(t, 0, engine.RecoveredWALCount(), "recovered wal count should match")
+		err := engine.close(ctx)
+		assert.NoError(t, err, "storage engine close should not error")
+	})
+}

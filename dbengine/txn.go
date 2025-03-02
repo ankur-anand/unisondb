@@ -21,9 +21,9 @@ var (
 )
 
 var (
-	txnMetricsKeyCommitedTotal     = append(packageKey, "txn", "commited", "total")
-	txnMetricsKeyBeginTotal        = append(packageKey, "txn", "begin", "total")
-	txnMetricsKeyLifecycleDuration = append(packageKey, "txn", "lifecycle", "durations", "seconds")
+	mTxnKeyCommitedTotal     = append(packageKey, "txn", "commited", "total")
+	mTxnKeyBeginTotal        = append(packageKey, "txn", "begin", "total")
+	mTxnKeyLifecycleDuration = append(packageKey, "txn", "lifecycle", "durations", "seconds")
 )
 
 type txMemTableEntry struct {
@@ -90,7 +90,7 @@ func (e *Engine) NewTxn(txnType walrecord.LogOperation, valueType walrecord.Valu
 		return nil, err
 	}
 
-	metrics.IncrCounterWithLabels(txnMetricsKeyBeginTotal, 1, e.metricsLabel)
+	metrics.IncrCounterWithLabels(mTxnKeyBeginTotal, 1, e.metricsLabel)
 	return &Txn{
 		txnID:           uuid,
 		lastPos:         offset,
@@ -216,8 +216,8 @@ func (t *Txn) Commit() error {
 	}
 
 	defer func() {
-		metrics.IncrCounterWithLabels(txnMetricsKeyCommitedTotal, 1, t.engine.metricsLabel)
-		metrics.MeasureSinceWithLabels(txnMetricsKeyLifecycleDuration, t.startTime, t.engine.metricsLabel)
+		metrics.IncrCounterWithLabels(mTxnKeyCommitedTotal, 1, t.engine.metricsLabel)
+		metrics.MeasureSinceWithLabels(mTxnKeyLifecycleDuration, t.startTime, t.engine.metricsLabel)
 	}()
 
 	// flush all the writes on mem-table
