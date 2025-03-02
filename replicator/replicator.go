@@ -82,7 +82,9 @@ func (r *Replicator) Replicate(ctx context.Context, recordsChan chan<- []*v1.WAL
 
 		err = r.replicateFromReader(ctx, recordsChan)
 		if err != nil {
-			return err
+			if !errors.Is(err, io.EOF) {
+				return err
+			}
 		}
 	}
 }
