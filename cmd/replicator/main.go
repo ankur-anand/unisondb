@@ -15,17 +15,18 @@ import (
 	"time"
 
 	"github.com/ankur-anand/kvalchemy/cmd/replicator/config"
-	storage "github.com/ankur-anand/kvalchemy/dbengine"
+	"github.com/ankur-anand/kvalchemy/dbengine"
 	"github.com/ankur-anand/kvalchemy/internal/middleware"
 	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
 	"github.com/ankur-anand/kvalchemy/services/kvstore"
-	"github.com/ankur-anand/kvalchemy/services/replicator"
+	"github.com/ankur-anand/kvalchemy/services/streamer"
 	"github.com/hashicorp/go-metrics"
 	hashiprom "github.com/hashicorp/go-metrics/prometheus"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 )
@@ -86,10 +87,10 @@ func main() {
 
 type mainServer struct {
 	cfg           config.Config
-	engines       map[string]*storage.Engine
+	engines       map[string]*dbengine.Engine
 	grpcServer    *grpc.Server
 	httpServer    *http.Server
-	storageConfig *storage.EngineConfig
+	storageConfig *dbengine.EngineConfig
 
 	// callbacks when shutdown.
 	deferCallback []func(ctx context.Context)
@@ -106,7 +107,7 @@ func (ms *mainServer) init(ctx context.Context) error {
 	fatalIfErr(err)
 	err = toml.Unmarshal(cfgBytes, &ms.cfg)
 	fatalIfErr(err)
-	ms.engines = make(map[string]*storage.Engine)
+	ms.engines = make(map[string]*dbengine.Engine)
 	return nil
 }
 
@@ -121,12 +122,12 @@ func (ms *mainServer) initTelemetry(ctx context.Context) error {
 	defaultConfig.EnableHostname = false
 	_, err = metrics.New(defaultConfig, sink)
 	fatalIfErr(err)
-	replicator.RegisterMetrics()
+	streamer.RegisterMetrics()
 	return nil
 }
 
 func (ms *mainServer) setupStorageConfig(ctx context.Context) error {
-	storeConfig := storage.NewDefaultEngineConfig()
+	storeConfig := dbengine.NewDefaultEngineConfig()
 
 	ms.storageConfig = storeConfig
 	return nil
@@ -134,7 +135,7 @@ func (ms *mainServer) setupStorageConfig(ctx context.Context) error {
 
 func (ms *mainServer) setupStorage(ctx context.Context) error {
 	for _, namespace := range ms.cfg.Storage.Namespaces {
-		store, err := storage.NewStorageEngine(ms.cfg.Storage.BaseDir, namespace, ms.storageConfig)
+		store, err := dbengine.NewStorageEngine(ms.cfg.Storage.BaseDir, namespace, ms.storageConfig)
 		fatalIfErr(err)
 		ms.engines[namespace] = store
 		ms.deferCallback = append(ms.deferCallback, func(ctx context.Context) {
@@ -148,7 +149,8 @@ func (ms *mainServer) setupStorage(ctx context.Context) error {
 }
 
 func (ms *mainServer) setupGrpcServer(ctx context.Context) error {
-	rep := replicator.NewWalReplicatorServer(ms.engines)
+	errGroup, _ := errgroup.WithContext(ctx)
+	rep := streamer.NewGrpcStreamer(errGroup, ms.engines, 2*time.Minute)
 	kvr := kvstore.NewKVReaderService(ms.engines)
 	kvw := kvstore.NewKVWriterService(ms.engines)
 

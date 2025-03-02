@@ -316,7 +316,7 @@ func (e *Engine) NewReaderWithStart(startPos *Offset) (*Reader, error) {
 	if startPos == nil {
 		return e.NewReader()
 	}
-	
+
 	if curOffset == nil {
 		return nil, ErrInvalidOffset
 	}
@@ -329,8 +329,11 @@ func (e *Engine) NewReaderWithStart(startPos *Offset) (*Reader, error) {
 		if startPos.BlockNumber > curOffset.BlockNumber {
 			return nil, ErrInvalidOffset
 		}
-		if startPos.ChunkOffset > curOffset.ChunkOffset {
-			return nil, ErrInvalidOffset
+
+		if startPos.BlockNumber == curOffset.BlockNumber {
+			if startPos.ChunkOffset > curOffset.ChunkOffset {
+				return nil, ErrInvalidOffset
+			}
 		}
 	}
 
