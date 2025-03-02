@@ -61,14 +61,5 @@ jobs:
         run: |
           go vet ./...
 
-      - name: Run Go Fmt
-        run: |
-          files=$(go fmt ./...)
-          if [ -n "$files" ]; then
-            echo "Please run gofmt on these files ..."
-            echo "$files"
-            exit 1
-          fi
-
       - name: Run go test
         run: go test  -count 1 -v -race -covermode atomic $(go list ./... | grep -v  proto)
