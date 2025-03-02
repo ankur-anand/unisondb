@@ -36,9 +36,18 @@ var (
 // Offset represents the offset in the wal.
 type Offset = wal.Offset
 
+// DecodeOffset decodes the offset position from a byte slice
+func DecodeOffset(b []byte) *Offset {
+	return wal.DecodeOffset(b)
+}
+
 // RecoveredWALCount returns the number of WAL entries successfully recovered.
 func (e *Engine) RecoveredWALCount() int {
 	return e.recoveredEntriesCount
+}
+
+func (e *Engine) Namespace() string {
+	return e.namespace
 }
 
 type countingWriter struct {

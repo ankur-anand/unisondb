@@ -11,7 +11,7 @@ service WALReplicationService {
 }
 
 message StreamWALRequest {
-  optional bytes metadata = 1; // Last applied WAL checkpoint
+  optional bytes offset = 1; // Last applied WAL checkpoint offset.
 }
 
 // Server's Response Message (Streaming)
@@ -22,8 +22,9 @@ message StreamWALResponse {
 
 // WAL Record Format
 message WALRecord {
-  bytes chunk_pos = 1;
-  bytes record = 2;        // entire WAL entry
+  bytes offset = 1;
+  bytes record = 2;
+  fixed32 crc32_checksum = 3;
 }
 
 service KVStoreWriteService {
@@ -46,6 +47,7 @@ message PutRequest {
   bytes key = 1;
   bytes value = 2;
   google.protobuf.Timestamp timestamp = 4;
+  fixed32 crc32_checksum = 3;
 }
 
 message PutStreamRequest {
@@ -82,11 +84,11 @@ message ChunkStartMarker {
 
 message ChunkPutValue {
   bytes value = 1;
-  uint32 crc32_checksum = 2;
+  fixed32 crc32_checksum = 2;
 }
 
 message ChunkCommitMarker {
-  uint32 final_crc32_checksum = 1;
+  fixed32 final_crc32_checksum = 1;
 }
 
 message PutStreamChunksForKeyResponse {}
