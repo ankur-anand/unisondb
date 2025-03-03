@@ -9,16 +9,19 @@ type ValueType byte
 const (
 	ValueTypeFull    ValueType = 0
 	ValueTypeChunked ValueType = 1
+	ValueTypeColumn  ValueType = 2
 )
 
 var EnumNamesValueType = map[ValueType]string{
 	ValueTypeFull:    "Full",
 	ValueTypeChunked: "Chunked",
+	ValueTypeColumn:  "Column",
 }
 
 var EnumValuesValueType = map[string]ValueType{
 	"Full":    ValueTypeFull,
 	"Chunked": ValueTypeChunked,
+	"Column":  ValueTypeColumn,
 }
 
 func (v ValueType) String() string {
