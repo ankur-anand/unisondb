@@ -192,7 +192,7 @@ func main() {
 		fmt.Printf("sync.Cond average time per iteration: %.6f ms\n", avgSyncCond)
 		fmt.Printf("Buffered channel average time per iteration: %.6f ms\n", avgBuffered)
 		fmt.Printf("Unbuffered channel average time per iteration: %.6f ms\n", avgUnbuffered)
-		
+
 		results := [][]string{
 			{"sync.Cond", fmt.Sprintf("%.6f", avgSyncCond), strconv.Itoa(numGoroutines)},
 			{"Buffered Channel", fmt.Sprintf("%.6f", avgBuffered), strconv.Itoa(numGoroutines)},

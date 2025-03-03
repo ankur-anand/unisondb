@@ -29,7 +29,7 @@ type Record struct {
 //
 //nolint:funlen
 func (wr *Record) FBEncode() ([]byte, error) {
-	builder := flatbuffers.NewBuilder(2048)
+	builder := flatbuffers.NewBuilder(1024)
 	keyOffset := builder.CreateByteVector(wr.Key)
 
 	// https://flatbuffers.dev/internals/
