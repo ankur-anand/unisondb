@@ -249,8 +249,28 @@ func (rcv *WalRecord) MutateValue(j int, n byte) bool {
 	return false
 }
 
+func (rcv *WalRecord) Columns(obj *ColumnEntry, j int) bool {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(24))
+	if o != 0 {
+		x := rcv._tab.Vector(o)
+		x += flatbuffers.UOffsetT(j) * 4
+		x = rcv._tab.Indirect(x)
+		obj.Init(rcv._tab.Bytes, x)
+		return true
+	}
+	return false
+}
+
+func (rcv *WalRecord) ColumnsLength() int {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(24))
+	if o != 0 {
+		return rcv._tab.VectorLen(o)
+	}
+	return 0
+}
+
 func WalRecordStart(builder *flatbuffers.Builder) {
-	builder.StartObject(10)
+	builder.StartObject(11)
 }
 func WalRecordAddIndex(builder *flatbuffers.Builder, index uint64) {
 	builder.PrependUint64Slot(0, index, 0)
@@ -293,6 +313,12 @@ func WalRecordAddValue(builder *flatbuffers.Builder, value flatbuffers.UOffsetT)
 }
 func WalRecordStartValueVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)
+}
+func WalRecordAddColumns(builder *flatbuffers.Builder, columns flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(10, flatbuffers.UOffsetT(columns), 0)
+}
+func WalRecordStartColumnsVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+	return builder.StartVector(4, numElems, 4)
 }
 func WalRecordEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	return builder.EndObject()
