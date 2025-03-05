@@ -128,7 +128,7 @@ func TestBoltDBCorruptChunkMetadata(t *testing.T) {
 		assert.NotNil(t, b, "bucket should exist")
 
 		// an invalid metadata entry (less than 5 bytes)
-		return b.Put(key, []byte{ChunkedValueFlag, 1})
+		return b.Put(key, []byte{valueTypeChunked, 1})
 	})
 	assert.NoError(t, err, "Failed to insert corrupt metadata")
 

@@ -55,7 +55,7 @@ func TestBolt_Suite(t *testing.T) {
 	assert.NoError(t, err, "failed to dump stats")
 	assert.NoError(t, store.Close(), "failed to close store")
 	output := buf.String()
-	assert.Contains(t, output, "bolt.set.total")
-	assert.Contains(t, output, "bolt.get.total")
-	assert.Contains(t, output, "bolt.delete.total")
+	assert.Contains(t, output, "set.total")
+	assert.Contains(t, output, "get.total")
+	assert.Contains(t, output, "delete.total")
 }
