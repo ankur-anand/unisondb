@@ -82,9 +82,9 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 	txn, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.ValueTypeChunked)
 	assert.NoError(t, err, "NewBatch operation should succeed")
 	assert.NotNil(t, txn, "NewBatch operation should succeed")
-	err = txn.AppendTxnEntry(batchKey, []byte(batchValues[0]))
+	err = txn.AppendKVTxn(batchKey, []byte(batchValues[0]))
 	assert.NoError(t, err, "Append operation should succeed")
-	err = txn.AppendTxnEntry(key, []byte(batchValues[0]))
+	err = txn.AppendKVTxn(key, []byte(batchValues[0]))
 	// changing key from the chunked value type should error out,
 	assert.ErrorIs(t, err, dbengine.ErrKeyChangedForChunkedType, "Append operation should fail")
 
@@ -94,7 +94,7 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 
 	var checksum uint32
 	for _, batchValue := range batchValues {
-		err := txn.AppendTxnEntry(batchKey, []byte(batchValue))
+		err := txn.AppendKVTxn(batchKey, []byte(batchValue))
 		checksum = crc32.Update(checksum, crc32.IEEETable, []byte(batchValue))
 		assert.NoError(t, err, "NewBatch operation should succeed")
 	}
@@ -144,7 +144,7 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 			key := []byte(gofakeit.UUID())
 			value := []byte(gofakeit.Sentence(500))
 			kv[string(key)] = value
-			err := txn.AppendTxnEntry(key, value)
+			err := txn.AppendKVTxn(key, value)
 			assert.NoError(t, err, "Append operation should succeed")
 
 			value, err = engine.Get(key)
@@ -168,7 +168,7 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 		for i := 0; i < 20; i++ {
 			key := gofakeit.RandomMapKey(kv).(string)
 			deletedKeys[key] = struct{}{}
-			err := txn.AppendTxnEntry([]byte(key), nil)
+			err := txn.AppendKVTxn([]byte(key), nil)
 			assert.NoError(t, err, "Append operation should succeed")
 			value, err := engine.Get([]byte(key))
 			assert.NoError(t, err, "Get operation should succeed")

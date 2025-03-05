@@ -18,6 +18,7 @@ var (
 	ErrTxnAlreadyCommitted      = errors.New("txn already committed")
 	ErrKeyChangedForChunkedType = errors.New("chunked txn type cannot change key from first value")
 	ErrUnsupportedTxnType       = errors.New("unsupported txn type")
+	ErrEmptyColumns             = errors.New("empty column set")
 )
 
 var (
@@ -40,7 +41,7 @@ type Txn struct {
 	lastPos *wal.Offset
 	// dataStore all the memTableEntries that can be stored on memTable after the commit has been called.
 	memTableEntries []txMemTableEntry
-	chunkedKey      []byte
+	rowKey          []byte
 	txnID           []byte
 	startTime       time.Time
 	valuesCount     int
@@ -105,17 +106,17 @@ func (e *Engine) NewTxn(txnType walrecord.LogOperation, valueType walrecord.Valu
 	}, nil
 }
 
-// AppendTxnEntry append an entry to the WAL as part of a Txn.
-func (t *Txn) AppendTxnEntry(key []byte, value []byte) error {
+// AppendKVTxn append a key, value to the WAL as part of a Txn.
+func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 	if t.err != nil {
 		return t.err
 	}
 
-	if t.txnOperation == walrecord.LogOperationInsert && t.txnValueType != walrecord.ValueTypeFull && t.chunkedKey == nil {
-		t.chunkedKey = key
+	if t.txnOperation == walrecord.LogOperationInsert && t.txnValueType != walrecord.ValueTypeFull && t.rowKey == nil {
+		t.rowKey = key
 	}
 
-	if t.txnOperation == walrecord.LogOperationInsert && t.txnValueType != walrecord.ValueTypeFull && !bytes.Equal(t.chunkedKey, key) {
+	if t.txnOperation == walrecord.LogOperationInsert && t.txnValueType != walrecord.ValueTypeFull && !bytes.Equal(t.rowKey, key) {
 		t.err = ErrKeyChangedForChunkedType
 		return t.err
 	}
@@ -178,6 +179,71 @@ func (t *Txn) AppendTxnEntry(key []byte, value []byte) error {
 	return nil
 }
 
+// AppendColumnTxn appends the Columns update type Txn to wal for the provided rowKey.
+// Update/Delete Ops for column is decided by the Log Operation type.
+// Single Txn Cannot contain both update and delete ops.
+// Caller can set the Columns Key to empty value, if deleted needs to be part of same Txn.
+func (t *Txn) AppendColumnTxn(rowKey []byte, columns map[string][]byte) error {
+	if t.err != nil {
+		return t.err
+	}
+	if t.txnValueType != walrecord.ValueTypeColumn {
+		return ErrUnsupportedTxnType
+	}
+	
+	if len(columns) == 0 {
+		return ErrEmptyColumns
+	}
+
+	compressedColumns := make(map[string][]byte)
+	for key, value := range columns {
+		compressed, err := compress.CompressLZ4(value)
+		if err != nil {
+			return err
+		}
+		compressedColumns[key] = compressed
+		t.checksum = crc32.Update(t.checksum, crc32.IEEETable, compressed)
+	}
+
+	t.engine.mu.Lock()
+	defer t.engine.mu.Unlock()
+	index := t.engine.writeSeenCounter.Add(1)
+
+	record := &walrecord.Record{
+		Index:         index,
+		Hlc:           HLCNow(index),
+		Key:           rowKey,
+		Value:         nil,
+		LogOperation:  t.txnOperation,
+		TxnID:         t.txnID,
+		TxnStatus:     walrecord.TxnStatusPrepare,
+		ValueType:     t.txnValueType,
+		PrevTxnOffset: t.lastPos,
+		ColumnEntries: compressedColumns,
+	}
+
+	// Encode and compress WAL record
+	encoded, err := record.FBEncode()
+
+	if err != nil {
+		t.err = err
+		return err
+	}
+
+	// Write to WAL
+	offset, err := t.engine.walIO.Append(encoded)
+
+	if err != nil {
+		t.err = err
+		return err
+	}
+
+	t.lastPos = offset
+
+	t.valuesCount++
+	return nil
+}
+
 // Commit the Txn.
 func (t *Txn) Commit() error {
 	if t.err != nil {
@@ -190,7 +256,7 @@ func (t *Txn) Commit() error {
 	record := &walrecord.Record{
 		Index:         index,
 		Hlc:           HLCNow(index),
-		Key:           t.chunkedKey,
+		Key:           t.rowKey,
 		Value:         marshalChecksum(t.checksum),
 		LogOperation:  t.txnOperation,
 		TxnID:         t.txnID,
@@ -222,26 +288,54 @@ func (t *Txn) Commit() error {
 
 	// flush all the writes on mem-table
 	t.lastPos = offset
-	if t.txnValueType != walrecord.ValueTypeChunked {
-		for _, memValue := range t.memTableEntries {
-			err := t.engine.memTableWrite(memValue.key, memValue.value, memValue.offset)
-			if err != nil {
-				t.err = err
-				return err
-			}
-		}
+
+	var mErr error
+	switch t.txnValueType {
+	case walrecord.ValueTypeFull:
+		mErr = t.memWriteFull()
+	case walrecord.ValueTypeChunked:
+		mErr = t.memWriteChunk(encoded)
 	}
 
-	if t.txnValueType == walrecord.ValueTypeChunked {
-		memValue := getValueStruct(byte(walrecord.LogOperationInsert), true, encoded)
-		err := t.engine.memTableWrite(t.chunkedKey, memValue, offset)
+	if mErr != nil {
+		t.err = mErr
+		return mErr
+	}
+
+	t.err = ErrTxnAlreadyCommitted
+	return nil
+}
+
+func (t *Txn) memWriteColumns(encoded []byte) error {
+	memValue := getValueStruct(byte(walrecord.LogOperationInsert), true, encoded)
+	err := t.engine.memTableWrite(t.rowKey, memValue, t.lastPos)
+	if err != nil {
+		t.err = err
+		return err
+	}
+	return nil
+}
+
+func (t *Txn) memWriteChunk(encoded []byte) error {
+	memValue := getValueStruct(byte(walrecord.LogOperationInsert), true, encoded)
+	err := t.engine.memTableWrite(t.rowKey, memValue, t.lastPos)
+	if err != nil {
+		t.err = err
+		return err
+	}
+
+	return nil
+}
+
+func (t *Txn) memWriteFull() error {
+	for _, memValue := range t.memTableEntries {
+		err := t.engine.memTableWrite(memValue.key, memValue.value, memValue.offset)
 		if err != nil {
 			t.err = err
 			return err
 		}
 	}
 
-	t.err = ErrTxnAlreadyCommitted
 	return nil
 }
 

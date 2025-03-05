@@ -159,7 +159,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 		batchValues = append(batchValues, value)
 		fullValue.Write([]byte(batchValues[i]))
 		checksum = crc32.Update(checksum, crc32.IEEETable, []byte(value))
-		err := batch.AppendTxnEntry(batchKey, []byte(value))
+		err := batch.AppendKVTxn(batchKey, []byte(value))
 		assert.NoError(t, err, "NewBatch operation should succeed")
 	}
 

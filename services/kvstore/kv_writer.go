@@ -148,7 +148,7 @@ func (k *KVWriterService) handleChunk(txn *storage.Txn, key []byte, req *v1.PutS
 	}
 
 	value := req.Chunk.GetValue()
-	return txn.AppendTxnEntry(key, value)
+	return txn.AppendKVTxn(key, value)
 }
 
 func (k *KVWriterService) handleCommitMarker(txn *storage.Txn,

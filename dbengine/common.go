@@ -58,6 +58,10 @@ type BtreeWriter interface {
 	// DeleteMany delete multiple values with corresponding keys.
 	DeleteMany(keys [][]byte) error
 
+	SetRowColumns(rowKey []byte, columnEntries map[string][]byte) error
+	DeleteRowColumns(rowKey []byte, columnEntries map[string][]byte) error
+	DeleteEntireRow(rowKey []byte) (int, error)
+	
 	StoreMetadata(key []byte, value []byte) error
 	FSync() error
 }
