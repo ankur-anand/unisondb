@@ -7,8 +7,8 @@ github.com/alecthomas/template v0.0.0-20190718012654-fb15b899a751/go.mod h1:LOuy
 github.com/alecthomas/units v0.0.0-20151022065526-2efee857e7cf/go.mod h1:ybxpYRFXyAe+OPACYpWeL0wqObRcbAqCMya13uyzqw0=
 github.com/alecthomas/units v0.0.0-20190717042225-c3de453c63f4/go.mod h1:ybxpYRFXyAe+OPACYpWeL0wqObRcbAqCMya13uyzqw0=
 github.com/alecthomas/units v0.0.0-20190924025748-f65c72e2690d/go.mod h1:rBZYJk541a8SKzHPHnH3zbiI+7dagKZ0cgpgrD7Fyho=
-github.com/ankur-anand/wal v0.0.3 h1:GxdaZcvdQrDs+uGIvdumJvidcUHueez0yS8ULGhDD8g=
-github.com/ankur-anand/wal v0.0.3/go.mod h1:3RBaPINPiOhwbw7CCKWNcwpuXicQEAB/yBrFQc8LAzA=
+github.com/anishathalye/porcupine v1.0.2 h1:cXMWjnN95KYsbZVTi9VmXj0ePs1w3ZJ82zWoXDy6WPE=
+github.com/anishathalye/porcupine v1.0.2/go.mod h1:WM0SsFjWNl2Y4BqHr/E/ll2yY1GY1jqn+W7Z/84Zoog=
 github.com/ankur-anand/wal v0.0.4 h1:LtRk1i6WjJLg+uaBufz4w3Ycb87ZwSODIDD9gZq5F6g=
 github.com/ankur-anand/wal v0.0.4/go.mod h1:3RBaPINPiOhwbw7CCKWNcwpuXicQEAB/yBrFQc8LAzA=
 github.com/armon/go-metrics v0.4.1/go.mod h1:E6amYzXo6aW1tqzoZGT755KkbgrJsSdpwZ+3JqfkOG4=
