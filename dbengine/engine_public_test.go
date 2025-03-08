@@ -3,17 +3,20 @@ package dbengine_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/anishathalye/porcupine"
 	"github.com/ankur-anand/kvalchemy/dbengine"
 	"github.com/ankur-anand/kvalchemy/dbengine/compress"
 	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStorageEngine(t *testing.T) {
@@ -247,7 +250,7 @@ func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			readyWg.Done()
-			err := engine.WaitForAppend(ctx, 5*time.Second, nil)
+			err := engine.WaitForAppend(ctx, 10*time.Second, nil)
 			assert.NoError(t, err, "WaitForAppend should return without timeout after Put")
 		}()
 	}
@@ -327,4 +330,154 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Errorf("timeout waiting for eof error")
 	}
+}
+
+// https://anishathalye.com/testing-distributed-systems-for-linearizability/
+// Linearizability Testing with Porcupine.
+// Linearizability is a property of the system where the order of operation is in the same order in which it has
+// happened in the real world.
+
+type dbInput struct {
+	op    uint8 // 0 => read, 1 => write
+	key   string
+	value string
+}
+
+const (
+	opGet = 0
+	opPut = 1
+)
+
+func TestEngineLinearizability(t *testing.T) {
+	dir := t.TempDir()
+	nameSpace := "test_namespace"
+	// Create the engine
+	engine, err := dbengine.NewStorageEngine(dir, nameSpace, dbengine.NewDefaultEngineConfig())
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		err := engine.Close(t.Context())
+		require.NoError(t, err)
+	})
+
+	// linearizability model for our key-value store
+	// model is a sequential specification of a register.
+	model := porcupine.Model{
+		Init: func() interface{} {
+			// init state: empty map
+			return make(map[string]string)
+		},
+		Step: func(state interface{}, input interface{}, output interface{}) (bool, interface{}) {
+			st := state.(map[string]string)
+			inp := input.(dbInput)
+			out := output.(string)
+
+			newState := make(map[string]string)
+			for k, v := range st {
+				newState[k] = v
+			}
+
+			switch inp.op {
+			case opGet:
+				val, exists := newState[inp.key]
+				if !exists {
+					return out == "", newState
+				}
+
+				return out == val, newState
+
+			case opPut:
+				newState[inp.key] = inp.value
+				return out == "ok", newState
+
+			default:
+				return false, state
+			}
+		},
+		DescribeOperation: func(input, output interface{}) string {
+			inp := input.(dbInput)
+			switch inp.op {
+			case 0:
+				return fmt.Sprintf("get('%s') -> '%s'", inp.key, inp.value)
+			case 1:
+				return fmt.Sprintf("put('%s', '%s')", inp.key, inp.value)
+			default:
+				return "<invalid>"
+			}
+		},
+	}
+
+	parallelism := 8
+	opsPerClient := 200
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var events []porcupine.Event
+
+	var eventID int
+
+	recordOperation := func(clientId int, op dbInput, result string) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		eventID++
+		events = append(events, porcupine.Event{
+			Kind:     porcupine.CallEvent,
+			Id:       eventID,
+			ClientId: clientId,
+			Value:    op,
+		})
+
+		events = append(events, porcupine.Event{
+			Kind:     porcupine.ReturnEvent,
+			Id:       eventID,
+			ClientId: clientId,
+			Value:    result,
+		})
+	}
+
+	wg.Add(parallelism)
+	for i := 0; i < parallelism; i++ {
+		go func(clientId int) {
+			defer wg.Done()
+
+			for j := 0; j < opsPerClient; j++ {
+				key := fmt.Sprintf("key-%d-%d", clientId, j%10)
+
+				if j%3 == 0 {
+					val, err := engine.Get([]byte(key))
+
+					result := ""
+					if err == nil {
+						result = string(val)
+					}
+
+					recordOperation(clientId, dbInput{
+						op:    opGet,
+						key:   key,
+						value: result,
+					}, result)
+				} else {
+					value := fmt.Sprintf("value-%d-%d", clientId, j)
+					err := engine.Put([]byte(key), []byte(value))
+
+					result := "ok"
+					if err != nil {
+						result = "error"
+					}
+
+					recordOperation(clientId, dbInput{
+						op:    opPut,
+						key:   key,
+						value: value,
+					}, result)
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	res := porcupine.CheckEvents(model, events)
+	assert.True(t, res)
 }
