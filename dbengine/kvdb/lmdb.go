@@ -219,7 +219,6 @@ func (l *LmdbEmbed) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []ma
 
 	totalColumns := 0
 	err := l.env.Update(func(tx *lmdb.Txn) error {
-
 		for i, rowKey := range rowKeys {
 			columnEntries := columnEntriesPerRow[i]
 			if len(columnEntries) == 0 {
@@ -484,29 +483,9 @@ func (l *LmdbEmbed) Get(key []byte) ([]byte, error) {
 				return fmt.Errorf("invalid chunk metadata for key %s: %w", string(key), ErrInvalidChunkMetadata)
 			}
 
-			// Parse chunk metadata
-			chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
-			storedChecksum := binary.LittleEndian.Uint32(storedValue[5:9])
-			var calculatedChecksum uint32
-
-			fullValue := bytes.NewBuffer(make([]byte, 0, chunkCount*1024))
-
-			for i := uint32(0); i < chunkCount; i++ {
-				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-				chunkData, err := txn.Get(l.db, []byte(chunkKey))
-				if err != nil {
-					if lmdb.IsNotFound(err) {
-						return fmt.Errorf("chunk %d missing for key %s", i, string(key))
-					}
-					return err
-				}
-
-				calculatedChecksum = crc32.Update(calculatedChecksum, crc32.IEEETable, chunkData)
-				fullValue.Write(chunkData)
-			}
-
-			if calculatedChecksum != storedChecksum {
-				return fmt.Errorf("checksum mismatch for key %s: %w", string(key), ErrRecordCorrupted)
+			fullValue, err := l.getChunked(txn, key, storedValue)
+			if err != nil {
+				return err
 			}
 
 			value = make([]byte, fullValue.Len())
@@ -523,6 +502,35 @@ func (l *LmdbEmbed) Get(key []byte) ([]byte, error) {
 	})
 
 	return value, err
+}
+
+func (l *LmdbEmbed) getChunked(txn *lmdb.Txn, key []byte, storedValue []byte) (*bytes.Buffer, error) {
+	// Parse chunk metadata
+	chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
+	storedChecksum := binary.LittleEndian.Uint32(storedValue[5:9])
+	var calculatedChecksum uint32
+
+	fullValue := bytes.NewBuffer(make([]byte, 0, chunkCount*1024))
+
+	for i := uint32(0); i < chunkCount; i++ {
+		chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
+		chunkData, err := txn.Get(l.db, []byte(chunkKey))
+		if err != nil {
+			if lmdb.IsNotFound(err) {
+				return nil, fmt.Errorf("chunk %d missing for key %s", i, string(key))
+			}
+			return nil, err
+		}
+
+		calculatedChecksum = crc32.Update(calculatedChecksum, crc32.IEEETable, chunkData)
+		fullValue.Write(chunkData)
+	}
+
+	if calculatedChecksum != storedChecksum {
+		return nil, fmt.Errorf("checksum mismatch for key %s: %w", string(key), ErrRecordCorrupted)
+	}
+
+	return fullValue, nil
 }
 
 // GetRowColumns returns all the columns for the given row. If a ColumnPredicate predicate func is provided, it will only
@@ -589,7 +597,8 @@ func (l *LmdbEmbed) getColumns(txn *lmdb.Txn,
 	// http://www.lmdb.tech/doc/group__mdb.html#ga1206b2af8b95e7f6b0ef6b28708c9127
 	// MDB_SET_RANGE
 	// Position at first key greater than or equal to specified key.
-	k, _, err := c.Get(rowKey, nil, lmdb.SetRange)
+	var k []byte
+	_, _, err = c.Get(rowKey, nil, lmdb.SetRange)
 	var value []byte
 
 	for err == nil {

@@ -416,7 +416,7 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 	t.Run("get_delete", func(t *testing.T) {
 		_, err := s.store.Get([]byte(rowKey))
 		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
-		for key, _ := range deleteColumn {
+		for key := range deleteColumn {
 			value, err := s.store.Get([]byte(rowKey + "::" + key))
 			assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
 			assert.Nil(t, value, "Retrieved value should be nil")
@@ -488,10 +488,7 @@ func (s *testSuite) TestSetGetDelete_RowColumns_Filter(t *testing.T) {
 
 	t.Run("get", func(t *testing.T) {
 		fetchedEntries, err := s.store.GetRowColumns([]byte(rowKey), func(i []byte) bool {
-			if filterKeys[string(i)] != nil {
-				return true
-			}
-			return false
+			return filterKeys[string(i)] != nil
 		})
 		assert.NoError(t, err, "Failed to fetch row columns")
 		assert.Equal(t, filterKeys, fetchedEntries)
@@ -605,7 +602,7 @@ func (s *testSuite) TestSetGetDelete_NMRowColumns(t *testing.T) {
 	t.Run("get_delete", func(t *testing.T) {
 		_, err := s.store.Get([]byte(rowKey1))
 		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
-		for key, _ := range deleteColumn {
+		for key := range deleteColumn {
 			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
 			assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
 			assert.Nil(t, value, "Retrieved value should be nil")
