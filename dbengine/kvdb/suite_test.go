@@ -26,9 +26,9 @@ type btreeWriter interface {
 	Delete(key []byte) error
 	// DeleteMany delete multiple values with corresponding keys.
 	DeleteMany(keys [][]byte) error
-	SetRowColumns(rowKey []byte, columnEntries map[string][]byte) error
-	DeleteRowColumns(rowKey []byte, columnEntries map[string][]byte) error
-	DeleteEntireRow(rowKey []byte) (int, error)
+	SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	DeleteMayRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	DeleteEntireRows(rowKeys [][]byte) (int, error)
 	StoreMetadata(key []byte, value []byte) error
 	FSync() error
 	Restore(reader io.Reader) error
@@ -106,12 +106,16 @@ func getTestSuites(factory *testSuite) []suite {
 			runFunc: factory.TestSetGetAndDeleteMany_Combined,
 		},
 		{
-			name:    "store_set_columns",
+			name:    "store_set_get_delete_columns",
 			runFunc: factory.TestSetGetDelete_RowColumns,
 		},
 		{
 			name:    "store_delete_columns_with_filter",
 			runFunc: factory.TestSetGetDelete_RowColumns_Filter,
+		},
+		{
+			name:    "store_set_columns_nm_row_column",
+			runFunc: factory.TestSetGetDelete_NMRowColumns,
 		},
 	}
 }
@@ -361,8 +365,19 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 		entries[key] = []byte(value)
 	}
 
+	rowKeys := [][]byte{[]byte(rowKey)}
+	columEntriesPerRow := make([]map[string][]byte, 0)
+	columEntriesPerRow = append(columEntriesPerRow, entries)
+
+	t.Run("invalid-arguments", func(t *testing.T) {
+		err := s.store.SetManyRowColumns(rowKeys, nil)
+		assert.ErrorIs(t, err, kvdb.ErrInvalidArguments)
+		err = s.store.DeleteMayRowColumns(rowKeys, nil)
+		assert.ErrorIs(t, err, kvdb.ErrInvalidArguments)
+	})
+
 	t.Run("set", func(t *testing.T) {
-		err := s.store.SetRowColumns([]byte(rowKey), entries)
+		err := s.store.SetManyRowColumns(rowKeys, columEntriesPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
 		_, err = s.store.Get([]byte(rowKey))
 		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
@@ -382,13 +397,15 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 	})
 
 	// delete 10 Columns
+	deleteColumnPerRow := make([]map[string][]byte, 0)
 	deleteColumn := make(map[string][]byte)
 	for i := 0; i < 100; i++ {
 		deleteColumn[gofakeit.RandomMapKey(entries).(string)] = nil
 	}
+	deleteColumnPerRow = append(deleteColumnPerRow, deleteColumn)
 
 	t.Run("delete_column", func(t *testing.T) {
-		err := s.store.DeleteRowColumns([]byte(rowKey), deleteColumn)
+		err := s.store.DeleteMayRowColumns(rowKeys, deleteColumnPerRow)
 		assert.NoError(t, err, "Failed to delete row columns")
 
 		retrievedEntries, err := s.store.GetRowColumns([]byte(rowKey), nil)
@@ -406,6 +423,7 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 		}
 	})
 
+	updateColumnPerRow := make([]map[string][]byte, 0)
 	updateColumn := make(map[string][]byte)
 	t.Run("put_more_columns", func(t *testing.T) {
 		for i := 0; i < 10; i++ {
@@ -414,8 +432,9 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 			entries[key] = []byte(value)
 			updateColumn[key] = []byte(value)
 		}
+		updateColumnPerRow = append(updateColumnPerRow, updateColumn)
 
-		err := s.store.SetRowColumns([]byte(rowKey), updateColumn)
+		err := s.store.SetManyRowColumns(rowKeys, updateColumnPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
 		_, err = s.store.Get([]byte(rowKey))
 		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
@@ -431,9 +450,9 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 	})
 
 	t.Run("delete_row", func(t *testing.T) {
-		deleteRow, err := s.store.DeleteEntireRow([]byte(rowKey))
+		deleteRow, err := s.store.DeleteEntireRows(rowKeys)
 		assert.NoError(t, err, "Failed to delete row")
-		assert.Equal(t, deleteRow, len(entries)-len(deleteColumn), "total deleted Column should be 100")
+		assert.Equal(t, deleteRow, len(entries)-len(deleteColumn), "total deleted Column should match")
 	})
 }
 
@@ -454,10 +473,16 @@ func (s *testSuite) TestSetGetDelete_RowColumns_Filter(t *testing.T) {
 		entries[key] = []byte(value)
 	}
 
+	rowKeys := [][]byte{[]byte(rowKey)}
+	columEntriesPerRow := make([]map[string][]byte, 0)
+	columEntriesPerRow = append(columEntriesPerRow, entries)
+	filteredEntries := make([]map[string][]byte, 0)
+	filteredEntries = append(filteredEntries, filterKeys)
+
 	t.Run("set", func(t *testing.T) {
-		err := s.store.SetRowColumns([]byte(rowKey), filterKeys)
+		err := s.store.SetManyRowColumns(rowKeys, filteredEntries)
 		assert.NoError(t, err, "Failed to set row columns")
-		err = s.store.SetRowColumns([]byte(rowKey), entries)
+		err = s.store.SetManyRowColumns(rowKeys, columEntriesPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
 	})
 
@@ -490,5 +515,142 @@ func (s *testSuite) TestSetGetDelete_RowColumns_Filter(t *testing.T) {
 		fetchedEntries, err := s.store.GetRowColumns([]byte(rowKey), nil)
 		assert.NoError(t, err, "Failed to fetch row columns")
 		assert.Equal(t, entries, fetchedEntries)
+	})
+
+	t.Run("un_matched_column_should_not_return_any_error", func(t *testing.T) {
+		nonExistentColumns := map[string][]byte{}
+		for i := 0; i < 100; i++ {
+			key := gofakeit.UUID()
+			value := gofakeit.LetterN(uint(1000))
+			nonExistentColumns[key] = []byte(value)
+		}
+
+		err := s.store.DeleteMayRowColumns(rowKeys, []map[string][]byte{nonExistentColumns})
+		assert.NoError(t, err)
+	})
+}
+
+func (s *testSuite) TestSetGetDelete_NMRowColumns(t *testing.T) {
+	rowKey1 := "rows_key_nm_1"
+	columnsRow1 := make(map[string][]byte)
+	for i := 0; i < 5; i++ {
+		key := gofakeit.UUID()
+		value := gofakeit.LetterN(uint(1000))
+		columnsRow1[key] = []byte(value)
+	}
+
+	rowKey2 := "rows_key_nm_2"
+	columnsRow2 := make(map[string][]byte)
+	for i := 0; i < 4; i++ {
+		key := gofakeit.UUID()
+		value := gofakeit.LetterN(uint(1000))
+		columnsRow2[key] = []byte(value)
+	}
+
+	rowKeys := [][]byte{[]byte(rowKey1), []byte(rowKey2)}
+
+	columEntriesPerRow := make([]map[string][]byte, 0)
+	columEntriesPerRow = append(columEntriesPerRow, columnsRow1, columnsRow2)
+
+	t.Run("set", func(t *testing.T) {
+		err := s.store.SetManyRowColumns(rowKeys, columEntriesPerRow)
+		assert.NoError(t, err, "Failed to set row columns")
+		_, err = s.store.Get([]byte(rowKey1))
+		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+
+		for key, entry := range columnsRow1 {
+			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
+			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.Equal(t, value, entry)
+		}
+
+		_, err = s.store.Get([]byte(rowKey2))
+		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+
+		for key, entry := range columnsRow2 {
+			value, err := s.store.Get([]byte(rowKey2 + "::" + key))
+			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.Equal(t, value, entry)
+		}
+
+	})
+
+	t.Run("get", func(t *testing.T) {
+		fe2, err := s.store.GetRowColumns([]byte(rowKey2), nil)
+		assert.NoError(t, err, "Failed to fetch row columns")
+		assert.Equal(t, columnsRow2, fe2)
+
+		fe1, err := s.store.GetRowColumns([]byte(rowKey1), nil)
+		assert.NoError(t, err, "Failed to fetch row columns")
+		assert.Equal(t, columnsRow1, fe1)
+	})
+
+	// delete 10 Columns
+	deleteColumnPerRow := make([]map[string][]byte, 0)
+	deleteColumn := make(map[string][]byte)
+	for i := 0; i < 2; i++ {
+		deleteColumn[gofakeit.RandomMapKey(columnsRow1).(string)] = nil
+	}
+	deleteColumnPerRow = append(deleteColumnPerRow, deleteColumn)
+
+	t.Run("delete_column_1", func(t *testing.T) {
+		err := s.store.DeleteMayRowColumns([][]byte{[]byte(rowKey1)}, deleteColumnPerRow)
+		assert.NoError(t, err, "Failed to delete row columns")
+
+		retrievedEntries, err := s.store.GetRowColumns([]byte(rowKey1), nil)
+		assert.NoError(t, err, "Failed to fetch row columns")
+		assert.Equal(t, len(deleteColumn), len(columnsRow1)-len(retrievedEntries))
+	})
+
+	t.Run("get_delete", func(t *testing.T) {
+		_, err := s.store.Get([]byte(rowKey1))
+		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		for key, _ := range deleteColumn {
+			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
+			assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
+			assert.Nil(t, value, "Retrieved value should be nil")
+		}
+	})
+
+	updateColumnPerRow := make([]map[string][]byte, 0)
+	updateColumn := make(map[string][]byte)
+	t.Run("put_more_columns_1", func(t *testing.T) {
+		for i := 0; i < 1; i++ {
+			key := gofakeit.UUID()
+			value := gofakeit.LetterN(uint(1000))
+			columnsRow1[key] = []byte(value)
+			updateColumn[key] = []byte(value)
+		}
+		updateColumnPerRow = append(updateColumnPerRow, updateColumn)
+
+		err := s.store.SetManyRowColumns([][]byte{[]byte(rowKey1)}, updateColumnPerRow)
+		assert.NoError(t, err, "Failed to set row columns")
+		_, err = s.store.Get([]byte(rowKey1))
+		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+
+		for key, entry := range columnsRow1 {
+			if _, ok := deleteColumn[key]; ok {
+				continue
+			}
+			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
+			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.Equal(t, value, entry)
+		}
+	})
+
+	totalDeleted := len(columnsRow1) + len(columnsRow2) - len(deleteColumn)
+
+	t.Run("delete_row", func(t *testing.T) {
+		deleteRow, err := s.store.DeleteEntireRows(rowKeys)
+		assert.NoError(t, err, "Failed to delete row")
+		assert.Equal(t, deleteRow, totalDeleted, "total deleted Column should match")
+	})
+
+	t.Run("get_key_not_found", func(t *testing.T) {
+		_, err := s.store.GetRowColumns([]byte(rowKey2), nil)
+		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "Failed to fetch row columns")
+
+		_, err = s.store.GetRowColumns([]byte(rowKey1), nil)
+		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "Failed to fetch row columns")
 	})
 }

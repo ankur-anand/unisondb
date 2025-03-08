@@ -155,83 +155,134 @@ func (b *BoltDBEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) er
 	})
 }
 
-// SetRowColumns update/insert the provided columnEntries to the row.
-func (b *BoltDBEmbed) SetRowColumns(rowKey []byte, columnEntries map[string][]byte) error {
-	rowKey = []byte(string(rowKey) + rowKeySeperator)
+// SetManyRowColumns update/insert multiple rows and the provided columnEntries to the row.
+func (b *BoltDBEmbed) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
+	if len(rowKeys) != len(columnEntriesPerRow) {
+		return ErrInvalidArguments
+	}
 
-	metrics.IncrCounterWithLabels(mRowSetTotal, float32(len(columnEntries)), b.label)
 	startTime := time.Now()
 	defer func() {
 		metrics.MeasureSinceWithLabels(mRowSetLatency, startTime, b.label)
 	}()
 
-	entries := appendRowKeyToColumnKey(rowKey, columnEntries)
-	return b.db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(b.namespace)
-		if bucket == nil {
-			return ErrBucketNotFound
-		}
-
-		for entryKey, entry := range entries {
-			if err := bucket.Put([]byte(entryKey), entry); err != nil {
-				return err
-			}
-		}
-
-		return bucket.Put(rowKey, []byte{valueTypeColumns})
-	})
-}
-
-// DeleteRowColumns delete the provided columnEntries from the row.
-func (b *BoltDBEmbed) DeleteRowColumns(rowKey []byte, columnEntries map[string][]byte) error {
-	rowKey = []byte(string(rowKey) + rowKeySeperator)
-
-	metrics.IncrCounterWithLabels(mRowDeleteTotal, float32(len(columnEntries)), b.label)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mRowDeleteLatency, startTime, b.label)
-	}()
-
-	entries := appendRowKeyToColumnKey(rowKey, columnEntries)
-	return b.db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(b.namespace)
-		if bucket == nil {
-			return ErrBucketNotFound
-		}
-
-		for entryKey := range entries {
-			if err := bucket.Delete([]byte(entryKey)); err != nil {
-				return err
-			}
-		}
-
-		return bucket.Put(rowKey, []byte{valueTypeColumns})
-	})
-}
-
-// DeleteEntireRow deletes all the columns associated with the rowKey.
-func (b *BoltDBEmbed) DeleteEntireRow(rowKey []byte) (int, error) {
-	rowKey = []byte(string(rowKey) + rowKeySeperator)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mRowDeleteLatency, startTime, b.label)
-	}()
-	columnsDeleted := -1
+	totalColumns := 0
 	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
 			return ErrBucketNotFound
 		}
 
-		c := bucket.Cursor()
-
-		for k, _ := c.Seek(rowKey); k != nil; k, _ = c.Next() {
-			if !bytes.HasPrefix(k, rowKey) {
-				break // Stop if key is outside the prefix range
+		for i, rowKey := range rowKeys {
+			columnEntries := columnEntriesPerRow[i]
+			if len(columnEntries) == 0 {
+				continue
 			}
-			columnsDeleted++
-			if err := bucket.Delete(k); err != nil {
+
+			totalColumns += len(columnEntries)
+			pKey := append(append([]byte(nil), rowKey...), rowKeySeperator...)
+			entries := appendRowKeyToColumnKey(pKey, columnEntries)
+
+			for entryKey, entry := range entries {
+				if err := bucket.Put([]byte(entryKey), entry); err != nil {
+					return err
+				}
+			}
+
+			if err := bucket.Put(pKey, []byte{valueTypeColumns}); err != nil {
 				return err
+			}
+		}
+		return nil
+	})
+
+	metrics.IncrCounterWithLabels(mRowSetTotal, float32(totalColumns), b.label)
+	return err
+}
+
+// DeleteMayRowColumns delete the provided columnEntries from the associated row.
+func (b *BoltDBEmbed) DeleteMayRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
+	if len(rowKeys) != len(columnEntriesPerRow) {
+		return ErrInvalidArguments
+	}
+
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels(mRowDeleteLatency, startTime, b.label)
+	}()
+
+	totalColumns := 0
+	err := b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(b.namespace)
+		if bucket == nil {
+			return ErrBucketNotFound
+		}
+
+		for i, rowKey := range rowKeys {
+			columnEntries := columnEntriesPerRow[i]
+			if len(columnEntries) == 0 {
+				continue
+			}
+
+			totalColumns += len(columnEntries)
+			pKey := append(append([]byte(nil), rowKey...), rowKeySeperator...)
+			entries := appendRowKeyToColumnKey(pKey, columnEntries)
+
+			for entryKey := range entries {
+				if err := bucket.Delete([]byte(entryKey)); err != nil {
+					return err
+				}
+			}
+
+			if err := bucket.Put(pKey, []byte{valueTypeColumns}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+
+	metrics.IncrCounterWithLabels(mRowDeleteTotal, float32(totalColumns), b.label)
+	return err
+}
+
+// DeleteEntireRows deletes all the columns associated with all the rowKeys.
+func (b *BoltDBEmbed) DeleteEntireRows(rowKeys [][]byte) (int, error) {
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels(mRowDeleteLatency, startTime, b.label)
+	}()
+	columnsDeleted := -len(rowKeys)
+	err := b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(b.namespace)
+		if bucket == nil {
+			return ErrBucketNotFound
+		}
+
+		for _, rowKey := range rowKeys {
+			c := bucket.Cursor()
+			pKey := append(append([]byte(nil), rowKey...), rowKeySeperator...)
+
+			keys := make([][]byte, 0)
+			// IMP: Never delete in cursor, directly followed by Next
+			// k, _ := c.Seek(rowKey); k != nil; k, _ = c.Next() {
+			// 		c.Delete()
+			// }
+			// The above pattern should be avoided at all for
+			// https://github.com/boltdb/bolt/issues/620
+			// https://github.com/etcd-io/bbolt/issues/146
+			// Cursor.Delete followed by Next skips the next k/v pair
+			for k, _ := c.Seek(rowKey); k != nil; k, _ = c.Next() {
+				if !bytes.HasPrefix(k, pKey) {
+					break // Stop if key is outside the prefix range
+				}
+				keys = append(keys, k)
+			}
+
+			for _, k := range keys {
+				columnsDeleted++
+				if err := bucket.Delete(k); err != nil {
+					return err
+				}
 			}
 		}
 

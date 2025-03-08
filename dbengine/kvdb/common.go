@@ -22,6 +22,7 @@ var (
 	ErrBucketNotFound         = errors.New("bucket not found")
 	ErrRecordCorrupted        = errors.New("record corrupted")
 	ErrUseGetColumnAPI        = errors.New("use get column api")
+	ErrInvalidArguments       = errors.New("invalid arguments")
 )
 
 var (

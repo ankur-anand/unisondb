@@ -206,56 +206,100 @@ func (l *LmdbEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) erro
 	})
 }
 
-// SetRowColumns update/insert the provided columnEntries to the row.
-func (l *LmdbEmbed) SetRowColumns(rowKey []byte, columnEntries map[string][]byte) error {
-	rowKey = []byte(string(rowKey) + rowKeySeperator)
-	metrics.IncrCounterWithLabels(mRowSetTotal, float32(len(columnEntries)), l.label)
+// SetManyRowColumns update/insert multiple rows and the provided columnEntries to the row.
+func (l *LmdbEmbed) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
+	if len(rowKeys) != len(columnEntriesPerRow) {
+		return ErrInvalidArguments
+	}
+
 	startTime := time.Now()
 	defer func() {
 		metrics.MeasureSinceWithLabels(mRowSetLatency, startTime, l.label)
 	}()
 
-	entries := appendRowKeyToColumnKey(rowKey, columnEntries)
-	return l.env.Update(func(tx *lmdb.Txn) error {
-		for entryKey, entry := range entries {
-			if err := tx.Put(l.db, []byte(entryKey), entry, 0); err != nil {
+	totalColumns := 0
+	err := l.env.Update(func(tx *lmdb.Txn) error {
+
+		for i, rowKey := range rowKeys {
+			columnEntries := columnEntriesPerRow[i]
+			if len(columnEntries) == 0 {
+				continue
+			}
+
+			totalColumns += len(columnEntries)
+			pKey := append(append([]byte(nil), rowKey...), rowKeySeperator...)
+			entries := appendRowKeyToColumnKey(pKey, columnEntries)
+
+			for entryKey, entry := range entries {
+				if err := tx.Put(l.db, []byte(entryKey), entry, 0); err != nil {
+					return err
+				}
+			}
+
+			if err := tx.Put(l.db, pKey, []byte{valueTypeColumns}, 0); err != nil {
 				return err
 			}
 		}
-
-		return tx.Put(l.db, rowKey, []byte{valueTypeColumns}, 0)
+		return nil
 	})
+
+	metrics.IncrCounterWithLabels(mRowSetTotal, float32(totalColumns), l.label)
+	return err
 }
 
-// DeleteRowColumns delete the provided columnEntries from the row.
-func (l *LmdbEmbed) DeleteRowColumns(rowKey []byte, columnEntries map[string][]byte) error {
-	rowKey = []byte(string(rowKey) + rowKeySeperator)
-	metrics.IncrCounterWithLabels(mRowDeleteTotal, float32(len(columnEntries)), l.label)
+// DeleteMayRowColumns delete the provided columnEntries from the associated row.
+func (l *LmdbEmbed) DeleteMayRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
+	if len(rowKeys) != len(columnEntriesPerRow) {
+		return ErrInvalidArguments
+	}
+
 	startTime := time.Now()
 	defer func() {
 		metrics.MeasureSinceWithLabels(mRowDeleteLatency, startTime, l.label)
 	}()
 
-	entries := appendRowKeyToColumnKey(rowKey, columnEntries)
-	return l.env.Update(func(tx *lmdb.Txn) error {
-		for entryKey := range entries {
-			if err := tx.Del(l.db, []byte(entryKey), nil); err != nil {
+	totalColumns := 0
+	err := l.env.Update(func(tx *lmdb.Txn) error {
+		for i, rowKey := range rowKeys {
+			columnEntries := columnEntriesPerRow[i]
+			if len(columnEntries) == 0 {
+				continue
+			}
+
+			totalColumns += len(columnEntries)
+			pKey := append(append([]byte(nil), rowKey...), rowKeySeperator...)
+			entries := appendRowKeyToColumnKey(pKey, columnEntries)
+
+			for entryKey := range entries {
+				if err := tx.Del(l.db, []byte(entryKey), nil); err != nil {
+					if !lmdb.IsNotFound(err) {
+						return err
+					}
+				}
+			}
+
+			if err := tx.Put(l.db, pKey, []byte{valueTypeColumns}, 0); err != nil {
 				return err
 			}
 		}
-
-		return tx.Put(l.db, rowKey, []byte{valueTypeColumns}, 0)
+		return nil
 	})
+
+	metrics.IncrCounterWithLabels(mRowDeleteTotal, float32(totalColumns), l.label)
+	return err
 }
 
-// DeleteEntireRow deletes all the columns associated with the rowKey.
-func (l *LmdbEmbed) DeleteEntireRow(rowKey []byte) (int, error) {
-	rowKey = []byte(string(rowKey) + rowKeySeperator)
+// DeleteEntireRows deletes all the columns associated with all the rowKeys.
+func (l *LmdbEmbed) DeleteEntireRows(rowKeys [][]byte) (int, error) {
+	if len(rowKeys) == 0 {
+		return 0, nil
+	}
+
 	startTime := time.Now()
 	defer func() {
 		metrics.MeasureSinceWithLabels(mRowDeleteLatency, startTime, l.label)
 	}()
-	columnsDeleted := -1
+	columnsDeleted := -len(rowKeys)
 	err := l.env.Update(func(tx *lmdb.Txn) error {
 		c, err := tx.OpenCursor(l.db)
 		if err != nil {
@@ -263,31 +307,33 @@ func (l *LmdbEmbed) DeleteEntireRow(rowKey []byte) (int, error) {
 		}
 		defer c.Close()
 
-		// http://www.lmdb.tech/doc/group__mdb.html#ga1206b2af8b95e7f6b0ef6b28708c9127
-		// MDB_SET_RANGE
-		// Position at first key greater than or equal to specified key.
-		k, _, err := c.Get(rowKey, nil, lmdb.SetRange)
+		for _, rowKey := range rowKeys {
+			pKey := append(append([]byte(nil), rowKey...), rowKeySeperator...)
+			// http://www.lmdb.tech/doc/group__mdb.html#ga1206b2af8b95e7f6b0ef6b28708c9127
+			// MDB_SET_RANGE
+			// Position at first key greater than or equal to specified key.
+			k, _, err := c.Get(pKey, nil, lmdb.SetRange)
 
-		for err == nil {
-			if !bytes.HasPrefix(k, rowKey) {
-				break // Stop if key is outside the prefix range
+			for err == nil {
+				if !bytes.HasPrefix(k, pKey) {
+					break // Stop if key is outside the prefix range
+				}
+
+				if err := c.Del(0); err != nil && !lmdb.IsNotFound(err) {
+					return err
+				}
+				// Move to next key
+				columnsDeleted++
+				k, _, err = c.Get(nil, nil, lmdb.Next)
 			}
 
-			if err := c.Del(0); err != nil && !lmdb.IsNotFound(err) {
+			if err != nil {
+				if errors.Is(err, lmdb.NotFound) {
+					return nil
+				}
 				return err
 			}
-			// Move to next key
-			columnsDeleted++
-			k, _, err = c.Get(nil, nil, lmdb.Next)
 		}
-
-		if err != nil {
-			if errors.Is(err, lmdb.NotFound) {
-				return nil
-			}
-			return err
-		}
-
 		return nil
 	})
 
