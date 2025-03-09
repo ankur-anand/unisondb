@@ -453,3 +453,95 @@ func TestFlush_EmptyMemTable(t *testing.T) {
 	_, err := mmTable.flush(context.Background())
 	assert.NoError(t, err)
 }
+
+func TestRow_KeysPut(t *testing.T) {
+	mmTable := setupMemTableWithBoltDB(t, 1<<20)
+
+	rowsEntries := make(map[string]map[string][]byte)
+
+	for i := uint64(0); i < 10; i++ {
+		rowKey := gofakeit.UUID()
+
+		if rowsEntries[rowKey] == nil {
+			rowsEntries[rowKey] = make(map[string][]byte)
+		}
+
+		// for each row Key generate 5 ops
+		for j := 0; j < 5; j++ {
+
+			entries := make(map[string][]byte)
+			for k := 0; k < 10; k++ {
+				key := gofakeit.UUID()
+				val := gofakeit.LetterN(uint(i + 1))
+				rowsEntries[rowKey][key] = []byte(val)
+				entries[key] = []byte(val)
+			}
+
+			record := &walrecord.Record{
+				Index:         uint64(j),
+				Hlc:           HLCNow(uint64(j)),
+				Key:           []byte(rowKey),
+				Value:         nil,
+				LogOperation:  walrecord.LogOperationInsert,
+				TxnID:         nil,
+				TxnStatus:     walrecord.TxnStatusPrepare,
+				ValueType:     walrecord.ValueTypeColumn,
+				PrevTxnOffset: nil,
+				ColumnEntries: entries,
+			}
+
+			encoded, err := record.FBEncode()
+			assert.NoError(t, err)
+
+			v := getValueStruct(metaValueInsert, true, encoded)
+			v.UserMeta = valueTypeColumn
+			err = mmTable.put([]byte(rowKey), v, nil)
+			assert.NoError(t, err)
+		}
+	}
+
+	for k, v := range rowsEntries {
+		rowEntries := mmTable.getRowYValue([]byte(k))
+		buildColumns := make(map[string][]byte)
+		err := buildColumnMap(buildColumns, rowEntries, mmTable.wIO)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(v), len(buildColumns), "unexpected number of column values")
+		assert.Equal(t, v, buildColumns, "unexpected column values")
+	}
+
+	randomRow := gofakeit.RandomMapKey(rowsEntries).(string)
+	columnMap := rowsEntries[randomRow]
+	deleteEntries := make(map[string][]byte, 0)
+	for i := 0; i < 2; i++ {
+		key := gofakeit.RandomMapKey(columnMap).(string)
+		deleteEntries[key] = nil
+	}
+
+	record := &walrecord.Record{
+		Index:         uint64(50),
+		Hlc:           HLCNow(uint64(50)),
+		Key:           []byte(randomRow),
+		Value:         nil,
+		LogOperation:  walrecord.LogOperationDelete,
+		TxnID:         nil,
+		TxnStatus:     walrecord.TxnStatusPrepare,
+		ValueType:     walrecord.ValueTypeColumn,
+		PrevTxnOffset: nil,
+		ColumnEntries: deleteEntries,
+	}
+
+	encoded, err := record.FBEncode()
+	assert.NoError(t, err)
+
+	v := getValueStruct(metaValueDelete, true, encoded)
+	v.UserMeta = valueTypeColumn
+	err = mmTable.put([]byte(randomRow), v, nil)
+	assert.NoError(t, err)
+
+	rowEntries := mmTable.getRowYValue([]byte(randomRow))
+	buildColumns := make(map[string][]byte)
+	err = buildColumnMap(buildColumns, rowEntries, mmTable.wIO)
+	assert.NoError(t, err, "failed to build column map")
+	assert.Equal(t, len(buildColumns), len(columnMap)-len(deleteEntries), "unexpected number of column values")
+	assert.NotContains(t, buildColumns, deleteEntries, "unexpected column values")
+}

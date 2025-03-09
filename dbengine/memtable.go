@@ -1,9 +1,12 @@
 package dbengine
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
+	"time"
 
 	"github.com/ankur-anand/kvalchemy/dbengine/wal"
 	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
@@ -57,13 +60,22 @@ func (table *memTable) canPut(key []byte, val y.ValueStruct) bool {
 		int64(val.EncodedSize())+arenaSafetyMargin <= table.capacity
 }
 
+// put the Key and its Value at the given offset in the mem-table.
+// for rowKey Put
+// It uses MVCC as there can be multiple update ops for different columns for the same Row.
 func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.Offset) error {
 	if !table.canPut(key, val) {
 		return errArenaSizeWillExceed
 	}
-	// we only save one key no MVCC.
-	table.skipList.Put(y.KeyWithTs(key, 0), val)
 
+	putKey := y.KeyWithTs(key, 0)
+	if val.UserMeta == valueTypeColumn {
+		// We cannot save only one key, as a wide column row can have
+		// multiple column entity in different ops of transition.
+		putKey = y.KeyWithTs(key, uint64(time.Now().UnixNano()))
+	}
+
+	table.skipList.Put(putKey, val)
 	if table.firstOffset == nil {
 		table.firstOffset = pos
 	}
@@ -75,6 +87,24 @@ func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.Offset) error
 
 func (table *memTable) get(key []byte) y.ValueStruct {
 	return table.skipList.Get(y.KeyWithTs(key, 0))
+}
+
+// getRowYValue returns all the mem table entries associated with the provided rowKey.
+func (table *memTable) getRowYValue(rowKey []byte) []y.ValueStruct {
+	var result []y.ValueStruct
+	it := table.skipList.NewIterator()
+
+	for it.Seek(rowKey); it.Valid(); it.Next() {
+		key := it.Key()
+		if !bytes.HasPrefix(key, rowKey) {
+			break
+		}
+
+		value := it.Value()
+		result = append(result, value)
+	}
+	slices.Reverse(result)
+	return result
 }
 
 // flush writes all entries from MemTable to BtreeStore.
