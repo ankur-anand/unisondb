@@ -331,7 +331,7 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 	if len(v) != 0 {
 		vs = append(vs, v...)
 	}
-	
+
 	predicateFunc := func(columnKey []byte) bool {
 		if predicate == nil {
 			return true

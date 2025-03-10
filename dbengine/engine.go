@@ -388,7 +388,6 @@ func (e *Engine) persistRowColumnAction(op walrecord.LogOperation, rowKey []byte
 		return err
 	}
 	return nil
-
 }
 
 // memTableWrite will write the provided key and value to the memTable.
