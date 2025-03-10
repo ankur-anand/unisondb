@@ -20,6 +20,7 @@ var (
 	ErrKeyNotFound     = kvdb.ErrKeyNotFound
 	ErrBucketNotFound  = kvdb.ErrBucketNotFound
 	ErrRecordCorrupted = kvdb.ErrRecordCorrupted
+	ErrUseGetColumnAPI = kvdb.ErrUseGetColumnAPI
 
 	ErrInCloseProcess   = errors.New("in-Close process")
 	ErrDatabaseDirInUse = errors.New("pid.lock is held by another process")
@@ -33,6 +34,7 @@ var (
 	walReferencePrefix byte = 255 // Marks values stored as a reference in WAL
 	metaValueDelete         = byte(walrecord.LogOperationDelete)
 	metaValueInsert         = byte(walrecord.LogOperationInsert)
+	valueTypeColumn         = byte(walrecord.ValueTypeColumn)
 )
 
 var (
@@ -58,10 +60,10 @@ type BtreeWriter interface {
 	// DeleteMany delete multiple values with corresponding keys.
 	DeleteMany(keys [][]byte) error
 
-	SetRowColumns(rowKey []byte, columnEntries map[string][]byte) error
-	DeleteRowColumns(rowKey []byte, columnEntries map[string][]byte) error
-	DeleteEntireRow(rowKey []byte) (int, error)
-	
+	SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	DeleteMayRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	DeleteEntireRows(rowKeys [][]byte) (int, error)
+
 	StoreMetadata(key []byte, value []byte) error
 	FSync() error
 }
@@ -71,6 +73,7 @@ type BtreeWriter interface {
 type BtreeReader interface {
 	// Get retrieves a value associated with a key.
 	Get(key []byte) ([]byte, error)
+	GetRowColumns(rowKey []byte, filter func([]byte) bool) (map[string][]byte, error)
 	// Snapshot writes the complete database to the provided io writer.
 	Snapshot(w io.Writer) error
 	RetrieveMetadata(key []byte) ([]byte, error)

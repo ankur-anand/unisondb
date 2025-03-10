@@ -13,6 +13,7 @@ enum LogOperation : ubyte {
   Insert = 1,
   Delete = 2,
   TxnMarker = 3,
+  DeleteEntireRow = 4,
 }
 
 enum ValueType : ubyte {

@@ -112,6 +112,10 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 		return t.err
 	}
 
+	if t.txnValueType == walrecord.ValueTypeColumn {
+		return ErrUnsupportedTxnType
+	}
+
 	if t.txnOperation == walrecord.LogOperationInsert && t.txnValueType != walrecord.ValueTypeFull && t.rowKey == nil {
 		t.rowKey = key
 	}
@@ -190,7 +194,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columns map[string][]byte) error {
 	if t.txnValueType != walrecord.ValueTypeColumn {
 		return ErrUnsupportedTxnType
 	}
-	
+
 	if len(columns) == 0 {
 		return ErrEmptyColumns
 	}
@@ -240,6 +244,21 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columns map[string][]byte) error {
 
 	t.lastPos = offset
 
+	var memValue y.ValueStruct
+	if int64(len(encoded)) <= t.engine.config.ValueThreshold {
+		memValue = getValueStruct(byte(t.txnOperation), true, encoded)
+	} else {
+		memValue = getValueStruct(byte(t.txnOperation), false, offset.Encode())
+	}
+
+	memValue.UserMeta = valueTypeColumn
+	t.memTableEntries = append(t.memTableEntries, txMemTableEntry{
+		key:    rowKey,
+		offset: offset,
+		value:  memValue,
+	})
+
+	t.checksum = crc32.Update(t.checksum, crc32.IEEETable, encoded)
 	t.valuesCount++
 	return nil
 }
@@ -291,7 +310,7 @@ func (t *Txn) Commit() error {
 
 	var mErr error
 	switch t.txnValueType {
-	case walrecord.ValueTypeFull:
+	case walrecord.ValueTypeFull, walrecord.ValueTypeColumn:
 		mErr = t.memWriteFull()
 	case walrecord.ValueTypeChunked:
 		mErr = t.memWriteChunk(encoded)
@@ -303,16 +322,6 @@ func (t *Txn) Commit() error {
 	}
 
 	t.err = ErrTxnAlreadyCommitted
-	return nil
-}
-
-func (t *Txn) memWriteColumns(encoded []byte) error {
-	memValue := getValueStruct(byte(walrecord.LogOperationInsert), true, encoded)
-	err := t.engine.memTableWrite(t.rowKey, memValue, t.lastPos)
-	if err != nil {
-		t.err = err
-		return err
-	}
 	return nil
 }
 

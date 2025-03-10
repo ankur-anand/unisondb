@@ -32,6 +32,46 @@ func handleChunkedValuesTxn(record *walrecord.WalRecord, walIO *wal.WalIO, store
 	return len(records), store.SetChunks(record.KeyBytes(), values, checksum)
 }
 
+// handleColumnValuesTxn saves all the column value that is part of the current commit txn.
+// to the provided btree based dataStore.
+// extracted in util as both memTable and wal recovery instance uses it.
+func handleColumnValuesTxn(record *walrecord.WalRecord, walIO *wal.WalIO, store BTreeStore) (int, error) {
+	records, err := walIO.GetTransactionRecords(wal.DecodeOffset(record.PrevTxnWalIndexBytes()))
+	if err != nil {
+		return 0, fmt.Errorf("failed to reconstruct batch value: %w", err)
+	}
+
+	// remove the begins part from the
+	preparedRecords := records[1:]
+
+	rowKeys := make([][]byte, 0)
+	rowColumns := make([]map[string][]byte, 0)
+
+	// as we are iterating from the reverse, we will eventually have correct state
+	// even if common columns are modified.
+	for _, record := range preparedRecords {
+		rowKeys = append(rowKeys, record.KeyBytes())
+		columnLen := record.ColumnsLength()
+		columnEntries := make(map[string][]byte, columnLen)
+		for i := 0; i < columnLen; i++ {
+			var columnEntry walrecord.ColumnEntry
+			record.Columns(&columnEntry, i)
+			columnEntries[string(columnEntry.ColumnName())] = columnEntry.ColumnValueBytes()
+		}
+		rowColumns = append(rowColumns, columnEntries)
+	}
+
+	if record.Operation() == walrecord.LogOperationInsert {
+		return len(records), store.SetManyRowColumns(rowKeys, rowColumns)
+	}
+
+	if record.Operation() == walrecord.LogOperationDelete {
+		return len(records), store.DeleteMayRowColumns(rowKeys, rowColumns)
+	}
+
+	return 0, nil
+}
+
 func getValueStruct(ops byte, direct bool, value []byte) y.ValueStruct {
 	storeValue := make([]byte, len(value)+1)
 
@@ -48,6 +88,40 @@ func getValueStruct(ops byte, direct bool, value []byte) y.ValueStruct {
 		Meta:  ops,
 		Value: storeValue,
 	}
+}
+
+// buildColumnMap builds the columns from the provided mem-table entries.
+// it modifies the provided columnEntries with the entries fetched from mem table.
+func buildColumnMap(columnEntries map[string][]byte, vs []y.ValueStruct, walIO *wal.WalIO) error {
+	for _, v := range vs {
+		record, err := getWalRecord(v, walIO)
+		if err != nil {
+			return err
+		}
+		switch v.Meta {
+		case metaValueInsert:
+			for _, ce := range extractColumns(record) {
+				columnEntries[string(ce.ColumnName())] = ce.ColumnValueBytes()
+			}
+		case metaValueDelete:
+			for _, ce := range extractColumns(record) {
+				delete(columnEntries, string(ce.ColumnName()))
+			}
+		}
+	}
+	return nil
+}
+
+// extractColumns gets all the column entries from the walrecord.
+func extractColumns(record *walrecord.WalRecord) []walrecord.ColumnEntry {
+	var columnEntries []walrecord.ColumnEntry
+	columnLen := record.ColumnsLength()
+	for i := 0; i < columnLen; i++ {
+		var columnEntry walrecord.ColumnEntry
+		record.Columns(&columnEntry, i)
+		columnEntries = append(columnEntries, columnEntry)
+	}
+	return columnEntries
 }
 
 // decodeChunkPositionWithValue decodes a MemTable entry into either a ChunkPosition (WAL lookup) or a direct value.

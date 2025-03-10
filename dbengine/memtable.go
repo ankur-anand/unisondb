@@ -71,7 +71,7 @@ func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.Offset) error
 	putKey := y.KeyWithTs(key, 0)
 	if val.UserMeta == valueTypeColumn {
 		// We cannot save only one key, as a wide column row can have
-		// multiple column entity in different ops of transition.
+		// multiple column entity in different ops of transaction.
 		putKey = y.KeyWithTs(key, uint64(time.Now().UnixNano()))
 	}
 
@@ -93,7 +93,6 @@ func (table *memTable) get(key []byte) y.ValueStruct {
 func (table *memTable) getRowYValue(rowKey []byte) []y.ValueStruct {
 	var result []y.ValueStruct
 	it := table.skipList.NewIterator()
-
 	for it.Seek(rowKey); it.Valid(); it.Next() {
 		key := it.Key()
 		if !bytes.HasPrefix(key, rowKey) {

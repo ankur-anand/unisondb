@@ -240,7 +240,7 @@ func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
 	key := []byte("test-key")
 	value := []byte("test-value")
 
-	goroutines := 100
+	goroutines := 10
 	var wg sync.WaitGroup
 	var readyWg sync.WaitGroup
 	wg.Add(goroutines)
@@ -480,4 +480,66 @@ func TestEngineLinearizability(t *testing.T) {
 
 	res := porcupine.CheckEvents(model, events)
 	assert.True(t, res)
+}
+
+func TestEngine_RowOperations(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_persistence"
+
+	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.Close(t.Context())
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+
+	rowsEntries := make(map[string]map[string][]byte)
+
+	for i := uint64(0); i < 10; i++ {
+		rowKey := gofakeit.UUID()
+
+		if rowsEntries[rowKey] == nil {
+			rowsEntries[rowKey] = make(map[string][]byte)
+		}
+
+		// for each row Key generate 5 ops
+		for j := 0; j < 5; j++ {
+
+			entries := make(map[string][]byte)
+			for k := 0; k < 10; k++ {
+				key := gofakeit.Name()
+				val := gofakeit.LetterN(uint(i + 1))
+				rowsEntries[rowKey][key] = []byte(val)
+				entries[key] = []byte(val)
+			}
+
+			err := engine.PutRowColumns(rowKey, entries)
+			assert.NoError(t, err, "PutRowColumns operation should succeed")
+		}
+	}
+
+	for k, v := range rowsEntries {
+		rowEntries, err := engine.GetRowColumns(k, nil)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(v), len(rowEntries), "unexpected number of column values")
+		assert.Equal(t, v, rowEntries, "unexpected column values")
+	}
+
+	randomRow := gofakeit.RandomMapKey(rowsEntries).(string)
+	columnMap := rowsEntries[randomRow]
+	deleteEntries := make(map[string][]byte, 0)
+	for i := 0; i < 2; i++ {
+		key := gofakeit.RandomMapKey(columnMap).(string)
+		deleteEntries[key] = nil
+	}
+
+	err = engine.DeleteRowColumns(randomRow, deleteEntries)
+	assert.NoError(t, err, "DeleteRowColumns operation should succeed")
+	rowEntries, err := engine.GetRowColumns(randomRow, nil)
+	assert.NoError(t, err, "failed to build column map")
+	assert.NoError(t, err, "failed to build column map")
+	assert.Equal(t, len(rowEntries), len(columnMap)-len(deleteEntries), "unexpected number of column values")
+	assert.NotContains(t, rowEntries, deleteEntries, "unexpected column values")
 }

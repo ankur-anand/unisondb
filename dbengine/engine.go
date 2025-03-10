@@ -339,6 +339,58 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op walrecord.LogOpera
 	return nil
 }
 
+// persistRowColumnAction writes the columnEntries for the given rowKey in the wal and mem-table.
+func (e *Engine) persistRowColumnAction(op walrecord.LogOperation, rowKey []byte, columnEntries map[string][]byte) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	index := e.writeSeenCounter.Add(1)
+	hlc := HLCNow(index)
+	valueSize := 0
+	for k, v := range columnEntries {
+		valueSize += len(k) + len(v)
+	}
+
+	record := walrecord.Record{
+		Index:         index,
+		Hlc:           hlc,
+		Key:           rowKey,
+		Value:         nil,
+		LogOperation:  op,
+		TxnStatus:     walrecord.TxnStatusTxnNone,
+		ValueType:     walrecord.ValueTypeColumn,
+		ColumnEntries: columnEntries,
+	}
+
+	encoded, err := record.FBEncode()
+
+	if err != nil {
+		return err
+	}
+
+	// Write to WAL
+	offset, err := e.walIO.Append(encoded)
+	if err != nil {
+		return err
+	}
+
+	var memValue y.ValueStruct
+	if int64(valueSize) <= e.config.ValueThreshold {
+		memValue = getValueStruct(byte(op), true, encoded)
+	} else {
+		memValue = getValueStruct(byte(op), false, offset.Encode())
+	}
+
+	memValue.UserMeta = valueTypeColumn
+	err = e.memTableWrite(rowKey, memValue, offset)
+
+	if err != nil {
+		return err
+	}
+	return nil
+
+}
+
 // memTableWrite will write the provided key and value to the memTable.
 func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, offset *wal.Offset) error {
 	defer func() {
