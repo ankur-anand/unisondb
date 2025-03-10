@@ -148,8 +148,10 @@ func (table *memTable) processEntry(key []byte, entry y.ValueStruct, flushMan *f
 
 	switch entry.Meta {
 	case byte(walrecord.LogOperationDelete):
-		flushMan.kvDeleteBuffer.add(parsedKey)
-		return nil
+		if entry.UserMeta != valueTypeColumn {
+			flushMan.kvDeleteBuffer.add(parsedKey)
+			return nil
+		}
 
 	case byte(walrecord.LogOperationDeleteEntireRow):
 		flushMan.rowDeleteBuffer.add(parsedKey)
@@ -172,12 +174,11 @@ func (table *memTable) processEntry(key []byte, entry y.ValueStruct, flushMan *f
 
 	// column operations
 	if record.ValueType() == walrecord.ValueTypeColumn {
-		flushMan.incrementCount(1)
 		switch record.Operation() {
 		case walrecord.LogOperationInsert:
 			flushMan.columnWriteBuffer.add(record.KeyBytes(), getColumnsValue(record))
 		case walrecord.LogOperationDelete:
-			flushMan.ColumnDeleteBuffer.add(record.KeyBytes(), getColumnsValue(record))
+			flushMan.columnDeleteBuffer.add(record.KeyBytes(), getColumnsValue(record))
 		}
 		return nil
 	}
@@ -201,7 +202,7 @@ type flushManager struct {
 	kvDeleteBuffer     *kvDeleteBuffer
 	rowDeleteBuffer    *rowDeleteBuffer
 	columnWriteBuffer  *columnWriteBuffer
-	ColumnDeleteBuffer *columnDeleteBuffer
+	columnDeleteBuffer *columnDeleteBuffer
 	txnRecordCount     int
 }
 
@@ -211,7 +212,7 @@ func newFlushManager() *flushManager {
 		kvDeleteBuffer:     &kvDeleteBuffer{},
 		rowDeleteBuffer:    &rowDeleteBuffer{},
 		columnWriteBuffer:  &columnWriteBuffer{},
-		ColumnDeleteBuffer: &columnDeleteBuffer{},
+		columnDeleteBuffer: &columnDeleteBuffer{},
 	}
 }
 
@@ -219,7 +220,7 @@ func (f *flushManager) isFull() bool {
 	return len(f.kvWriteBuffer.keys) >= dbBatchSize ||
 		len(f.kvDeleteBuffer.keys) >= dbBatchSize ||
 		len(f.columnWriteBuffer.keys) >= dbBatchSize ||
-		len(f.ColumnDeleteBuffer.keys) >= dbBatchSize ||
+		len(f.columnDeleteBuffer.keys) >= dbBatchSize ||
 		len(f.rowDeleteBuffer.keys) >= dbBatchSize
 }
 
@@ -236,7 +237,7 @@ func (f *flushManager) processBatch(db BTreeStore) error {
 		{"kvDeleteBuffer", f.kvDeleteBuffer},
 		{"columnWriteBuffer", f.columnWriteBuffer},
 		{"rowDeleteBuffer", f.rowDeleteBuffer},
-		{"columnDeleteBuffer", f.ColumnDeleteBuffer},
+		{"columnDeleteBuffer", f.columnDeleteBuffer},
 	}
 
 	for _, buf := range buffers {
@@ -259,6 +260,9 @@ func (b *kvWriteBuffer) add(key []byte, value []byte) {
 }
 
 func (b *kvWriteBuffer) flush(db BTreeStore) error {
+	if len(b.keys) == 0 {
+		return nil
+	}
 	return db.SetMany(b.keys, b.values)
 }
 
@@ -276,6 +280,9 @@ func (b *kvDeleteBuffer) add(key []byte) {
 }
 
 func (b *kvDeleteBuffer) flush(db BTreeStore) error {
+	if len(b.keys) == 0 {
+		return nil
+	}
 	return db.DeleteMany(b.keys)
 }
 
@@ -292,6 +299,9 @@ func (b *rowDeleteBuffer) add(key []byte) {
 }
 
 func (b *rowDeleteBuffer) flush(db BTreeStore) error {
+	if len(b.keys) == 0 {
+		return nil
+	}
 	_, err := db.DeleteEntireRows(b.keys)
 	return err
 }
@@ -311,6 +321,9 @@ func (b *columnWriteBuffer) add(key []byte, val map[string][]byte) {
 }
 
 func (b *columnWriteBuffer) flush(db BTreeStore) error {
+	if len(b.keys) == 0 {
+		return nil
+	}
 	return db.SetManyRowColumns(b.keys, b.vals)
 }
 
@@ -330,6 +343,9 @@ func (b *columnDeleteBuffer) add(key []byte, val map[string][]byte) {
 }
 
 func (b *columnDeleteBuffer) flush(db BTreeStore) error {
+	if len(b.keys) == 0 {
+		return nil
+	}
 	return db.DeleteMayRowColumns(b.keys, b.vals)
 }
 
