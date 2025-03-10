@@ -423,6 +423,15 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, offset *wal.Offset) 
 	return err
 }
 
+// used for testing purposes.
+func (e *Engine) rotateMemTableNoFlush() {
+	// put the old table in the queue
+	oldTable := e.activeMemTable
+	e.activeMemTable = newMemTable(e.config.ArenaSize, e.dataStore, e.walIO, e.namespace)
+	e.sealedMemTables = append(e.sealedMemTables, oldTable)
+	e.callback()
+}
+
 func (e *Engine) rotateMemTable() {
 	// put the old table in the queue
 	oldTable := e.activeMemTable

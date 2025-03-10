@@ -328,7 +328,7 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 			return nil, ErrKeyNotFound
 		}
 		first := e.activeMemTable.getRowYValue(key)
-		if first[len(first)-1].Meta == byte(walrecord.LogOperationDeleteEntireRow) {
+		if len(first) != 0 && first[len(first)-1].Meta == byte(walrecord.LogOperationDeleteEntireRow) {
 			return nil, ErrKeyNotFound
 		}
 		// get the columns value from the old sealed table to new mem table.
