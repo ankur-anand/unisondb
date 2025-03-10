@@ -137,7 +137,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		}
 
 		count, err := memTable.flush(context.Background())
-		assert.NoError(t, err, "failed to flush")
+		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
@@ -185,7 +185,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		assert.NoError(t, err)
 
 		count, err := memTable.flush(context.Background())
-		assert.NoError(t, err, "failed to flush")
+		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount+2, count, "expected records to be flushed")
 
 		retrievedValue, err := memTable.db.Get([]byte(key))
@@ -207,7 +207,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		}
 
 		count, err := memTable.flush(context.Background())
-		assert.NoError(t, err, "failed to flush")
+		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
@@ -234,7 +234,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		}
 
 		count, err := memTable.flush(context.Background())
-		assert.NoError(t, err, "failed to flush")
+		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
@@ -282,7 +282,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		assert.NoError(t, err)
 
 		count, err := memTable.flush(context.Background())
-		assert.NoError(t, err, "failed to flush")
+		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount+2, count, "expected records to be flushed")
 
 		retrievedValue, err := memTable.db.Get([]byte(key))
@@ -304,7 +304,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		}
 
 		count, err := memTable.flush(context.Background())
-		assert.NoError(t, err, "failed to flush")
+		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
@@ -333,7 +333,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 		}
 
 		count, err := memTable.flush(context.Background())
-		assert.NoError(t, err, "failed to flush")
+		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
@@ -371,7 +371,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 		}
 
 		count, err := memTable.flush(context.Background())
-		assert.NoError(t, err, "failed to flush")
+		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
