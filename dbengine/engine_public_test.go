@@ -497,49 +497,92 @@ func TestEngine_RowOperations(t *testing.T) {
 
 	rowsEntries := make(map[string]map[string][]byte)
 
-	for i := uint64(0); i < 10; i++ {
-		rowKey := gofakeit.UUID()
+	t.Run("put_row_columns", func(t *testing.T) {
+		for i := uint64(0); i < 10; i++ {
+			rowKey := gofakeit.UUID()
 
-		if rowsEntries[rowKey] == nil {
-			rowsEntries[rowKey] = make(map[string][]byte)
-		}
-
-		// for each row Key generate 5 ops
-		for j := 0; j < 5; j++ {
-
-			entries := make(map[string][]byte)
-			for k := 0; k < 10; k++ {
-				key := gofakeit.Name()
-				val := gofakeit.LetterN(uint(i + 1))
-				rowsEntries[rowKey][key] = []byte(val)
-				entries[key] = []byte(val)
+			if rowsEntries[rowKey] == nil {
+				rowsEntries[rowKey] = make(map[string][]byte)
 			}
 
-			err := engine.PutRowColumns(rowKey, entries)
-			assert.NoError(t, err, "PutRowColumns operation should succeed")
-		}
-	}
+			// for each row Key generate 5 ops
+			for j := 0; j < 5; j++ {
 
-	for k, v := range rowsEntries {
-		rowEntries, err := engine.GetRowColumns(k, nil)
-		assert.NoError(t, err, "failed to build column map")
-		assert.Equal(t, len(v), len(rowEntries), "unexpected number of column values")
-		assert.Equal(t, v, rowEntries, "unexpected column values")
-	}
+				entries := make(map[string][]byte)
+				for k := 0; k < 10; k++ {
+					key := gofakeit.Name()
+					val := gofakeit.LetterN(uint(i + 1))
+					rowsEntries[rowKey][key] = []byte(val)
+					entries[key] = []byte(val)
+				}
+
+				err := engine.SetColumnsInRow(rowKey, entries)
+				assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+			}
+		}
+	})
+
+	t.Run("get_rows_columns", func(t *testing.T) {
+		for k, v := range rowsEntries {
+			rowEntry, err := engine.GetRowColumns(k, nil)
+			assert.NoError(t, err, "failed to build column map")
+			assert.Equal(t, len(v), len(rowEntry), "unexpected number of column values")
+			assert.Equal(t, v, rowEntry, "unexpected column values")
+		}
+	})
 
 	randomRow := gofakeit.RandomMapKey(rowsEntries).(string)
 	columnMap := rowsEntries[randomRow]
-	deleteEntries := make(map[string][]byte, 0)
-	for i := 0; i < 2; i++ {
-		key := gofakeit.RandomMapKey(columnMap).(string)
-		deleteEntries[key] = nil
+	deleteEntries := make(map[string][]byte)
+
+	t.Run("delete_row_columns", func(t *testing.T) {
+		for i := 0; i < 2; i++ {
+			key := gofakeit.RandomMapKey(columnMap).(string)
+			deleteEntries[key] = nil
+		}
+
+		err = engine.DeleteColumnsFromRow(randomRow, deleteEntries)
+		assert.NoError(t, err, "DeleteColumnsFromRow operation should succeed")
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(rowEntry), len(columnMap)-len(deleteEntries), "unexpected number of column values")
+		assert.NotContains(t, rowEntry, deleteEntries, "unexpected column values")
+	})
+
+	newEntries := make(map[string][]byte)
+	for k := range deleteEntries {
+		newEntries[k] = []byte(gofakeit.Name())
 	}
 
-	err = engine.DeleteRowColumns(randomRow, deleteEntries)
-	assert.NoError(t, err, "DeleteRowColumns operation should succeed")
-	rowEntries, err := engine.GetRowColumns(randomRow, nil)
-	assert.NoError(t, err, "failed to build column map")
-	assert.NoError(t, err, "failed to build column map")
-	assert.Equal(t, len(rowEntries), len(columnMap)-len(deleteEntries), "unexpected number of column values")
-	assert.NotContains(t, rowEntries, deleteEntries, "unexpected column values")
+	t.Run("update_deleted_values", func(t *testing.T) {
+		err = engine.SetColumnsInRow(randomRow, newEntries)
+		assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(rowEntry), len(columnMap), "unexpected number of column values")
+		for k, v := range newEntries {
+			assert.Equal(t, v, rowEntry[k], "unexpected column values")
+		}
+	})
+
+	t.Run("predicate_func_check", func(t *testing.T) {
+		predicate := func(key string) bool {
+			if _, ok := newEntries[key]; ok {
+				return true
+			}
+			return false
+		}
+		rowEntry, err := engine.GetRowColumns(randomRow, predicate)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(rowEntry), len(newEntries), "unexpected number of column values")
+	})
+
+	t.Run("entire_row_delete", func(t *testing.T) {
+		// delete the entire row.
+		err = engine.DeleteRow(randomRow)
+		assert.NoError(t, err, "DeleteRow operation should succeed")
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.ErrorIs(t, err, dbengine.ErrKeyNotFound, "failed to build column map")
+		assert.Nil(t, rowEntry, "unexpected column values")
+	})
 }
