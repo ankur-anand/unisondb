@@ -12,7 +12,6 @@ import (
 
 	"github.com/anishathalye/porcupine"
 	"github.com/ankur-anand/unisondb/dbengine"
-	"github.com/ankur-anand/unisondb/dbengine/compress"
 	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
@@ -294,9 +293,7 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 				assert.NoError(t, err, "Reader should only return EOF Error")
 			}
 			record := walrecord.GetRootAsWalRecord(value, 0)
-			decompressed, err := compress.DecompressLZ4(record.ValueBytes())
-			assert.NoError(t, err, "Decompress should not fail for valid compressed value")
-			assert.Equal(t, putKV[string(record.KeyBytes())], decompressed, "decompressed value should be equal to put value")
+			assert.Equal(t, putKV[string(record.KeyBytes())], record.ValueBytes(), "decompressed value should be equal to put value")
 		}
 	}
 

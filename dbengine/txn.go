@@ -6,7 +6,6 @@ import (
 	"hash/crc32"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbengine/compress"
 	"github.com/ankur-anand/unisondb/dbengine/wal"
 	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
 	"github.com/dgraph-io/badger/v4/y"
@@ -128,15 +127,12 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 	t.engine.mu.Lock()
 	defer t.engine.mu.Unlock()
 	index := t.engine.writeSeenCounter.Add(1)
-	compressedByte, err := compress.CompressLZ4(value)
-	if err != nil {
-		return err
-	}
+
 	record := &walrecord.Record{
 		Index:         index,
 		Hlc:           HLCNow(index),
 		Key:           key,
-		Value:         compressedByte,
+		Value:         value,
 		LogOperation:  t.txnOperation,
 		TxnID:         t.txnID,
 		TxnStatus:     walrecord.TxnStatusPrepare,
@@ -187,7 +183,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 // Update/Delete Ops for column is decided by the Log Operation type.
 // Single Txn Cannot contain both update and delete ops.
 // Caller can set the Columns Key to empty value, if deleted needs to be part of same Txn.
-func (t *Txn) AppendColumnTxn(rowKey []byte, columns map[string][]byte) error {
+func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) error {
 	if t.err != nil {
 		return t.err
 	}
@@ -195,18 +191,8 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columns map[string][]byte) error {
 		return ErrUnsupportedTxnType
 	}
 
-	if len(columns) == 0 {
+	if len(columnEntries) == 0 {
 		return ErrEmptyColumns
-	}
-
-	compressedColumns := make(map[string][]byte)
-	for key, value := range columns {
-		compressed, err := compress.CompressLZ4(value)
-		if err != nil {
-			return err
-		}
-		compressedColumns[key] = compressed
-		t.checksum = crc32.Update(t.checksum, crc32.IEEETable, compressed)
 	}
 
 	t.engine.mu.Lock()
@@ -223,7 +209,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columns map[string][]byte) error {
 		TxnStatus:     walrecord.TxnStatusPrepare,
 		EntryType:     t.txnEntryType,
 		PrevTxnOffset: t.lastPos,
-		ColumnEntries: compressedColumns,
+		ColumnEntries: columnEntries,
 	}
 
 	// Encode and compress WAL record

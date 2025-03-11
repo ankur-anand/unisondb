@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbengine/compress"
 	"github.com/ankur-anand/unisondb/dbengine/kvdb"
 	"github.com/ankur-anand/unisondb/dbengine/wal"
 	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
@@ -122,12 +121,7 @@ func (e *Engine) Put(key, value []byte) error {
 		metrics.MeasureSinceWithLabels(mKeyPutDuration, startTime, e.metricsLabel)
 	}()
 
-	compressed, err := compress.CompressLZ4(value)
-	if err != nil {
-		return err
-	}
-
-	return e.persistKeyValue(key, compressed, walrecord.LogOperationInsert)
+	return e.persistKeyValue(key, value, walrecord.LogOperationInsert)
 }
 
 // Delete removes a key and its value pair from WAL and MemTable.
@@ -227,11 +221,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	// if the mem table doesn't have this key associated action or log.
 	// directly go to the boltdb to fetch the same.
 	if it.Meta == byte(walrecord.LogOperationNoop) {
-		compressedValue, err := e.dataStore.Get(key)
-		if err != nil {
-			return nil, err
-		}
-		return compress.DecompressLZ4(compressedValue)
+		return e.dataStore.Get(key)
 	}
 
 	// key deleted
@@ -248,15 +238,12 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	if record.EntryType() == walrecord.EntryTypeChunked {
 		return e.reconstructBatchValue(record)
 	}
-	decompressed, err := compress.DecompressLZ4(record.ValueBytes())
-	if err != nil {
-		return nil, fmt.Errorf("failed to decompress value for key %s: %w", string(key), err)
-	}
+
 	if crc32.ChecksumIEEE(record.ValueBytes()) != record.Crc32Checksum() {
 		return nil, ErrRecordCorrupted
 	}
 
-	return decompressed, nil
+	return record.ValueBytes(), nil
 }
 
 // SetColumnsInRow inserts or updates the provided column entries.
@@ -396,11 +383,7 @@ func (e *Engine) reconstructBatchValue(record *walrecord.WalRecord) ([]byte, err
 
 	fullValue := bytes.NewBuffer(make([]byte, 0, estimatedSize))
 	for _, record := range preparedRecords {
-		value, err := compress.DecompressLZ4(record.ValueBytes())
-		if err != nil {
-			return nil, err
-		}
-		fullValue.Write(value)
+		fullValue.Write(record.ValueBytes())
 	}
 
 	value := fullValue.Bytes()
