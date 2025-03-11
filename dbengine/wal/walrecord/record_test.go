@@ -4,8 +4,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/ankur-anand/kvalchemy/dbengine/wal"
-	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbengine/wal"
+	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
 	"github.com/stretchr/testify/assert"
 )
 

@@ -6,9 +6,9 @@ import (
 	"hash/crc32"
 	"time"
 
-	"github.com/ankur-anand/kvalchemy/dbengine/compress"
-	"github.com/ankur-anand/kvalchemy/dbengine/wal"
-	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbengine/compress"
+	"github.com/ankur-anand/unisondb/dbengine/wal"
+	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/hashicorp/go-metrics"
 	"github.com/segmentio/ksuid"

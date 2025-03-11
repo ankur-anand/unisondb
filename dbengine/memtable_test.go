@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/kvalchemy/dbengine/kvdb"
-	"github.com/ankur-anand/kvalchemy/dbengine/wal"
-	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbengine/kvdb"
+	"github.com/ankur-anand/unisondb/dbengine/wal"
+	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/hashicorp/go-metrics"

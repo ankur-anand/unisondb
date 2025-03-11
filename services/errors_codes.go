@@ -4,7 +4,7 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/ankur-anand/kvalchemy/internal/middleware"
+	"github.com/ankur-anand/unisondb/internal/middleware"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

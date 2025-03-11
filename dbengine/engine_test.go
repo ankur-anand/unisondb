@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"

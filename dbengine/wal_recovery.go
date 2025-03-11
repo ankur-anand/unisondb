@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/ankur-anand/kvalchemy/dbengine/kvdb"
-	"github.com/ankur-anand/kvalchemy/dbengine/wal"
-	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbengine/kvdb"
+	"github.com/ankur-anand/unisondb/dbengine/wal"
+	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 )
 

@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ankur-anand/kvalchemy/dbengine"
-	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
+	"github.com/ankur-anand/unisondb/dbengine"
+	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 )
