@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/ankur-anand/kvalchemy/splitter"
+	"github.com/ankur-anand/unisondb/splitter"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 )

@@ -7,8 +7,8 @@ import (
 	"io"
 	"time"
 
-	"github.com/ankur-anand/kvalchemy/dbengine"
-	v1 "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1"
+	"github.com/ankur-anand/unisondb/dbengine"
+	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )

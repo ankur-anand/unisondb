@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ankur-anand/kvalchemy/dbengine/wal"
-	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbengine/wal"
+	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/prometheus/common/helpers/templates"
 )

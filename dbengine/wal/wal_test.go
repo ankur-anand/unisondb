@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ankur-anand/kvalchemy/dbengine/wal"
-	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
-	"github.com/ankur-anand/kvalchemy/internal/etc"
+	"github.com/ankur-anand/unisondb/dbengine/wal"
+	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/internal/etc"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/assert"

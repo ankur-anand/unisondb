@@ -1,4 +1,4 @@
-module github.com/ankur-anand/kvalchemy
+module github.com/ankur-anand/unisondb
 
 go 1.24.0
 
