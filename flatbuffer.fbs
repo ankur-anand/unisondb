@@ -13,14 +13,14 @@ enum LogOperation : ubyte {
   Insert = 1,
   Delete = 2,
   TxnMarker = 3,
+  DeleteRow = 4,
 }
 
-enum ValueType : ubyte {
-  Full = 0,      // Not a chunked value
+enum EntryType : ubyte {
+  KV = 0,      // Not a chunked value
   Chunked = 1,
-  Column = 2,
+  Row = 2,
 }
-
 
 // Column Entry: Supports multiple column updates per WAL record.
 // To Support the wide column database.
@@ -37,7 +37,7 @@ table WalRecord {
 
   operation: LogOperation;
   txn_status: TxnStatus;
-  value_type: ValueType;
+  entry_type: EntryType;
 
   txn_id: [ubyte];
   prev_txn_wal_index: [ubyte]; // index of the previous entry in the same transaction

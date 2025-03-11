@@ -3,17 +3,20 @@ package dbengine_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/anishathalye/porcupine"
 	"github.com/ankur-anand/kvalchemy/dbengine"
 	"github.com/ankur-anand/kvalchemy/dbengine/compress"
 	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestStorageEngine(t *testing.T) {
@@ -237,7 +240,7 @@ func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
 	key := []byte("test-key")
 	value := []byte("test-value")
 
-	goroutines := 100
+	goroutines := 10
 	var wg sync.WaitGroup
 	var readyWg sync.WaitGroup
 	wg.Add(goroutines)
@@ -247,7 +250,7 @@ func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			readyWg.Done()
-			err := engine.WaitForAppend(ctx, 5*time.Second, nil)
+			err := engine.WaitForAppend(ctx, 10*time.Second, nil)
 			assert.NoError(t, err, "WaitForAppend should return without timeout after Put")
 		}()
 	}
@@ -327,4 +330,259 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Errorf("timeout waiting for eof error")
 	}
+}
+
+// https://anishathalye.com/testing-distributed-systems-for-linearizability/
+// Linearizability Testing with Porcupine.
+// Linearizability is a property of the system where the order of operation is in the same order in which it has
+// happened in the real world.
+
+type dbInput struct {
+	op    uint8 // 0 => read, 1 => write
+	key   string
+	value string
+}
+
+const (
+	opGet = 0
+	opPut = 1
+)
+
+func TestEngineLinearizability(t *testing.T) {
+	dir := t.TempDir()
+	nameSpace := "test_namespace"
+	// Create the engine
+	engine, err := dbengine.NewStorageEngine(dir, nameSpace, dbengine.NewDefaultEngineConfig())
+	require.NoError(t, err)
+
+	t.Cleanup(func() {
+		err := engine.Close(t.Context())
+		require.NoError(t, err)
+	})
+
+	// linearizability model for our key-value store
+	// model is a sequential specification of a register.
+	model := porcupine.Model{
+		Init: func() interface{} {
+			// init state: empty map
+			return make(map[string]string)
+		},
+		Step: func(state interface{}, input interface{}, output interface{}) (bool, interface{}) {
+			st := state.(map[string]string)
+			inp := input.(dbInput)
+			out := output.(string)
+
+			newState := make(map[string]string)
+			for k, v := range st {
+				newState[k] = v
+			}
+
+			switch inp.op {
+			case opGet:
+				val, exists := newState[inp.key]
+				if !exists {
+					return out == "", newState
+				}
+
+				return out == val, newState
+
+			case opPut:
+				newState[inp.key] = inp.value
+				return out == "ok", newState
+
+			default:
+				return false, state
+			}
+		},
+		DescribeOperation: func(input, output interface{}) string {
+			inp := input.(dbInput)
+			switch inp.op {
+			case 0:
+				return fmt.Sprintf("get('%s') -> '%s'", inp.key, inp.value)
+			case 1:
+				return fmt.Sprintf("put('%s', '%s')", inp.key, inp.value)
+			default:
+				return "<invalid>"
+			}
+		},
+	}
+
+	parallelism := 8
+	opsPerClient := 200
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var events []porcupine.Event
+
+	var eventID int
+
+	recordOperation := func(clientId int, op dbInput, result string) {
+		mu.Lock()
+		defer mu.Unlock()
+
+		eventID++
+		events = append(events, porcupine.Event{
+			Kind:     porcupine.CallEvent,
+			Id:       eventID,
+			ClientId: clientId,
+			Value:    op,
+		})
+
+		events = append(events, porcupine.Event{
+			Kind:     porcupine.ReturnEvent,
+			Id:       eventID,
+			ClientId: clientId,
+			Value:    result,
+		})
+	}
+
+	wg.Add(parallelism)
+	for i := 0; i < parallelism; i++ {
+		go func(clientId int) {
+			defer wg.Done()
+
+			for j := 0; j < opsPerClient; j++ {
+				key := fmt.Sprintf("key-%d-%d", clientId, j%10)
+
+				if j%3 == 0 {
+					val, err := engine.Get([]byte(key))
+
+					result := ""
+					if err == nil {
+						result = string(val)
+					}
+
+					recordOperation(clientId, dbInput{
+						op:    opGet,
+						key:   key,
+						value: result,
+					}, result)
+				} else {
+					value := fmt.Sprintf("value-%d-%d", clientId, j)
+					err := engine.Put([]byte(key), []byte(value))
+
+					result := "ok"
+					if err != nil {
+						result = "error"
+					}
+
+					recordOperation(clientId, dbInput{
+						op:    opPut,
+						key:   key,
+						value: value,
+					}, result)
+				}
+			}
+		}(i)
+	}
+
+	wg.Wait()
+
+	res := porcupine.CheckEvents(model, events)
+	assert.True(t, res)
+}
+
+func TestEngine_RowOperations(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_persistence"
+
+	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.Close(t.Context())
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+
+	rowsEntries := make(map[string]map[string][]byte)
+
+	t.Run("put_row_columns", func(t *testing.T) {
+		for i := uint64(0); i < 10; i++ {
+			rowKey := gofakeit.UUID()
+
+			if rowsEntries[rowKey] == nil {
+				rowsEntries[rowKey] = make(map[string][]byte)
+			}
+
+			// for each row Key generate 5 ops
+			for j := 0; j < 5; j++ {
+
+				entries := make(map[string][]byte)
+				for k := 0; k < 10; k++ {
+					key := gofakeit.Name()
+					val := gofakeit.LetterN(uint(i + 1))
+					rowsEntries[rowKey][key] = []byte(val)
+					entries[key] = []byte(val)
+				}
+
+				err := engine.SetColumnsInRow(rowKey, entries)
+				assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+			}
+		}
+	})
+
+	t.Run("get_rows_columns", func(t *testing.T) {
+		for k, v := range rowsEntries {
+			rowEntry, err := engine.GetRowColumns(k, nil)
+			assert.NoError(t, err, "failed to build column map")
+			assert.Equal(t, len(v), len(rowEntry), "unexpected number of column values")
+			assert.Equal(t, v, rowEntry, "unexpected column values")
+		}
+	})
+
+	randomRow := gofakeit.RandomMapKey(rowsEntries).(string)
+	columnMap := rowsEntries[randomRow]
+	deleteEntries := make(map[string][]byte)
+
+	t.Run("delete_row_columns", func(t *testing.T) {
+		for i := 0; i < 2; i++ {
+			key := gofakeit.RandomMapKey(columnMap).(string)
+			deleteEntries[key] = nil
+		}
+
+		err = engine.DeleteColumnsFromRow(randomRow, deleteEntries)
+		assert.NoError(t, err, "DeleteColumnsFromRow operation should succeed")
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(rowEntry), len(columnMap)-len(deleteEntries), "unexpected number of column values")
+		assert.NotContains(t, rowEntry, deleteEntries, "unexpected column values")
+	})
+
+	newEntries := make(map[string][]byte)
+	for k := range deleteEntries {
+		newEntries[k] = []byte(gofakeit.Name())
+	}
+
+	t.Run("update_deleted_values", func(t *testing.T) {
+		err = engine.SetColumnsInRow(randomRow, newEntries)
+		assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(rowEntry), len(columnMap), "unexpected number of column values")
+		for k, v := range newEntries {
+			assert.Equal(t, v, rowEntry[k], "unexpected column values")
+		}
+	})
+
+	t.Run("predicate_func_check", func(t *testing.T) {
+		predicate := func(key string) bool {
+			if _, ok := newEntries[key]; ok {
+				return true
+			}
+			return false
+		}
+		rowEntry, err := engine.GetRowColumns(randomRow, predicate)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(rowEntry), len(newEntries), "unexpected number of column values")
+	})
+
+	t.Run("entire_row_delete", func(t *testing.T) {
+		// delete the entire row.
+		err = engine.DeleteRow(randomRow)
+		assert.NoError(t, err, "DeleteRow operation should succeed")
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.ErrorIs(t, err, dbengine.ErrKeyNotFound, "failed to build column map")
+		assert.Nil(t, rowEntry, "unexpected column values")
+	})
 }

@@ -18,7 +18,7 @@ func TestLMDB_Suite(t *testing.T) {
 	store, err := kv2.NewLmdb(path, kv2.Config{
 		Namespace: "test",
 		NoSync:    false,
-		MmapSize:  1 << 20,
+		MmapSize:  1 << 30,
 	})
 
 	assert.NoError(t, err)
@@ -58,7 +58,7 @@ func TestLMDB_Suite(t *testing.T) {
 	assert.NoError(t, err, "failed to dump stats")
 	assert.NoError(t, store.Close(), "failed to close store")
 	output := buf.String()
-	assert.Contains(t, output, "lmdb.set.total")
-	assert.Contains(t, output, "lmdb.get.total")
-	assert.Contains(t, output, "lmdb.delete.total")
+	assert.Contains(t, output, "set.total")
+	assert.Contains(t, output, "get.total")
+	assert.Contains(t, output, "delete.total")
 }

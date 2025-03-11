@@ -31,6 +31,13 @@ var (
 
 	mKeyWaitForAppendTotal    = append(packageKey, "wait", "append", "total")
 	mKeyWaitForAppendDuration = append(packageKey, "wait", "append", "durations", "seconds")
+
+	mKeyRowSetTotal       = append(packageKey, "row", "set", "total")
+	mKeyRowGetTotal       = append(packageKey, "row", "get", "total")
+	mKeyRowDeleteTotal    = append(packageKey, "row", "delete", "total")
+	mKeyRowSetDuration    = append(packageKey, "row", "set", "durations", "seconds")
+	mKeyRowGetDuration    = append(packageKey, "row", "get", "durations", "seconds")
+	mKeyRowDeleteDuration = append(packageKey, "row", "delete", "durations", "seconds")
 )
 
 // Offset represents the offset in the wal.
@@ -104,7 +111,7 @@ func (e *Engine) GetWalCheckPoint() (*Metadata, error) {
 	return &metadata, nil
 }
 
-// Put inserts a key-value pair into WAL and MemTable.
+// Put inserts a key-value pair.
 func (e *Engine) Put(key, value []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
@@ -179,10 +186,7 @@ func isNewChunkPosition(current, lastSeen *Offset) bool {
 		(current.SegmentId == lastSeen.SegmentId && current.BlockNumber == lastSeen.BlockNumber && current.ChunkOffset > lastSeen.ChunkOffset)
 }
 
-// Get retrieves a value from MemTable, WAL, or BoltDB.
-// 1. check bloom filter for key presence.
-// 2. check recent mem-table
-// 3. Check BoltDB.
+// Get retrieves the value associated with the given key.
 func (e *Engine) Get(key []byte) ([]byte, error) {
 	if e.shutdown.Load() {
 		return nil, ErrInCloseProcess
@@ -241,7 +245,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	if record.ValueType() == walrecord.ValueTypeChunked {
+	if record.EntryType() == walrecord.EntryTypeChunked {
 		return e.reconstructBatchValue(record)
 	}
 	decompressed, err := compress.DecompressLZ4(record.ValueBytes())
@@ -253,6 +257,126 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	}
 
 	return decompressed, nil
+}
+
+// SetColumnsInRow inserts or updates the provided column entries.
+//
+// It's an upsert operation:
+// - existing column value will get updated to newer value, else a new column entry will be created for the
+// given row.
+func (e *Engine) SetColumnsInRow(rowKey string, columnEntries map[string][]byte) error {
+	if e.shutdown.Load() {
+		return ErrInCloseProcess
+	}
+	metrics.IncrCounterWithLabels(mKeyRowSetTotal, 1, e.metricsLabel)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels(mKeyRowSetDuration, startTime, e.metricsLabel)
+	}()
+
+	return e.persistRowColumnAction(walrecord.LogOperationInsert, []byte(rowKey), columnEntries)
+}
+
+// DeleteColumnsFromRow removes the specified columns from the given row key.
+func (e *Engine) DeleteColumnsFromRow(rowKey string, columnEntries map[string][]byte) error {
+	if e.shutdown.Load() {
+		return ErrInCloseProcess
+	}
+	metrics.IncrCounterWithLabels(mKeyRowDeleteTotal, 1, e.metricsLabel)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels(mKeyRowDeleteDuration, startTime, e.metricsLabel)
+	}()
+
+	return e.persistRowColumnAction(walrecord.LogOperationDelete, []byte(rowKey), columnEntries)
+}
+
+// DeleteRow removes an entire row and all its associated column entries.
+func (e *Engine) DeleteRow(rowKey string) error {
+	if e.shutdown.Load() {
+		return ErrInCloseProcess
+	}
+	metrics.IncrCounterWithLabels(mKeyRowDeleteTotal, 1, e.metricsLabel)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels(mKeyRowDeleteDuration, startTime, e.metricsLabel)
+	}()
+
+	return e.persistRowColumnAction(walrecord.LogOperationDeleteRow, []byte(rowKey), nil)
+}
+
+// GetRowColumns returns all the column value associated with the row. It's filters columns if predicate
+// function is provided and only returns those columns for which predicate return true.
+func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) bool) (map[string][]byte, error) {
+	if e.shutdown.Load() {
+		return nil, ErrInCloseProcess
+	}
+	metrics.IncrCounterWithLabels(mKeyRowGetTotal, 1, e.metricsLabel)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels(mKeyRowGetDuration, startTime, e.metricsLabel)
+	}()
+
+	key := []byte(rowKey)
+
+	checkFunc := func() ([]y.ValueStruct, error) {
+		// Retrieve entry from MemTable
+		e.mu.RLock()
+		defer e.mu.RUnlock()
+
+		if !e.bloom.Test(key) {
+			return nil, ErrKeyNotFound
+		}
+		first := e.activeMemTable.getRowYValue(key)
+		if len(first) != 0 && first[len(first)-1].Meta == byte(walrecord.LogOperationDeleteRow) {
+			return nil, ErrKeyNotFound
+		}
+		// get the columns value from the old sealed table to new mem table.
+		// and build the column value.
+		var vs []y.ValueStruct
+		for _, sm := range e.sealedMemTables {
+			v := sm.getRowYValue(key)
+			if len(v) != 0 {
+				vs = append(vs, v...)
+			}
+		}
+		if len(first) != 0 {
+			vs = append(vs, first...)
+		}
+
+		return vs, nil
+	}
+
+	vs, err := checkFunc()
+	if err != nil {
+		return nil, err
+	}
+
+	predicateFunc := func(columnKey []byte) bool {
+		if predicate == nil {
+			return true
+		}
+		return predicate(string(columnKey))
+	}
+
+	// get the oldest value from the store.
+	columnsValue, err := e.dataStore.GetRowColumns(key, predicateFunc)
+	if err != nil && !errors.Is(err, ErrKeyNotFound) {
+		return nil, err
+	}
+
+	err = buildColumnMap(columnsValue, vs, e.walIO)
+	if err != nil {
+		return nil, err
+	}
+
+	for columnKey := range columnsValue {
+		if predicate != nil && !predicate(columnKey) {
+			delete(columnsValue, columnKey)
+		}
+	}
+
+	return columnsValue, nil
 }
 
 func (e *Engine) reconstructBatchValue(record *walrecord.WalRecord) ([]byte, error) {

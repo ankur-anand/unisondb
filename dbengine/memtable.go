@@ -1,9 +1,13 @@
 package dbengine
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"slices"
+	"time"
 
 	"github.com/ankur-anand/kvalchemy/dbengine/wal"
 	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
@@ -57,13 +61,22 @@ func (table *memTable) canPut(key []byte, val y.ValueStruct) bool {
 		int64(val.EncodedSize())+arenaSafetyMargin <= table.capacity
 }
 
+// put the Key and its Value at the given offset in the mem-table.
+// for rowKey Put
+// It uses MVCC as there can be multiple update ops for different columns for the same Row.
 func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.Offset) error {
 	if !table.canPut(key, val) {
 		return errArenaSizeWillExceed
 	}
-	// we only save one key no MVCC.
-	table.skipList.Put(y.KeyWithTs(key, 0), val)
 
+	putKey := y.KeyWithTs(key, 0)
+	if val.UserMeta == entryTypeRow {
+		// We cannot save only one key, as a wide column row can have
+		// multiple column entity in different ops of transaction.
+		putKey = y.KeyWithTs(key, uint64(time.Now().UnixNano()))
+	}
+
+	table.skipList.Put(putKey, val)
 	if table.firstOffset == nil {
 		table.firstOffset = pos
 	}
@@ -75,6 +88,23 @@ func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.Offset) error
 
 func (table *memTable) get(key []byte) y.ValueStruct {
 	return table.skipList.Get(y.KeyWithTs(key, 0))
+}
+
+// getRowYValue returns all the mem table entries associated with the provided rowKey.
+func (table *memTable) getRowYValue(rowKey []byte) []y.ValueStruct {
+	var result []y.ValueStruct
+	it := table.skipList.NewIterator()
+	for it.Seek(rowKey); it.Valid(); it.Next() {
+		key := it.Key()
+		if !bytes.HasPrefix(key, rowKey) {
+			break
+		}
+
+		value := it.Value()
+		result = append(result, value)
+	}
+	slices.Reverse(result)
+	return result
 }
 
 // flush writes all entries from MemTable to BtreeStore.
@@ -90,72 +120,247 @@ func (table *memTable) flush(ctx context.Context) (int, error) {
 	}(it)
 
 	count := 0
-
-	var setKeys, setValues, deleteKeys [][]byte
+	flushMan := newFlushManager()
 
 	for it.SeekToFirst(); it.Valid(); it.Next() {
 		if ctx.Err() != nil {
 			return count, ctx.Err()
 		}
 		count++
-		key := y.ParseKey(it.Key())
-		entry := it.Value()
 
-		if entry.Meta == byte(walrecord.LogOperationDelete) {
-			deleteKeys = append(deleteKeys, key)
-			continue
+		if err := table.processEntry(it.Key(), it.Value(), flushMan); err != nil {
+			return count, err
 		}
-
-		record, err := getWalRecord(entry, table.wIO)
-		if err != nil {
-			return 0, err
-		}
-
-		// record is txn commited and chunked
-		if record.TxnStatus() == walrecord.TxnStatusCommit && record.ValueType() == walrecord.ValueTypeChunked {
-			n, err := table.flushChunkedTxnCommit(record)
-			if err != nil {
-				return 0, err
-			}
-			// total number of batch record + one for batch start marker that was not part of the record.
-			count += n + 1
-
-			continue
-		}
-
-		// else it would be set value only.
-		setKeys = append(setKeys, record.KeyBytes())
-		setValues = append(setValues, record.ValueBytes())
 
 		// Flush when batch capacity is reached
-		if len(deleteKeys) >= dbBatchSize || len(setKeys) >= dbBatchSize {
-			if err := table.processBatch(&setKeys, &setValues, &deleteKeys); err != nil {
+		if flushMan.isFull() {
+			if err := flushMan.processBatch(table.db); err != nil {
 				return 0, err
 			}
 		}
 	}
 
-	return count, table.processBatch(&setKeys, &setValues, &deleteKeys)
+	return count + flushMan.txnRecordCount, flushMan.processBatch(table.db)
 }
 
-func (table *memTable) processBatch(setKeys, setValues, deleteKeys *[][]byte) error {
-	if len(*deleteKeys) > 0 {
-		if err := table.db.DeleteMany(*deleteKeys); err != nil {
+func (table *memTable) processEntry(key []byte, entry y.ValueStruct, flushMan *flushManager) error {
+	parsedKey := y.ParseKey(key)
+
+	switch entry.Meta {
+	case byte(walrecord.LogOperationDelete):
+		if entry.UserMeta != entryTypeRow {
+			flushMan.kvDeleteBuffer.add(parsedKey)
+			return nil
+		}
+
+	case byte(walrecord.LogOperationDeleteRow):
+		flushMan.rowDeleteBuffer.add(parsedKey)
+		return nil
+	}
+
+	record, err := getWalRecord(entry, table.wIO)
+	if err != nil {
+		return err
+	}
+
+	if record.TxnStatus() == walrecord.TxnStatusCommit && record.EntryType() == walrecord.EntryTypeChunked {
+		n, err := table.flushChunkedTxnCommit(record)
+		if err != nil {
 			return err
 		}
-		*deleteKeys = nil
+		flushMan.incrementCount(n + 1)
+		return nil
 	}
-	if len(*setKeys) > 0 {
-		if err := table.db.SetMany(*setKeys, *setValues); err != nil {
-			return err
+
+	// column operations
+	if record.EntryType() == walrecord.EntryTypeRow {
+		switch record.Operation() {
+		case walrecord.LogOperationInsert:
+			flushMan.columnWriteBuffer.add(record.KeyBytes(), getColumnsValue(record))
+		case walrecord.LogOperationDelete:
+			flushMan.columnDeleteBuffer.add(record.KeyBytes(), getColumnsValue(record))
 		}
-		*setKeys = nil
-		*setValues = nil
+		return nil
 	}
+
+	flushMan.kvWriteBuffer.add(record.KeyBytes(), record.ValueBytes())
 	return nil
 }
 
 // flushChunkedTxnCommit returns the number of batch record that was inserted.
 func (table *memTable) flushChunkedTxnCommit(record *walrecord.WalRecord) (int, error) {
 	return handleChunkedValuesTxn(record, table.wIO, table.db)
+}
+
+type batchFlusher interface {
+	flush(store BTreeStore) error
+	reset()
+}
+
+type flushManager struct {
+	kvWriteBuffer      *kvWriteBuffer
+	kvDeleteBuffer     *kvDeleteBuffer
+	rowDeleteBuffer    *rowDeleteBuffer
+	columnWriteBuffer  *columnWriteBuffer
+	columnDeleteBuffer *columnDeleteBuffer
+	txnRecordCount     int
+}
+
+func newFlushManager() *flushManager {
+	return &flushManager{
+		kvWriteBuffer:      &kvWriteBuffer{},
+		kvDeleteBuffer:     &kvDeleteBuffer{},
+		rowDeleteBuffer:    &rowDeleteBuffer{},
+		columnWriteBuffer:  &columnWriteBuffer{},
+		columnDeleteBuffer: &columnDeleteBuffer{},
+	}
+}
+
+func (f *flushManager) isFull() bool {
+	return len(f.kvWriteBuffer.keys) >= dbBatchSize ||
+		len(f.kvDeleteBuffer.keys) >= dbBatchSize ||
+		len(f.columnWriteBuffer.keys) >= dbBatchSize ||
+		len(f.columnDeleteBuffer.keys) >= dbBatchSize ||
+		len(f.rowDeleteBuffer.keys) >= dbBatchSize
+}
+
+func (f *flushManager) incrementCount(n int) {
+	f.txnRecordCount += n
+}
+
+func (f *flushManager) processBatch(db BTreeStore) error {
+	buffers := []struct {
+		name   string
+		buffer batchFlusher
+	}{
+		{"kvWriteBuffer", f.kvWriteBuffer},
+		{"kvDeleteBuffer", f.kvDeleteBuffer},
+		{"columnWriteBuffer", f.columnWriteBuffer},
+		{"rowDeleteBuffer", f.rowDeleteBuffer},
+		{"columnDeleteBuffer", f.columnDeleteBuffer},
+	}
+
+	for _, buf := range buffers {
+		if err := buf.buffer.flush(db); err != nil {
+			return fmt.Errorf("failed to processBatch %s: %w", buf.name, err)
+		}
+		buf.buffer.reset()
+	}
+	return nil
+}
+
+type kvWriteBuffer struct {
+	keys   [][]byte
+	values [][]byte
+}
+
+func (b *kvWriteBuffer) add(key []byte, value []byte) {
+	b.keys = append(b.keys, key)
+	b.values = append(b.values, value)
+}
+
+func (b *kvWriteBuffer) flush(db BTreeStore) error {
+	if len(b.keys) == 0 {
+		return nil
+	}
+	return db.SetMany(b.keys, b.values)
+}
+
+func (b *kvWriteBuffer) reset() {
+	b.keys = b.keys[:0]
+	b.values = b.values[:0]
+}
+
+type kvDeleteBuffer struct {
+	keys [][]byte
+}
+
+func (b *kvDeleteBuffer) add(key []byte) {
+	b.keys = append(b.keys, key)
+}
+
+func (b *kvDeleteBuffer) flush(db BTreeStore) error {
+	if len(b.keys) == 0 {
+		return nil
+	}
+	return db.DeleteMany(b.keys)
+}
+
+func (b *kvDeleteBuffer) reset() {
+	b.keys = b.keys[:0]
+}
+
+type rowDeleteBuffer struct {
+	keys [][]byte
+}
+
+func (b *rowDeleteBuffer) add(key []byte) {
+	b.keys = append(b.keys, key)
+}
+
+func (b *rowDeleteBuffer) flush(db BTreeStore) error {
+	if len(b.keys) == 0 {
+		return nil
+	}
+	_, err := db.DeleteEntireRows(b.keys)
+	return err
+}
+
+func (b *rowDeleteBuffer) reset() {
+	b.keys = b.keys[:0]
+}
+
+type columnWriteBuffer struct {
+	keys [][]byte
+	vals []map[string][]byte
+}
+
+func (b *columnWriteBuffer) add(key []byte, val map[string][]byte) {
+	b.keys = append(b.keys, key)
+	b.vals = append(b.vals, val)
+}
+
+func (b *columnWriteBuffer) flush(db BTreeStore) error {
+	if len(b.keys) == 0 {
+		return nil
+	}
+	return db.SetManyRowColumns(b.keys, b.vals)
+}
+
+func (b *columnWriteBuffer) reset() {
+	b.keys = b.keys[:0]
+	b.vals = b.vals[:0]
+}
+
+type columnDeleteBuffer struct {
+	keys [][]byte
+	vals []map[string][]byte
+}
+
+func (b *columnDeleteBuffer) add(key []byte, val map[string][]byte) {
+	b.keys = append(b.keys, key)
+	b.vals = append(b.vals, val)
+}
+
+func (b *columnDeleteBuffer) flush(db BTreeStore) error {
+	if len(b.keys) == 0 {
+		return nil
+	}
+	return db.DeleteMayRowColumns(b.keys, b.vals)
+}
+
+func (b *columnDeleteBuffer) reset() {
+	b.keys = b.keys[:0]
+	b.vals = b.vals[:0]
+}
+
+func getColumnsValue(record *walrecord.WalRecord) map[string][]byte {
+	columnLen := record.ColumnsLength()
+	columnEntries := make(map[string][]byte, columnLen)
+	for i := 0; i < columnLen; i++ {
+		var columnEntry walrecord.ColumnEntry
+		record.Columns(&columnEntry, i)
+		columnEntries[string(columnEntry.ColumnName())] = columnEntry.ColumnValueBytes()
+	}
+	return columnEntries
 }

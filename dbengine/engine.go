@@ -309,7 +309,7 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op walrecord.LogOpera
 		Value:        value,
 		LogOperation: op,
 		TxnStatus:    walrecord.TxnStatusTxnNone,
-		ValueType:    walrecord.ValueTypeFull,
+		EntryType:    walrecord.EntryTypeKV,
 	}
 
 	encoded, err := record.FBEncode()
@@ -332,6 +332,57 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op walrecord.LogOpera
 	}
 
 	err = e.memTableWrite(key, memValue, offset)
+
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// persistRowColumnAction writes the columnEntries for the given rowKey in the wal and mem-table.
+func (e *Engine) persistRowColumnAction(op walrecord.LogOperation, rowKey []byte, columnEntries map[string][]byte) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	index := e.writeSeenCounter.Add(1)
+	hlc := HLCNow(index)
+	valueSize := 0
+	for k, v := range columnEntries {
+		valueSize += len(k) + len(v)
+	}
+
+	record := walrecord.Record{
+		Index:         index,
+		Hlc:           hlc,
+		Key:           rowKey,
+		Value:         nil,
+		LogOperation:  op,
+		TxnStatus:     walrecord.TxnStatusTxnNone,
+		EntryType:     walrecord.EntryTypeRow,
+		ColumnEntries: columnEntries,
+	}
+
+	encoded, err := record.FBEncode()
+
+	if err != nil {
+		return err
+	}
+
+	// Write to WAL
+	offset, err := e.walIO.Append(encoded)
+	if err != nil {
+		return err
+	}
+
+	var memValue y.ValueStruct
+	if int64(valueSize) <= e.config.ValueThreshold {
+		memValue = getValueStruct(byte(op), true, encoded)
+	} else {
+		memValue = getValueStruct(byte(op), false, offset.Encode())
+	}
+
+	memValue.UserMeta = entryTypeRow
+	err = e.memTableWrite(rowKey, memValue, offset)
 
 	if err != nil {
 		return err
@@ -370,6 +421,15 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, offset *wal.Offset) 
 	}
 
 	return err
+}
+
+// used for testing purposes.
+func (e *Engine) rotateMemTableNoFlush() {
+	// put the old table in the queue
+	oldTable := e.activeMemTable
+	e.activeMemTable = newMemTable(e.config.ArenaSize, e.dataStore, e.walIO, e.namespace)
+	e.sealedMemTables = append(e.sealedMemTables, oldTable)
+	e.callback()
 }
 
 func (e *Engine) rotateMemTable() {

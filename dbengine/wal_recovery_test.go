@@ -78,7 +78,7 @@ func TestWalRecovery(t *testing.T) {
 		Key:           []byte(key),
 		Value:         marshalChecksum(checksum),
 		LogOperation:  walrecord.LogOperationInsert,
-		ValueType:     walrecord.ValueTypeChunked,
+		EntryType:     walrecord.EntryTypeChunked,
 		TxnStatus:     walrecord.TxnStatusCommit,
 		TxnID:         []byte(key),
 		PrevTxnOffset: lastOffset,
@@ -159,7 +159,7 @@ func TestWalRecovery(t *testing.T) {
 			value.PrevTxnOffset = lastOffset
 			value.Key = []byte(gofakeit.UUID())
 			value.TxnID = []byte(txID)
-			value.ValueType = walrecord.ValueTypeFull
+			value.EntryType = walrecord.EntryTypeKV
 			encoded, err := value.FBEncode()
 			assert.NoError(t, err)
 			offset, err := walInstance.Append(encoded)
@@ -176,7 +176,7 @@ func TestWalRecovery(t *testing.T) {
 			Key:           nil,
 			Value:         marshalChecksum(checksum),
 			LogOperation:  walrecord.LogOperationInsert,
-			ValueType:     walrecord.ValueTypeFull,
+			EntryType:     walrecord.EntryTypeKV,
 			TxnStatus:     walrecord.TxnStatusCommit,
 			TxnID:         []byte(txID),
 			PrevTxnOffset: lastOffset,
@@ -208,7 +208,7 @@ func TestWalRecovery(t *testing.T) {
 			value.PrevTxnOffset = lOffset
 			value.Key = []byte(gofakeit.UUID())
 			value.TxnID = []byte(txID)
-			value.ValueType = walrecord.ValueTypeFull
+			value.EntryType = walrecord.EntryTypeKV
 			encoded, err := value.FBEncode()
 			assert.NoError(t, err)
 			offset, err := walInstance.Append(encoded)
@@ -298,7 +298,7 @@ func TestWalRecovery(t *testing.T) {
 			Key:           nil,
 			Value:         nil,
 			LogOperation:  walrecord.LogOperationTxnMarker,
-			ValueType:     walrecord.ValueTypeFull,
+			EntryType:     walrecord.EntryTypeKV,
 			TxnStatus:     walrecord.TxnStatusBegin,
 			TxnID:         []byte(txID),
 			PrevTxnOffset: nil,
@@ -314,7 +314,7 @@ func TestWalRecovery(t *testing.T) {
 			value.PrevTxnOffset = lastOffset
 			value.Key = []byte(deleteKeys[i])
 			value.TxnID = []byte(txID)
-			value.ValueType = walrecord.ValueTypeFull
+			value.EntryType = walrecord.EntryTypeKV
 			value.LogOperation = walrecord.LogOperationDelete
 
 			encoded, err := value.FBEncode()

@@ -16,7 +16,7 @@ func TestFBEncode_ColumnType(t *testing.T) {
 		Key:          []byte("test-key"),
 		Value:        []byte("test-value"),
 		LogOperation: walrecord.LogOperationInsert,
-		ValueType:    walrecord.ValueTypeColumn,
+		EntryType:    walrecord.EntryTypeRow,
 		TxnStatus:    walrecord.TxnStatusCommit,
 		TxnID:        []byte("txn-12345"),
 		PrevTxnOffset: &wal.Offset{
@@ -41,7 +41,7 @@ func TestFBEncode_ColumnType(t *testing.T) {
 	assert.Equal(t, record.Hlc, buf.Hlc())
 	assert.Equal(t, record.LogOperation, buf.Operation())
 	assert.Equal(t, record.TxnStatus, buf.TxnStatus())
-	assert.Equal(t, record.ValueType, buf.ValueType())
+	assert.Equal(t, record.EntryType, buf.EntryType())
 	assert.Equal(t, string(record.Key), string(buf.KeyBytes()))
 	assert.Equal(t, string(record.Value), string(buf.ValueBytes()))
 	assert.Equal(t, string(record.TxnID), string(buf.TxnIdBytes()))
@@ -67,7 +67,7 @@ func TestFBEncode_ValueType(t *testing.T) {
 		Key:          []byte("test-key"),
 		Value:        []byte("test-value"),
 		LogOperation: walrecord.LogOperationInsert,
-		ValueType:    walrecord.ValueTypeFull,
+		EntryType:    walrecord.EntryTypeKV,
 		TxnStatus:    walrecord.TxnStatusCommit,
 		TxnID:        []byte("txn-12345"),
 		PrevTxnOffset: &wal.Offset{
@@ -92,7 +92,7 @@ func TestFBEncode_ValueType(t *testing.T) {
 	assert.Equal(t, record.Hlc, buf.Hlc())
 	assert.Equal(t, record.LogOperation, buf.Operation())
 	assert.Equal(t, record.TxnStatus, buf.TxnStatus())
-	assert.Equal(t, record.ValueType, buf.ValueType())
+	assert.Equal(t, record.EntryType, buf.EntryType())
 	assert.Equal(t, string(record.Key), string(buf.KeyBytes()))
 	assert.Equal(t, string(record.Value), string(buf.ValueBytes()))
 	assert.Equal(t, string(record.TxnID), string(buf.TxnIdBytes()))
@@ -118,7 +118,7 @@ func TestLargeParallelEncode(t *testing.T) {
 				Key:          []byte("test-key"),
 				Value:        []byte("test-value"),
 				LogOperation: walrecord.LogOperationInsert,
-				ValueType:    walrecord.ValueTypeColumn,
+				EntryType:    walrecord.EntryTypeRow,
 				TxnStatus:    walrecord.TxnStatusCommit,
 				TxnID:        []byte("txn-12345"),
 				PrevTxnOffset: &wal.Offset{
@@ -143,7 +143,7 @@ func TestLargeParallelEncode(t *testing.T) {
 			assert.Equal(t, record.Hlc, buf.Hlc())
 			assert.Equal(t, record.LogOperation, buf.Operation())
 			assert.Equal(t, record.TxnStatus, buf.TxnStatus())
-			assert.Equal(t, record.ValueType, buf.ValueType())
+			assert.Equal(t, record.EntryType, buf.EntryType())
 		}(i)
 	}
 

@@ -11,6 +11,7 @@ const (
 	LogOperationInsert    LogOperation = 1
 	LogOperationDelete    LogOperation = 2
 	LogOperationTxnMarker LogOperation = 3
+	LogOperationDeleteRow LogOperation = 4
 )
 
 var EnumNamesLogOperation = map[LogOperation]string{
@@ -18,6 +19,7 @@ var EnumNamesLogOperation = map[LogOperation]string{
 	LogOperationInsert:    "Insert",
 	LogOperationDelete:    "Delete",
 	LogOperationTxnMarker: "TxnMarker",
+	LogOperationDeleteRow: "DeleteRow",
 }
 
 var EnumValuesLogOperation = map[string]LogOperation{
@@ -25,6 +27,7 @@ var EnumValuesLogOperation = map[string]LogOperation{
 	"Insert":    LogOperationInsert,
 	"Delete":    LogOperationDelete,
 	"TxnMarker": LogOperationTxnMarker,
+	"DeleteRow": LogOperationDeleteRow,
 }
 
 func (v LogOperation) String() string {

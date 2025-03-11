@@ -93,10 +93,10 @@ func (wr *walRecovery) isFatalError(err error) bool {
 // handleTxnCommited handles the current commited txn, for chunked, insert and delete ops.
 func (wr *walRecovery) handleTxnCommited(record *walrecord.WalRecord) error {
 	wr.recoveredCount++
-	switch record.ValueType() {
-	case walrecord.ValueTypeFull:
+	switch record.EntryType() {
+	case walrecord.EntryTypeKV:
 		return wr.handleFullValuesTxn(record)
-	case walrecord.ValueTypeChunked:
+	case walrecord.EntryTypeChunked:
 		return wr.handleChunkedValuesTxn(record)
 	}
 

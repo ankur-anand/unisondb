@@ -248,7 +248,7 @@ type WalRecord struct {
 	// Enum fields
 	Operation LogOperation `protobuf:"varint,4,opt,name=operation,proto3,enum=seria.LogOperation" json:"operation,omitempty"`
 	TxnStatus TxnStatus    `protobuf:"varint,5,opt,name=txn_status,json=txnStatus,proto3,enum=seria.TxnStatus" json:"txn_status,omitempty"`
-	ValueType ValueType    `protobuf:"varint,6,opt,name=value_type,json=valueType,proto3,enum=seria.ValueType" json:"value_type,omitempty"`
+	ValueType ValueType    `protobuf:"varint,6,opt,name=value_type,json=valueType,proto3,enum=seria.EntryType" json:"value_type,omitempty"`
 	// Variable-sized fields
 	TxnId           []byte         `protobuf:"bytes,7,opt,name=txn_id,json=txnId,proto3" json:"txn_id,omitempty"`
 	PrevTxnWalIndex []byte         `protobuf:"bytes,8,opt,name=prev_txn_wal_index,json=prevTxnWalIndex,proto3" json:"prev_txn_wal_index,omitempty"` // index of the previous entry in the same transaction
@@ -438,14 +438,14 @@ var file_kv_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_kv_proto_goTypes = []any{
 	(TxnStatus)(0),      // 0: seria.TxnStatus
 	(LogOperation)(0),   // 1: seria.LogOperation
-	(ValueType)(0),      // 2: seria.ValueType
+	(ValueType)(0),      // 2: seria.EntryType
 	(*ColumnEntry)(nil), // 3: seria.ColumnEntry
 	(*WalRecord)(nil),   // 4: seria.WalRecord
 }
 var file_kv_proto_depIdxs = []int32{
 	1, // 0: seria.WalRecord.operation:type_name -> seria.LogOperation
 	0, // 1: seria.WalRecord.txn_status:type_name -> seria.TxnStatus
-	2, // 2: seria.WalRecord.value_type:type_name -> seria.ValueType
+	2, // 2: seria.WalRecord.value_type:type_name -> seria.EntryType
 	3, // 3: seria.WalRecord.columns:type_name -> seria.ColumnEntry
 	4, // [4:4] is the sub-list for method output_type
 	4, // [4:4] is the sub-list for method input_type

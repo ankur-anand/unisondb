@@ -130,7 +130,7 @@ func (k *KVWriterService) PutStreamChunksForKey(g grpc.ClientStreamingServer[v1.
 func (k *KVWriterService) handleStartMarker(engine *storage.Engine,
 	g grpc.ClientStreamingServer[v1.PutStreamChunksForKeyRequest, v1.PutStreamChunksForKeyResponse],
 	req *v1.PutStreamChunksForKeyRequest_StartMarker) (*storage.Txn, error) {
-	batch, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.ValueTypeChunked)
+	batch, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.EntryTypeChunked)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +148,7 @@ func (k *KVWriterService) handleChunk(txn *storage.Txn, key []byte, req *v1.PutS
 	}
 
 	value := req.Chunk.GetValue()
-	return txn.AppendTxnEntry(key, value)
+	return txn.AppendKVTxn(key, value)
 }
 
 func (k *KVWriterService) handleCommitMarker(txn *storage.Txn,

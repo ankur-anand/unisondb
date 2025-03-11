@@ -17,7 +17,7 @@ type Record struct {
 	Value        []byte
 	LogOperation LogOperation
 
-	ValueType     ValueType
+	EntryType     EntryType
 	TxnStatus     TxnStatus
 	TxnID         []byte
 	PrevTxnOffset *wal.ChunkPosition
@@ -40,7 +40,7 @@ func (wr *Record) FBEncode() ([]byte, error) {
 
 	// build the column
 	var columnOffsets []flatbuffers.UOffsetT
-	if wr.ValueType == ValueTypeColumn {
+	if wr.EntryType == EntryTypeRow {
 		for k, v := range wr.ColumnEntries {
 			colNameOffset := builder.CreateString(k)
 			colValueOffset := builder.CreateByteVector(v)
@@ -95,7 +95,7 @@ func (wr *Record) FBEncode() ([]byte, error) {
 	WalRecordAddCrc32Checksum(builder, checksum)
 	WalRecordAddPrevTxnWalIndex(builder, lastBatchPosOffset)
 	WalRecordAddTxnStatus(builder, wr.TxnStatus)
-	WalRecordAddValueType(builder, wr.ValueType)
+	WalRecordAddEntryType(builder, wr.EntryType)
 	WalRecordAddColumns(builder, columnsOffset)
 	walRecordOffset := WalRecordEnd(builder)
 

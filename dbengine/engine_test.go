@@ -146,7 +146,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	batchKey := []byte(gofakeit.UUID())
 
 	// open a batch writer:
-	batch, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.ValueTypeChunked)
+	batch, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.EntryTypeChunked)
 	assert.NoError(t, err, "NewBatch operation should succeed")
 	assert.NotNil(t, batch, "NewBatch operation should succeed")
 
@@ -159,7 +159,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 		batchValues = append(batchValues, value)
 		fullValue.Write([]byte(batchValues[i]))
 		checksum = crc32.Update(checksum, crc32.IEEETable, []byte(value))
-		err := batch.AppendTxnEntry(batchKey, []byte(value))
+		err := batch.AppendKVTxn(batchKey, []byte(value))
 		assert.NoError(t, err, "NewBatch operation should succeed")
 	}
 
@@ -279,4 +279,280 @@ func TestEngine_RecoveredWalShouldNotRecoverAgain(t *testing.T) {
 		err := engine.close(ctx)
 		assert.NoError(t, err, "storage engine close should not error")
 	})
+}
+
+func TestEngine_GetRowColumns_WithMemTableRotateNoFlush(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "testnamespace"
+	callbackSignal := make(chan struct{}, 1)
+	callback := func() {
+		select {
+		case callbackSignal <- struct{}{}:
+		default:
+		}
+	}
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+	engine, err := NewStorageEngine(dir, namespace, config)
+	assert.NoError(t, err, "NewStorageEngine should not error")
+	engine.callback = callback
+	t.Cleanup(func() {
+		err := engine.close(t.Context())
+		assert.NoError(t, err, "storage engine close should not error")
+	})
+
+	rowsEntries := make(map[string]map[string][]byte)
+	t.Run("put_row_columns", func(t *testing.T) {
+		for i := uint64(0); i < 10; i++ {
+			rowKey := gofakeit.UUID()
+
+			if rowsEntries[rowKey] == nil {
+				rowsEntries[rowKey] = make(map[string][]byte)
+			}
+
+			// for each row Key generate 5 ops
+			for j := 0; j < 5; j++ {
+
+				entries := make(map[string][]byte)
+				for k := 0; k < 10; k++ {
+					key := gofakeit.Name()
+					val := gofakeit.LetterN(uint(i + 1))
+					rowsEntries[rowKey][key] = []byte(val)
+					entries[key] = []byte(val)
+				}
+
+				err := engine.SetColumnsInRow(rowKey, entries)
+				assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+			}
+		}
+	})
+
+	t.Run("get_rows_columns", func(t *testing.T) {
+		for k, v := range rowsEntries {
+			rowEntry, err := engine.GetRowColumns(k, nil)
+			assert.NoError(t, err, "failed to build column map")
+			assert.Equal(t, len(v), len(rowEntry), "unexpected number of column values")
+			assert.Equal(t, v, rowEntry, "unexpected column values")
+		}
+	})
+
+	randomRow := gofakeit.RandomMapKey(rowsEntries).(string)
+	columnMap := rowsEntries[randomRow]
+	deleteEntries := make(map[string][]byte)
+
+	t.Run("delete_row_columns", func(t *testing.T) {
+		for i := 0; i < 2; i++ {
+			key := gofakeit.RandomMapKey(columnMap).(string)
+			deleteEntries[key] = nil
+		}
+
+		err = engine.DeleteColumnsFromRow(randomRow, deleteEntries)
+		assert.NoError(t, err, "DeleteColumnsFromRow operation should succeed")
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(rowEntry), len(columnMap)-len(deleteEntries), "unexpected number of column values")
+		assert.NotContains(t, rowEntry, deleteEntries, "unexpected column values")
+	})
+
+	t.Run("handle_mem_table_flush", func(t *testing.T) {
+		engine.rotateMemTableNoFlush()
+		select {
+		case <-callbackSignal:
+		case <-time.After(5 * time.Second):
+			t.Errorf("timed out waiting for callback signal")
+		}
+	})
+
+	t.Run("get_rows_columns_after_flush", func(t *testing.T) {
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.NoError(t, err, "failed to build column map")
+		assert.NotEqual(t, len(rowEntry), 0, "unexpected number of column values")
+		assert.Equal(t, len(columnMap), len(rowEntry)+len(deleteEntries), "unexpected number of column values")
+		//assert.Equal(t, v, rowEntry, "unexpected column values")
+	})
+
+	newEntries := make(map[string][]byte)
+	for k := range deleteEntries {
+		newEntries[k] = []byte(gofakeit.Name())
+	}
+
+	t.Run("update_deleted_values", func(t *testing.T) {
+		err = engine.SetColumnsInRow(randomRow, newEntries)
+		assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(rowEntry), len(columnMap), "unexpected number of column values")
+		for k, v := range newEntries {
+			assert.Equal(t, v, rowEntry[k], "unexpected column values")
+		}
+	})
+
+	t.Run("predicate_func_check", func(t *testing.T) {
+		predicate := func(key string) bool {
+			if _, ok := newEntries[key]; ok {
+				return true
+			}
+			return false
+		}
+		rowEntry, err := engine.GetRowColumns(randomRow, predicate)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(rowEntry), len(newEntries), "unexpected number of column values")
+	})
+
+	t.Run("entire_row_delete", func(t *testing.T) {
+		// delete the entire row.
+		err = engine.DeleteRow(randomRow)
+		assert.NoError(t, err, "DeleteRow operation should succeed")
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.ErrorIs(t, err, ErrKeyNotFound, "failed to build column map")
+		assert.Nil(t, rowEntry, "unexpected column values")
+	})
+
+}
+
+func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "testnamespace"
+	callbackSignal := make(chan struct{}, 1)
+	callback := func() {
+		select {
+		case callbackSignal <- struct{}{}:
+		default:
+		}
+	}
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+	engine, err := NewStorageEngine(dir, namespace, config)
+	assert.NoError(t, err, "NewStorageEngine should not error")
+	engine.callback = callback
+	t.Cleanup(func() {
+		err := engine.close(t.Context())
+		assert.NoError(t, err, "storage engine close should not error")
+	})
+
+	rowsEntries := make(map[string]map[string][]byte)
+	t.Run("put_row_columns", func(t *testing.T) {
+		for i := uint64(0); i < 10; i++ {
+			rowKey := gofakeit.UUID()
+
+			if rowsEntries[rowKey] == nil {
+				rowsEntries[rowKey] = make(map[string][]byte)
+			}
+
+			// for each row Key generate 5 ops
+			for j := 0; j < 5; j++ {
+
+				entries := make(map[string][]byte)
+				for k := 0; k < 10; k++ {
+					key := gofakeit.Name()
+					val := gofakeit.LetterN(uint(i + 1))
+					rowsEntries[rowKey][key] = []byte(val)
+					entries[key] = []byte(val)
+				}
+
+				err := engine.SetColumnsInRow(rowKey, entries)
+				assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+			}
+		}
+	})
+
+	t.Run("get_rows_columns", func(t *testing.T) {
+		for k, v := range rowsEntries {
+			rowEntry, err := engine.GetRowColumns(k, nil)
+			assert.NoError(t, err, "failed to build column map")
+			assert.Equal(t, len(v), len(rowEntry), "unexpected number of column values")
+			assert.Equal(t, v, rowEntry, "unexpected column values")
+		}
+	})
+
+	t.Run("handle_mem_table_flush", func(t *testing.T) {
+		engine.rotateMemTable()
+		select {
+		case <-callbackSignal:
+		case <-time.After(5 * time.Second):
+			t.Errorf("timed out waiting for callback signal")
+		}
+	})
+
+	t.Run("get_rows_columns__from_db_after_flush", func(t *testing.T) {
+		for k, v := range rowsEntries {
+			rowEntry, err := engine.dataStore.GetRowColumns([]byte(k), nil)
+			assert.NoError(t, err, "failed to build column map")
+			assert.Equal(t, len(v), len(rowEntry), "unexpected number of column values")
+			assert.Equal(t, v, rowEntry, "unexpected column values")
+		}
+	})
+
+	randomRow := gofakeit.RandomMapKey(rowsEntries).(string)
+	columnMap := rowsEntries[randomRow]
+	deleteEntries := make(map[string][]byte)
+
+	t.Run("delete_row_columns", func(t *testing.T) {
+		for i := 0; i < 5; i++ {
+			key := gofakeit.RandomMapKey(columnMap).(string)
+			deleteEntries[key] = nil
+		}
+
+		err = engine.DeleteColumnsFromRow(randomRow, deleteEntries)
+		assert.NoError(t, err, "DeleteColumnsFromRow operation should succeed")
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(rowEntry), len(columnMap)-len(deleteEntries), "unexpected number of column values")
+		assert.NotContains(t, rowEntry, deleteEntries, "unexpected column values")
+	})
+
+	fmt.Println("entries", len(deleteEntries), "entries", len(rowsEntries))
+	t.Run("handle_mem_table_flush", func(t *testing.T) {
+		engine.rotateMemTable()
+		select {
+		case <-callbackSignal:
+		case <-time.After(5 * time.Second):
+			t.Errorf("timed out waiting for callback signal")
+		}
+	})
+
+	t.Run("get_rows_columns_after_flush", func(t *testing.T) {
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.NoError(t, err, "failed to build column map")
+		assert.NotEqual(t, len(rowEntry), 0, "unexpected number of column values")
+		assert.Equal(t, len(columnMap), len(rowEntry)+len(deleteEntries), "unexpected number of column values")
+	})
+
+	newEntries := make(map[string][]byte)
+	for k := range deleteEntries {
+		newEntries[k] = []byte(gofakeit.Name())
+	}
+
+	t.Run("update_deleted_values", func(t *testing.T) {
+		err = engine.SetColumnsInRow(randomRow, newEntries)
+		assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(rowEntry), len(columnMap), "unexpected number of column values")
+		for k, v := range newEntries {
+			assert.Equal(t, v, rowEntry[k], "unexpected column values")
+		}
+	})
+
+	t.Run("predicate_func_check", func(t *testing.T) {
+		predicate := func(key string) bool {
+			if _, ok := newEntries[key]; ok {
+				return true
+			}
+			return false
+		}
+		rowEntry, err := engine.GetRowColumns(randomRow, predicate)
+		assert.NoError(t, err, "failed to build column map")
+		assert.Equal(t, len(rowEntry), len(newEntries), "unexpected number of column values")
+	})
+
+	t.Run("entire_row_delete", func(t *testing.T) {
+		// delete the entire row.
+		err = engine.DeleteRow(randomRow)
+		assert.NoError(t, err, "DeleteRow operation should succeed")
+		rowEntry, err := engine.GetRowColumns(randomRow, nil)
+		assert.ErrorIs(t, err, ErrKeyNotFound, "failed to build column map")
+		assert.Nil(t, rowEntry, "unexpected column values")
+	})
+
 }
