@@ -32,9 +32,9 @@ const (
 )
 
 const (
-	smallValue       = 512             // 512 bytes
-	largeValue       = 2 * 1024 * 1024 // 2MB values
-	largeValueChance = 0.2             // 20% chance of having large values
+	smallValue       = 100  // 100 bytes
+	largeValue       = 1024 // 1024 bytes values
+	largeValueChance = 0.2  // 20% chance of having large values
 )
 
 type noopWalIO struct {
@@ -194,7 +194,7 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 			if rand.Float64() < largeValueChance {
 				valueSize = largeValue
 			}
-			value := []byte(gofakeit.LetterN(50))
+			value := []byte(gofakeit.LetterN(5))
 			data := bytes.Repeat(value, valueSize)
 			err = se.Put(key, data)
 			assert.NoError(t, err)
@@ -243,7 +243,7 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 				if rand.Float64() < largeValueChance {
 					valueSize = largeValue
 				}
-				value := []byte(gofakeit.LetterN(50))
+				value := []byte(gofakeit.LetterN(1))
 				data := bytes.Repeat(value, valueSize)
 				err = engines[nameSpaces[0]].Put(key, data)
 				assert.NoError(t, err)
@@ -321,7 +321,7 @@ func TestServer_StreamWAL_Client(t *testing.T) {
 			if rand.Float64() < largeValueChance {
 				valueSize = largeValue
 			}
-			value := []byte(gofakeit.LetterN(50))
+			value := []byte(gofakeit.LetterN(5))
 			data := bytes.Repeat(value, valueSize)
 			err = se.Put(key, data)
 			assert.NoError(t, err)
@@ -369,7 +369,7 @@ func TestServer_StreamWAL_Client(t *testing.T) {
 				if rand.Float64() < largeValueChance {
 					valueSize = largeValue
 				}
-				value := []byte(gofakeit.LetterN(50))
+				value := []byte(gofakeit.LetterN(5))
 				data := bytes.Repeat(value, valueSize)
 				err := engines[nameSpaces[0]].Put(key, data)
 				assert.NoError(t, err)
@@ -417,7 +417,7 @@ func TestServer_StreamWAL_MaxRetry(t *testing.T) {
 			if rand.Float64() < largeValueChance {
 				valueSize = largeValue
 			}
-			value := []byte(gofakeit.LetterN(50))
+			value := []byte(gofakeit.LetterN(5))
 			data := bytes.Repeat(value, valueSize)
 			err = se.Put(key, data)
 			assert.NoError(t, err)

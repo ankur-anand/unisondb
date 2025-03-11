@@ -15,7 +15,6 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-metrics v0.5.4
 	github.com/pelletier/go-toml/v2 v2.2.3
-	github.com/pierrec/lz4/v4 v4.1.22
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.21.0
 	github.com/prometheus/common v0.62.0
