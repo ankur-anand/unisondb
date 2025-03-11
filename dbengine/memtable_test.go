@@ -131,7 +131,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		for k, v := range kv {
 			offset, err := memTable.wIO.Append(v)
 			assert.NoError(t, err)
-			vs := getValueStruct(metaValueInsert, true, v)
+			vs := getValueStruct(logOperationInsert, true, v)
 			err = memTable.put([]byte(k), vs, offset)
 			assert.NoError(t, err)
 		}
@@ -168,7 +168,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 			Key:           []byte(key),
 			Value:         marshalChecksum(checksum),
 			LogOperation:  walrecord.LogOperationTxnMarker,
-			ValueType:     walrecord.ValueTypeChunked,
+			EntryType:     walrecord.EntryTypeChunked,
 			TxnStatus:     walrecord.TxnStatusCommit,
 			TxnID:         []byte(key),
 			PrevTxnOffset: lastOffset,
@@ -180,7 +180,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		assert.NoError(t, err)
 		lastOffset = offset
 
-		vs := getValueStruct(metaValueInsert, true, encoded)
+		vs := getValueStruct(logOperationInsert, true, encoded)
 		err = memTable.put([]byte(key), vs, offset)
 		assert.NoError(t, err)
 
@@ -201,7 +201,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		for k, v := range kv {
 			offset, err := memTable.wIO.Append(v)
 			assert.NoError(t, err)
-			vs := getValueStruct(metaValueInsert, false, offset.Encode())
+			vs := getValueStruct(logOperationInsert, false, offset.Encode())
 			err = memTable.put([]byte(k), vs, offset)
 			assert.NoError(t, err)
 		}
@@ -228,7 +228,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		for k, v := range kv {
 			offset, err := memTable.wIO.Append(v)
 			assert.NoError(t, err)
-			vs := getValueStruct(metaValueInsert, true, v)
+			vs := getValueStruct(logOperationInsert, true, v)
 			err = memTable.put([]byte(k), vs, offset)
 			assert.NoError(t, err)
 		}
@@ -265,7 +265,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 			Key:           []byte(key),
 			Value:         marshalChecksum(checksum),
 			LogOperation:  walrecord.LogOperationTxnMarker,
-			ValueType:     walrecord.ValueTypeChunked,
+			EntryType:     walrecord.EntryTypeChunked,
 			TxnStatus:     walrecord.TxnStatusCommit,
 			TxnID:         []byte(key),
 			PrevTxnOffset: lastOffset,
@@ -277,7 +277,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		assert.NoError(t, err)
 		lastOffset = offset
 
-		vs := getValueStruct(metaValueInsert, true, encoded)
+		vs := getValueStruct(logOperationInsert, true, encoded)
 		err = memTable.put([]byte(key), vs, offset)
 		assert.NoError(t, err)
 
@@ -298,7 +298,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		for k, v := range kv {
 			offset, err := memTable.wIO.Append(v)
 			assert.NoError(t, err)
-			vs := getValueStruct(metaValueInsert, false, offset.Encode())
+			vs := getValueStruct(logOperationInsert, false, offset.Encode())
 			err = memTable.put([]byte(k), vs, offset)
 			assert.NoError(t, err)
 		}
@@ -327,7 +327,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 		for k, v := range kv {
 			offset, err := memTable.wIO.Append(v)
 			assert.NoError(t, err)
-			vs := getValueStruct(metaValueInsert, true, v)
+			vs := getValueStruct(logOperationInsert, true, v)
 			err = memTable.put([]byte(k), vs, offset)
 			assert.NoError(t, err)
 		}
@@ -355,7 +355,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 				Key:           []byte(k),
 				Value:         nil,
 				LogOperation:  walrecord.LogOperationDelete,
-				ValueType:     walrecord.ValueTypeFull,
+				EntryType:     walrecord.EntryTypeKV,
 				TxnStatus:     walrecord.TxnStatusTxnNone,
 				TxnID:         nil,
 				PrevTxnOffset: nil,
@@ -365,7 +365,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 			assert.NoError(t, err)
 			offset, err := memTable.wIO.Append(encoded)
 			assert.NoError(t, err)
-			vs := getValueStruct(metaValueDelete, true, encoded)
+			vs := getValueStruct(logOperationDelete, true, encoded)
 			err = memTable.put([]byte(k), vs, offset)
 			assert.NoError(t, err)
 		}
@@ -393,7 +393,7 @@ func generateNFBRecord(t *testing.T, n uint64) map[string][]byte {
 			Key:           []byte(key),
 			Value:         []byte(val),
 			LogOperation:  walrecord.LogOperationInsert,
-			ValueType:     walrecord.ValueTypeFull,
+			EntryType:     walrecord.EntryTypeKV,
 			TxnStatus:     walrecord.TxnStatusTxnNone,
 			TxnID:         nil,
 			PrevTxnOffset: nil,
@@ -417,7 +417,7 @@ func generateNChunkFBRecord(t *testing.T, n uint64) (string, []walrecord.Record,
 		Key:           []byte(key),
 		Value:         nil,
 		LogOperation:  walrecord.LogOperationTxnMarker,
-		ValueType:     walrecord.ValueTypeChunked,
+		EntryType:     walrecord.EntryTypeChunked,
 		TxnStatus:     walrecord.TxnStatusBegin,
 		TxnID:         []byte(key),
 		PrevTxnOffset: nil,
@@ -435,7 +435,7 @@ func generateNChunkFBRecord(t *testing.T, n uint64) (string, []walrecord.Record,
 			Key:           []byte(key),
 			Value:         []byte(val),
 			LogOperation:  walrecord.LogOperationInsert,
-			ValueType:     walrecord.ValueTypeChunked,
+			EntryType:     walrecord.EntryTypeChunked,
 			TxnStatus:     walrecord.TxnStatusPrepare,
 			TxnID:         nil,
 			PrevTxnOffset: nil,
@@ -485,7 +485,7 @@ func TestRow_KeysPut(t *testing.T) {
 				LogOperation:  walrecord.LogOperationInsert,
 				TxnID:         nil,
 				TxnStatus:     walrecord.TxnStatusPrepare,
-				ValueType:     walrecord.ValueTypeColumn,
+				EntryType:     walrecord.EntryTypeRow,
 				PrevTxnOffset: nil,
 				ColumnEntries: entries,
 			}
@@ -493,8 +493,8 @@ func TestRow_KeysPut(t *testing.T) {
 			encoded, err := record.FBEncode()
 			assert.NoError(t, err)
 
-			v := getValueStruct(metaValueInsert, true, encoded)
-			v.UserMeta = valueTypeColumn
+			v := getValueStruct(logOperationInsert, true, encoded)
+			v.UserMeta = entryTypeRow
 			err = mmTable.put([]byte(rowKey), v, nil)
 			assert.NoError(t, err)
 		}
@@ -525,7 +525,7 @@ func TestRow_KeysPut(t *testing.T) {
 		LogOperation:  walrecord.LogOperationDelete,
 		TxnID:         nil,
 		TxnStatus:     walrecord.TxnStatusPrepare,
-		ValueType:     walrecord.ValueTypeColumn,
+		EntryType:     walrecord.EntryTypeRow,
 		PrevTxnOffset: nil,
 		ColumnEntries: deleteEntries,
 	}
@@ -533,8 +533,8 @@ func TestRow_KeysPut(t *testing.T) {
 	encoded, err := record.FBEncode()
 	assert.NoError(t, err)
 
-	v := getValueStruct(metaValueDelete, true, encoded)
-	v.UserMeta = valueTypeColumn
+	v := getValueStruct(logOperationDelete, true, encoded)
+	v.UserMeta = entryTypeRow
 	err = mmTable.put([]byte(randomRow), v, nil)
 	assert.NoError(t, err)
 

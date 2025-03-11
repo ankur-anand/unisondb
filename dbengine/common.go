@@ -32,9 +32,9 @@ var (
 	// Marks values stored directly in memory.
 	directValuePrefix  byte = 254
 	walReferencePrefix byte = 255 // Marks values stored as a reference in WAL
-	metaValueDelete         = byte(walrecord.LogOperationDelete)
-	metaValueInsert         = byte(walrecord.LogOperationInsert)
-	valueTypeColumn         = byte(walrecord.ValueTypeColumn)
+	logOperationDelete      = byte(walrecord.LogOperationDelete)
+	logOperationInsert      = byte(walrecord.LogOperationInsert)
+	entryTypeRow            = byte(walrecord.EntryTypeRow)
 )
 
 var (

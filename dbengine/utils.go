@@ -99,11 +99,11 @@ func buildColumnMap(columnEntries map[string][]byte, vs []y.ValueStruct, walIO *
 			return err
 		}
 		switch v.Meta {
-		case metaValueInsert:
+		case logOperationInsert:
 			for _, ce := range extractColumns(record) {
 				columnEntries[string(ce.ColumnName())] = ce.ColumnValueBytes()
 			}
-		case metaValueDelete:
+		case logOperationDelete:
 			for _, ce := range extractColumns(record) {
 				delete(columnEntries, string(ce.ColumnName()))
 			}

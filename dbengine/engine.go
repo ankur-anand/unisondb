@@ -309,7 +309,7 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op walrecord.LogOpera
 		Value:        value,
 		LogOperation: op,
 		TxnStatus:    walrecord.TxnStatusTxnNone,
-		ValueType:    walrecord.ValueTypeFull,
+		EntryType:    walrecord.EntryTypeKV,
 	}
 
 	encoded, err := record.FBEncode()
@@ -358,7 +358,7 @@ func (e *Engine) persistRowColumnAction(op walrecord.LogOperation, rowKey []byte
 		Value:         nil,
 		LogOperation:  op,
 		TxnStatus:     walrecord.TxnStatusTxnNone,
-		ValueType:     walrecord.ValueTypeColumn,
+		EntryType:     walrecord.EntryTypeRow,
 		ColumnEntries: columnEntries,
 	}
 
@@ -381,7 +381,7 @@ func (e *Engine) persistRowColumnAction(op walrecord.LogOperation, rowKey []byte
 		memValue = getValueStruct(byte(op), false, offset.Encode())
 	}
 
-	memValue.UserMeta = valueTypeColumn
+	memValue.UserMeta = entryTypeRow
 	err = e.memTableWrite(rowKey, memValue, offset)
 
 	if err != nil {

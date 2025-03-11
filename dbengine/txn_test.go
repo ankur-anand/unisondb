@@ -30,13 +30,13 @@ func TestTxnNew(t *testing.T) {
 		}
 	})
 
-	_, err = engine.NewTxn(walrecord.LogOperationInsert, walrecord.ValueTypeChunked)
+	_, err = engine.NewTxn(walrecord.LogOperationInsert, walrecord.EntryTypeChunked)
 	assert.NoError(t, err, "NewBatch operation should succeed")
 
-	_, err = engine.NewTxn(walrecord.LogOperationDelete, walrecord.ValueTypeChunked)
+	_, err = engine.NewTxn(walrecord.LogOperationDelete, walrecord.EntryTypeChunked)
 	assert.ErrorIs(t, err, dbengine.ErrUnsupportedTxnType, "delete should not allow chunked  value type")
 
-	_, err = engine.NewTxn(walrecord.LogOperationNoop, walrecord.ValueTypeChunked)
+	_, err = engine.NewTxn(walrecord.LogOperationNoop, walrecord.EntryTypeChunked)
 	assert.ErrorIs(t, err, dbengine.ErrUnsupportedTxnType, "Noop Txn should not succeed")
 }
 
@@ -79,7 +79,7 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 		fullValue.Write([]byte(batchValues[i]))
 	}
 
-	txn, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.ValueTypeChunked)
+	txn, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.EntryTypeChunked)
 	assert.NoError(t, err, "NewBatch operation should succeed")
 	assert.NotNil(t, txn, "NewBatch operation should succeed")
 	err = txn.AppendKVTxn(batchKey, []byte(batchValues[0]))
@@ -88,7 +88,7 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 	// changing key from the chunked value type should error out,
 	assert.ErrorIs(t, err, dbengine.ErrKeyChangedForChunkedType, "Append operation should fail")
 
-	txn, err = engine.NewTxn(walrecord.LogOperationInsert, walrecord.ValueTypeChunked)
+	txn, err = engine.NewTxn(walrecord.LogOperationInsert, walrecord.EntryTypeChunked)
 	assert.NoError(t, err, "NewBatch operation should succeed")
 	assert.NotNil(t, txn, "NewBatch operation should succeed")
 
@@ -136,7 +136,7 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 	deletedKeys := make(map[string]struct{})
 
 	t.Run("batch_insert", func(t *testing.T) {
-		txn, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.ValueTypeFull)
+		txn, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.EntryTypeKV)
 		assert.NoError(t, err, "NewBatch operation should succeed")
 		assert.NotNil(t, txn, "NewBatch operation should succeed")
 
@@ -161,7 +161,7 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 	})
 
 	t.Run("batch_delete", func(t *testing.T) {
-		txn, err := engine.NewTxn(walrecord.LogOperationDelete, walrecord.ValueTypeFull)
+		txn, err := engine.NewTxn(walrecord.LogOperationDelete, walrecord.EntryTypeKV)
 		assert.NoError(t, err, "NewBatch operation should succeed")
 		assert.NotNil(t, txn, "NewBatch operation should succeed")
 

@@ -146,7 +146,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	batchKey := []byte(gofakeit.UUID())
 
 	// open a batch writer:
-	batch, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.ValueTypeChunked)
+	batch, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.EntryTypeChunked)
 	assert.NoError(t, err, "NewBatch operation should succeed")
 	assert.NotNil(t, batch, "NewBatch operation should succeed")
 

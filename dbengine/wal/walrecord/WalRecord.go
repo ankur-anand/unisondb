@@ -101,15 +101,15 @@ func (rcv *WalRecord) MutateTxnStatus(n TxnStatus) bool {
 	return rcv._tab.MutateByteSlot(12, byte(n))
 }
 
-func (rcv *WalRecord) ValueType() ValueType {
+func (rcv *WalRecord) EntryType() EntryType {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
 	if o != 0 {
-		return ValueType(rcv._tab.GetByte(o + rcv._tab.Pos))
+		return EntryType(rcv._tab.GetByte(o + rcv._tab.Pos))
 	}
 	return 0
 }
 
-func (rcv *WalRecord) MutateValueType(n ValueType) bool {
+func (rcv *WalRecord) MutateEntryType(n EntryType) bool {
 	return rcv._tab.MutateByteSlot(14, byte(n))
 }
 
@@ -287,8 +287,8 @@ func WalRecordAddOperation(builder *flatbuffers.Builder, operation LogOperation)
 func WalRecordAddTxnStatus(builder *flatbuffers.Builder, txnStatus TxnStatus) {
 	builder.PrependByteSlot(4, byte(txnStatus), 0)
 }
-func WalRecordAddValueType(builder *flatbuffers.Builder, valueType ValueType) {
-	builder.PrependByteSlot(5, byte(valueType), 0)
+func WalRecordAddEntryType(builder *flatbuffers.Builder, entryType EntryType) {
+	builder.PrependByteSlot(5, byte(entryType), 0)
 }
 func WalRecordAddTxnId(builder *flatbuffers.Builder, txnId flatbuffers.UOffsetT) {
 	builder.PrependUOffsetTSlot(6, flatbuffers.UOffsetT(txnId), 0)

@@ -166,7 +166,7 @@ func TestWalIO_Suite(t *testing.T) {
 				Key:           []byte(key),
 				Value:         []byte(data),
 				LogOperation:  walrecord.LogOperationInsert,
-				ValueType:     walrecord.ValueTypeFull,
+				EntryType:     walrecord.EntryTypeKV,
 				TxnStatus:     walrecord.TxnStatusTxnNone,
 				TxnID:         []byte(gofakeit.UUID()),
 				PrevTxnOffset: prevOffset,
@@ -188,7 +188,7 @@ func TestWalIO_Suite(t *testing.T) {
 			assert.Equal(t, record.Operation(), walrecord.LogOperationInsert, "expected operation didn't matched")
 			assert.Equal(t, uint64(i), record.Index(), "expected index didn't match")
 			assert.Equal(t, uint64(i), record.Hlc(), "expected hlc didn't match")
-			assert.Equal(t, record.ValueType(), walrecord.ValueTypeFull, "expected value type didn't match")
+			assert.Equal(t, record.EntryType(), walrecord.EntryTypeKV, "expected value type didn't match")
 			assert.Equal(t, string(record.KeyBytes()), keys[i], "expected key didn't match")
 			assert.Equal(t, string(record.ValueBytes()), values[i], "expected value didn't match")
 		}
@@ -210,7 +210,7 @@ func TestWalIO_Suite(t *testing.T) {
 			Key:           []byte(key),
 			Value:         []byte(data),
 			LogOperation:  walrecord.LogOperationInsert,
-			ValueType:     walrecord.ValueTypeFull,
+			EntryType:     walrecord.EntryTypeKV,
 			TxnStatus:     walrecord.TxnStatusTxnNone,
 			TxnID:         []byte(gofakeit.UUID()),
 			PrevTxnOffset: nil,

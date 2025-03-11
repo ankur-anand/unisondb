@@ -70,7 +70,7 @@ func (table *memTable) put(key []byte, val y.ValueStruct, pos *wal.Offset) error
 	}
 
 	putKey := y.KeyWithTs(key, 0)
-	if val.UserMeta == valueTypeColumn {
+	if val.UserMeta == entryTypeRow {
 		// We cannot save only one key, as a wide column row can have
 		// multiple column entity in different ops of transaction.
 		putKey = y.KeyWithTs(key, uint64(time.Now().UnixNano()))
@@ -148,12 +148,12 @@ func (table *memTable) processEntry(key []byte, entry y.ValueStruct, flushMan *f
 
 	switch entry.Meta {
 	case byte(walrecord.LogOperationDelete):
-		if entry.UserMeta != valueTypeColumn {
+		if entry.UserMeta != entryTypeRow {
 			flushMan.kvDeleteBuffer.add(parsedKey)
 			return nil
 		}
 
-	case byte(walrecord.LogOperationDeleteEntireRow):
+	case byte(walrecord.LogOperationDeleteRow):
 		flushMan.rowDeleteBuffer.add(parsedKey)
 		return nil
 	}
@@ -163,7 +163,7 @@ func (table *memTable) processEntry(key []byte, entry y.ValueStruct, flushMan *f
 		return err
 	}
 
-	if record.TxnStatus() == walrecord.TxnStatusCommit && record.ValueType() == walrecord.ValueTypeChunked {
+	if record.TxnStatus() == walrecord.TxnStatusCommit && record.EntryType() == walrecord.EntryTypeChunked {
 		n, err := table.flushChunkedTxnCommit(record)
 		if err != nil {
 			return err
@@ -173,7 +173,7 @@ func (table *memTable) processEntry(key []byte, entry y.ValueStruct, flushMan *f
 	}
 
 	// column operations
-	if record.ValueType() == walrecord.ValueTypeColumn {
+	if record.EntryType() == walrecord.EntryTypeRow {
 		switch record.Operation() {
 		case walrecord.LogOperationInsert:
 			flushMan.columnWriteBuffer.add(record.KeyBytes(), getColumnsValue(record))

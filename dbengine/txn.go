@@ -47,16 +47,16 @@ type Txn struct {
 	valuesCount     int
 	checksum        uint32 // Rolling checksum
 	txnOperation    walrecord.LogOperation
-	txnValueType    walrecord.ValueType
+	txnEntryType    walrecord.EntryType
 }
 
 // NewTxn returns a new initialized batch Txn.
-func (e *Engine) NewTxn(txnType walrecord.LogOperation, valueType walrecord.ValueType) (*Txn, error) {
+func (e *Engine) NewTxn(txnType walrecord.LogOperation, valueType walrecord.EntryType) (*Txn, error) {
 	if txnType == walrecord.LogOperationNoop {
 		return nil, ErrUnsupportedTxnType
 	}
 
-	if txnType == walrecord.LogOperationDelete && valueType == walrecord.ValueTypeChunked {
+	if txnType == walrecord.LogOperationDelete && valueType == walrecord.EntryTypeChunked {
 		return nil, ErrUnsupportedTxnType
 	}
 
@@ -77,7 +77,7 @@ func (e *Engine) NewTxn(txnType walrecord.LogOperation, valueType walrecord.Valu
 		LogOperation:  walrecord.LogOperationTxnMarker,
 		TxnID:         uuid,
 		TxnStatus:     walrecord.TxnStatusBegin,
-		ValueType:     valueType,
+		EntryType:     valueType,
 		PrevTxnOffset: nil,
 	}
 
@@ -102,7 +102,7 @@ func (e *Engine) NewTxn(txnType walrecord.LogOperation, valueType walrecord.Valu
 		valuesCount:     0,
 		memTableEntries: make([]txMemTableEntry, 0),
 		txnOperation:    txnType,
-		txnValueType:    valueType,
+		txnEntryType:    valueType,
 	}, nil
 }
 
@@ -112,15 +112,15 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 		return t.err
 	}
 
-	if t.txnValueType == walrecord.ValueTypeColumn {
+	if t.txnEntryType == walrecord.EntryTypeRow {
 		return ErrUnsupportedTxnType
 	}
 
-	if t.txnOperation == walrecord.LogOperationInsert && t.txnValueType != walrecord.ValueTypeFull && t.rowKey == nil {
+	if t.txnOperation == walrecord.LogOperationInsert && t.txnEntryType != walrecord.EntryTypeKV && t.rowKey == nil {
 		t.rowKey = key
 	}
 
-	if t.txnOperation == walrecord.LogOperationInsert && t.txnValueType != walrecord.ValueTypeFull && !bytes.Equal(t.rowKey, key) {
+	if t.txnOperation == walrecord.LogOperationInsert && t.txnEntryType != walrecord.EntryTypeKV && !bytes.Equal(t.rowKey, key) {
 		t.err = ErrKeyChangedForChunkedType
 		return t.err
 	}
@@ -140,7 +140,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 		LogOperation:  t.txnOperation,
 		TxnID:         t.txnID,
 		TxnStatus:     walrecord.TxnStatusPrepare,
-		ValueType:     t.txnValueType,
+		EntryType:     t.txnEntryType,
 		PrevTxnOffset: t.lastPos,
 	}
 
@@ -163,7 +163,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 	t.lastPos = offset
 
 	// for chunked type we just dataStore the last offset.
-	if t.txnValueType != walrecord.ValueTypeChunked {
+	if t.txnEntryType != walrecord.EntryTypeChunked {
 		var memValue y.ValueStruct
 		if int64(len(value)) <= t.engine.config.ValueThreshold {
 			memValue = getValueStruct(byte(t.txnOperation), true, encoded)
@@ -191,7 +191,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columns map[string][]byte) error {
 	if t.err != nil {
 		return t.err
 	}
-	if t.txnValueType != walrecord.ValueTypeColumn {
+	if t.txnEntryType != walrecord.EntryTypeRow {
 		return ErrUnsupportedTxnType
 	}
 
@@ -221,7 +221,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columns map[string][]byte) error {
 		LogOperation:  t.txnOperation,
 		TxnID:         t.txnID,
 		TxnStatus:     walrecord.TxnStatusPrepare,
-		ValueType:     t.txnValueType,
+		EntryType:     t.txnEntryType,
 		PrevTxnOffset: t.lastPos,
 		ColumnEntries: compressedColumns,
 	}
@@ -251,7 +251,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columns map[string][]byte) error {
 		memValue = getValueStruct(byte(t.txnOperation), false, offset.Encode())
 	}
 
-	memValue.UserMeta = valueTypeColumn
+	memValue.UserMeta = entryTypeRow
 	t.memTableEntries = append(t.memTableEntries, txMemTableEntry{
 		key:    rowKey,
 		offset: offset,
@@ -280,7 +280,7 @@ func (t *Txn) Commit() error {
 		LogOperation:  t.txnOperation,
 		TxnID:         t.txnID,
 		TxnStatus:     walrecord.TxnStatusCommit,
-		ValueType:     t.txnValueType,
+		EntryType:     t.txnEntryType,
 		PrevTxnOffset: t.lastPos,
 	}
 
@@ -309,10 +309,10 @@ func (t *Txn) Commit() error {
 	t.lastPos = offset
 
 	var mErr error
-	switch t.txnValueType {
-	case walrecord.ValueTypeFull, walrecord.ValueTypeColumn:
+	switch t.txnEntryType {
+	case walrecord.EntryTypeKV, walrecord.EntryTypeRow:
 		mErr = t.memWriteFull()
-	case walrecord.ValueTypeChunked:
+	case walrecord.EntryTypeChunked:
 		mErr = t.memWriteChunk(encoded)
 	}
 

@@ -245,7 +245,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	if record.ValueType() == walrecord.ValueTypeChunked {
+	if record.EntryType() == walrecord.EntryTypeChunked {
 		return e.reconstructBatchValue(record)
 	}
 	decompressed, err := compress.DecompressLZ4(record.ValueBytes())
@@ -302,7 +302,7 @@ func (e *Engine) DeleteRow(rowKey string) error {
 		metrics.MeasureSinceWithLabels(mKeyRowDeleteDuration, startTime, e.metricsLabel)
 	}()
 
-	return e.persistRowColumnAction(walrecord.LogOperationDeleteEntireRow, []byte(rowKey), nil)
+	return e.persistRowColumnAction(walrecord.LogOperationDeleteRow, []byte(rowKey), nil)
 }
 
 // GetRowColumns returns all the column value associated with the row. It's filters columns if predicate
@@ -328,7 +328,7 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 			return nil, ErrKeyNotFound
 		}
 		first := e.activeMemTable.getRowYValue(key)
-		if len(first) != 0 && first[len(first)-1].Meta == byte(walrecord.LogOperationDeleteEntireRow) {
+		if len(first) != 0 && first[len(first)-1].Meta == byte(walrecord.LogOperationDeleteRow) {
 			return nil, ErrKeyNotFound
 		}
 		// get the columns value from the old sealed table to new mem table.
