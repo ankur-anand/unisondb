@@ -29,8 +29,8 @@ type LMDBTxnQueue struct {
 	deleteOps       float32
 }
 
-// NewLMDBTxn returns a initialized LMDBTxnQueue for Batch API queuing and commit.
-func (l *LmdbEmbed) NewLMDBTxn(maxBatchSize int) *LMDBTxnQueue {
+// NewLMDBTxnQueue returns a initialized LMDBTxnQueue for Batch API queuing and commit.
+func (l *LmdbEmbed) NewLMDBTxnQueue(maxBatchSize int) *LMDBTxnQueue {
 	return &LMDBTxnQueue{
 		env:          l.env,
 		db:           l.db,
@@ -42,44 +42,44 @@ func (l *LmdbEmbed) NewLMDBTxn(maxBatchSize int) *LMDBTxnQueue {
 // BatchPut queue one or more key-value pairs inside a transaction that will be commited upon Commit or max batch size
 // threshold breach. If the value exists, it replaces the existing value, else sets a new value associated with the key.
 // Caller need to take care to not upsert the row column value, else there is no guarantee for consistency in storage.
-func (lt *LMDBTxnQueue) BatchPut(keys, values [][]byte) *LMDBTxnQueue {
-	if lt.err != nil {
-		return lt
+func (lq *LMDBTxnQueue) BatchPut(keys, values [][]byte) *LMDBTxnQueue {
+	if lq.err != nil {
+		return lq
 	}
 
 	for i, key := range keys {
 		// append the set function to queue for processing
-		lt.opsQueue = append(lt.opsQueue, func(t *lmdb.Txn) error {
+		lq.opsQueue = append(lq.opsQueue, func(t *lmdb.Txn) error {
 
 			storedValue := make([]byte, 1+len(values[i]))
 			storedValue[0] = kvValue
 			copy(storedValue[1:], values[i])
-			err := t.Put(lt.db, key, storedValue, 0)
+			err := t.Put(lq.db, key, storedValue, 0)
 			if err != nil {
 				return err
 			}
-			lt.putOps++
-			lt.entriesModified++
+			lq.putOps++
+			lq.entriesModified++
 
 			return nil
 		})
 	}
 
-	return lt
+	return lq
 }
 
 // BatchDelete queue one or more key inside a transaction for deletion. It doesn't delete rows or columns.
 // Deletion happens either when Commit is called or max batch size threshold is reached.
 // Caller need to call BatchDeleteRows or BatchDeleteRowsColumns to work with rows and columns type value.
-func (lt *LMDBTxnQueue) BatchDelete(keys [][]byte) *LMDBTxnQueue {
-	if lt.err != nil {
-		return lt
+func (lq *LMDBTxnQueue) BatchDelete(keys [][]byte) *LMDBTxnQueue {
+	if lq.err != nil {
+		return lq
 	}
 
 	for _, key := range keys {
-		lt.opsQueue = append(lt.opsQueue, func(txn *lmdb.Txn) error {
+		lq.opsQueue = append(lq.opsQueue, func(txn *lmdb.Txn) error {
 
-			storedValue, err := txn.Get(lt.db, key)
+			storedValue, err := txn.Get(lq.db, key)
 			// if not found continue to next key.
 			if lmdb.IsNotFound(err) {
 				return nil
@@ -89,37 +89,37 @@ func (lt *LMDBTxnQueue) BatchDelete(keys [][]byte) *LMDBTxnQueue {
 				return err
 			}
 
-			lt.deleteOps++
-			lt.entriesModified++
+			lq.deleteOps++
+			lq.entriesModified++
 			flag := storedValue[0]
 			switch flag {
 			case kvValue:
-				return txn.Del(lt.db, key, nil)
+				return txn.Del(lq.db, key, nil)
 			case chunkedValue:
 				if len(storedValue) < 9 {
 					return ErrInvalidChunkMetadata
 				}
 				chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
 				for i := 0; i < int(chunkCount); i++ {
-					lt.entriesModified++
+					lq.entriesModified++
 					chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-					if err := txn.Del(lt.db, []byte(chunkKey), nil); err != nil {
+					if err := txn.Del(lq.db, []byte(chunkKey), nil); err != nil {
 						return err
 					}
 				}
-				return txn.Del(lt.db, key, nil)
+				return txn.Del(lq.db, key, nil)
 			}
 			return ErrInvalidOpsForValueType
 		})
 	}
-	return lt
+	return lq
 }
 
 // SetChunks stores a value that has been split into chunks, associating them with a single key.
 // It queues the operation in Txn, which is flushed when either max size threshold is reached or during commit call.
-func (lt *LMDBTxnQueue) SetChunks(key []byte, chunks [][]byte, checksum uint32) *LMDBTxnQueue {
-	if lt.err != nil {
-		return lt
+func (lq *LMDBTxnQueue) SetChunks(key []byte, chunks [][]byte, checksum uint32) *LMDBTxnQueue {
+	if lq.err != nil {
+		return lq
 	}
 
 	metaData := make([]byte, 9)
@@ -127,8 +127,8 @@ func (lt *LMDBTxnQueue) SetChunks(key []byte, chunks [][]byte, checksum uint32) 
 	binary.LittleEndian.PutUint32(metaData[1:], uint32(len(chunks)))
 	binary.LittleEndian.PutUint32(metaData[5:], checksum)
 
-	lt.opsQueue = append(lt.opsQueue, func(txn *lmdb.Txn) error {
-		storedValue, err := txn.Get(lt.db, key)
+	lq.opsQueue = append(lq.opsQueue, func(txn *lmdb.Txn) error {
+		storedValue, err := txn.Get(lq.db, key)
 
 		if err == nil && len(storedValue) > 0 && storedValue[0] == chunkedValue {
 			if len(storedValue) < 9 {
@@ -138,67 +138,67 @@ func (lt *LMDBTxnQueue) SetChunks(key []byte, chunks [][]byte, checksum uint32) 
 			oldChunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
 			for i := uint32(0); i < oldChunkCount; i++ {
 				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-				if err := txn.Del(lt.db, []byte(chunkKey), nil); err != nil && !lmdb.IsNotFound(err) {
+				if err := txn.Del(lq.db, []byte(chunkKey), nil); err != nil && !lmdb.IsNotFound(err) {
 					return err
 				}
 			}
 		}
 
-		lt.putOps++
-		lt.entriesModified++
+		lq.putOps++
+		lq.entriesModified++
 		// Store chunks
 		for i, chunk := range chunks {
-			lt.entriesModified++
+			lq.entriesModified++
 			chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-			err := txn.Put(lt.db, []byte(chunkKey), chunk, 0)
+			err := txn.Put(lq.db, []byte(chunkKey), chunk, 0)
 			if err != nil {
 				return err
 			}
 		}
 
 		// Store metadata
-		if err := txn.Put(lt.db, key, metaData, 0); err != nil {
+		if err := txn.Put(lq.db, key, metaData, 0); err != nil {
 			return err
 		}
 
 		return nil
 	})
 
-	return lt
+	return lq
 }
 
 // BatchPutRowColumns queues updates or inserts of multiple rows with the provided column entries.
 // Each row in `rowKeys` maps to a set of columns in `columnEntriesPerRow`.
-func (lt *LMDBTxnQueue) BatchPutRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) *LMDBTxnQueue {
-	if lt.err != nil {
-		return lt
+func (lq *LMDBTxnQueue) BatchPutRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) *LMDBTxnQueue {
+	if lq.err != nil {
+		return lq
 	}
 
 	if len(rowKeys) != len(columnEntriesPerRow) {
-		lt.err = ErrInvalidArguments
-		return lt
+		lq.err = ErrInvalidArguments
+		return lq
 	}
 
 	for i, rowKey := range rowKeys {
-		lt.opsQueue = append(lt.opsQueue, func(txn *lmdb.Txn) error {
+		lq.opsQueue = append(lq.opsQueue, func(txn *lmdb.Txn) error {
 			columnEntries := columnEntriesPerRow[i]
 			if len(columnEntries) == 0 {
 				return nil
 			}
 
-			lt.putOps++
-			lt.entriesModified++
+			lq.putOps++
+			lq.entriesModified++
 			pKey := append(append([]byte(nil), rowKey...), rowKeySeperator...)
 			entries := appendRowKeyToColumnKey(pKey, columnEntries)
 
 			for entryKey, entry := range entries {
-				lt.entriesModified++
-				if err := txn.Put(lt.db, []byte(entryKey), entry, 0); err != nil {
+				lq.entriesModified++
+				if err := txn.Put(lq.db, []byte(entryKey), entry, 0); err != nil {
 					return err
 				}
 			}
 
-			if err := txn.Put(lt.db, pKey, []byte{rowColumnValue}, 0); err != nil {
+			if err := txn.Put(lq.db, pKey, []byte{rowColumnValue}, 0); err != nil {
 				return err
 			}
 
@@ -206,67 +206,67 @@ func (lt *LMDBTxnQueue) BatchPutRowColumns(rowKeys [][]byte, columnEntriesPerRow
 		})
 	}
 
-	return lt
+	return lq
 }
 
 // BatchDeleteRowColumns queues deletes of multiple rows with the provided column entries.
 // Each row in `rowKeys` maps to a set of columns in `columnEntriesPerRow`.
-func (lt *LMDBTxnQueue) BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) *LMDBTxnQueue {
-	if lt.err != nil {
-		return lt
+func (lq *LMDBTxnQueue) BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) *LMDBTxnQueue {
+	if lq.err != nil {
+		return lq
 	}
 
 	if len(rowKeys) != len(columnEntriesPerRow) {
-		lt.err = ErrInvalidArguments
-		return lt
+		lq.err = ErrInvalidArguments
+		return lq
 	}
 
 	for i, rowKey := range rowKeys {
-		lt.opsQueue = append(lt.opsQueue, func(txn *lmdb.Txn) error {
+		lq.opsQueue = append(lq.opsQueue, func(txn *lmdb.Txn) error {
 			columnEntries := columnEntriesPerRow[i]
 			if len(columnEntries) == 0 {
 				return nil
 			}
 
-			lt.deleteOps++
-			lt.entriesModified++
+			lq.deleteOps++
+			lq.entriesModified++
 			pKey := append(append([]byte(nil), rowKey...), rowKeySeperator...)
 			entries := appendRowKeyToColumnKey(pKey, columnEntries)
 
 			for entryKey := range entries {
-				if err := txn.Del(lt.db, []byte(entryKey), nil); err != nil {
+				if err := txn.Del(lq.db, []byte(entryKey), nil); err != nil {
 					if !lmdb.IsNotFound(err) {
 						return err
 					}
-					lt.entriesModified++
+					lq.entriesModified++
 				}
 			}
 
-			if err := txn.Put(lt.db, pKey, []byte{rowColumnValue}, 0); err != nil {
+			if err := txn.Put(lq.db, pKey, []byte{rowColumnValue}, 0); err != nil {
 				return err
 			}
 			return nil
 		})
 	}
 
-	return lt
+	return lq
 }
 
 // BatchDeleteRows  queue deletes of the row and all it's associated Columns from the database.
-func (lt *LMDBTxnQueue) BatchDeleteRows(rowKeys [][]byte) *LMDBTxnQueue {
-	if lt.err != nil {
-		return lt
+func (lq *LMDBTxnQueue) BatchDeleteRows(rowKeys [][]byte) *LMDBTxnQueue {
+	if lq.err != nil {
+		return lq
 	}
 
 	for _, rowKey := range rowKeys {
 
-		lt.opsQueue = append(lt.opsQueue, func(txn *lmdb.Txn) error {
-			c, err := txn.OpenCursor(lt.db)
+		lq.opsQueue = append(lq.opsQueue, func(txn *lmdb.Txn) error {
+			c, err := txn.OpenCursor(lq.db)
 			if err != nil {
 				return err
 			}
 			defer c.Close()
-			lt.deleteOps++
+			lq.deleteOps++
 
 			pKey := append(append([]byte(nil), rowKey...), rowKeySeperator...)
 			// http://www.lmdb.tech/doc/group__mdb.html#ga1206b2af8b95e7f6b0ef6b28708c9127
@@ -283,7 +283,7 @@ func (lt *LMDBTxnQueue) BatchDeleteRows(rowKeys [][]byte) *LMDBTxnQueue {
 					return err
 				}
 				// Move to next key
-				lt.entriesModified++
+				lq.entriesModified++
 				k, _, err = c.Get(nil, nil, lmdb.Next)
 			}
 
@@ -298,12 +298,12 @@ func (lt *LMDBTxnQueue) BatchDeleteRows(rowKeys [][]byte) *LMDBTxnQueue {
 		})
 	}
 
-	return lt
+	return lq
 }
 
-func (lt *LMDBTxnQueue) flushBatch() error {
-	if lt.err != nil || len(lt.opsQueue) == 0 {
-		return lt.err
+func (lq *LMDBTxnQueue) flushBatch() error {
+	if lq.err != nil || len(lq.opsQueue) == 0 {
+		return lq.err
 	}
 
 	runtime.LockOSThread()
@@ -311,49 +311,49 @@ func (lt *LMDBTxnQueue) flushBatch() error {
 
 	startTime := time.Now()
 
-	metrics.IncrCounterWithLabels(mTxnFlushTotal, 1, lt.label)
+	metrics.IncrCounterWithLabels(mTxnFlushTotal, 1, lq.label)
 	defer func() {
-		metrics.MeasureSinceWithLabels(mTxnFlushLatency, startTime, lt.label)
+		metrics.MeasureSinceWithLabels(mTxnFlushLatency, startTime, lq.label)
 	}()
 
-	txn, err := lt.env.BeginTxn(nil, 0)
+	txn, err := lq.env.BeginTxn(nil, 0)
 	if err != nil {
 		return err
 	}
 
-	for _, op := range lt.opsQueue {
+	for _, op := range lq.opsQueue {
 		if err := op(txn); err != nil {
-			lt.err = err
+			lq.err = err
 			break
 		}
 	}
 
-	if lt.err != nil {
+	if lq.err != nil {
 		txn.Abort()
-		return lt.err
+		return lq.err
 	}
 
 	// no errors occurred commit txn
 	err = txn.Commit()
 
-	if lt.err == nil {
-		metrics.IncrCounterWithLabels(mTxnFlushBatchSize, float32(len(lt.opsQueue)), lt.label)
-		metrics.IncrCounterWithLabels(mSetTotal, lt.putOps, lt.label)
-		metrics.IncrCounterWithLabels(mDelTotal, lt.deleteOps, lt.label)
-		metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, lt.entriesModified, lt.label)
-		lt.opsQueue = nil
-		lt.putOps = 0
-		lt.deleteOps = 0
-		lt.entriesModified = 0
+	if lq.err == nil {
+		metrics.IncrCounterWithLabels(mTxnFlushBatchSize, float32(len(lq.opsQueue)), lq.label)
+		metrics.IncrCounterWithLabels(mSetTotal, lq.putOps, lq.label)
+		metrics.IncrCounterWithLabels(mDelTotal, lq.deleteOps, lq.label)
+		metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, lq.entriesModified, lq.label)
+		lq.opsQueue = nil
+		lq.putOps = 0
+		lq.deleteOps = 0
+		lq.entriesModified = 0
 	}
 	return err
 }
 
 // Commit all the pending operation in queue.
-func (lt *LMDBTxnQueue) Commit() error {
-	if lt.err != nil {
-		return lt.err
+func (lq *LMDBTxnQueue) Commit() error {
+	if lq.err != nil {
+		return lq.err
 	}
 
-	return lt.flushBatch()
+	return lq.flushBatch()
 }
