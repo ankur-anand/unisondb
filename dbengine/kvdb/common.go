@@ -6,9 +6,13 @@ import (
 )
 
 const (
-	valueTypeFull    byte = 254
-	valueTypeChunked byte = 255
-	valueTypeColumns byte = 253
+	kvValue        byte = 254
+	chunkedValue   byte = 255
+	rowColumnValue byte = 253
+)
+
+const (
+	defaultFlushSizeThreshold = 32
 )
 
 const (
@@ -23,6 +27,8 @@ var (
 	ErrRecordCorrupted        = errors.New("record corrupted")
 	ErrUseGetColumnAPI        = errors.New("use get column api")
 	ErrInvalidArguments       = errors.New("invalid arguments")
+	ErrTxnAlreadyActive       = errors.New("an active transaction already exists; commit or abort it first")
+	ErrTxnClosed              = errors.New("transaction has already been committed or aborted")
 )
 
 var (
@@ -51,6 +57,11 @@ var (
 	mRowDeleteLatency = append(packageKey, []string{"row", "delete", "durations", "seconds"}...)
 	mRowGetTotal      = append(packageKey, []string{"row", "get", "total"}...)
 	mRowGetLatency    = append(packageKey, []string{"row", "get", "durations", "seconds"}...)
+
+	mTxnFlushTotal           = append(packageKey, []string{"flush", "total"}...)
+	mTxnFlushLatency         = append(packageKey, []string{"flush", "durations", "seconds"}...)
+	mTxnFlushBatchSize       = append(packageKey, []string{"flush", "batch", "size"}...)
+	mTxnEntriesModifiedTotal = append(packageKey, []string{"entries", "modified", "total"}...)
 )
 
 type Config struct {

@@ -112,7 +112,7 @@ func (l *LmdbEmbed) Set(key []byte, value []byte) error {
 	}()
 
 	return l.env.Update(func(txn *lmdb.Txn) error {
-		storedValue := append([]byte{valueTypeFull}, value...)
+		storedValue := append([]byte{kvValue}, value...)
 		err := txn.Put(l.db, key, storedValue, 0)
 		if err != nil {
 			return err
@@ -143,7 +143,7 @@ func (l *LmdbEmbed) SetMany(keys [][]byte, values [][]byte) error {
 	return l.env.Update(func(txn *lmdb.Txn) error {
 		for i, key := range keys {
 			buffer = buffer[:0]
-			buffer = append(buffer, valueTypeFull)
+			buffer = append(buffer, kvValue)
 			buffer = append(buffer, values[i]...)
 
 			if err := txn.Put(l.db, key, buffer, 0); err != nil {
@@ -167,14 +167,14 @@ func (l *LmdbEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) erro
 	}()
 
 	metaData := make([]byte, 9)
-	metaData[0] = valueTypeChunked
+	metaData[0] = chunkedValue
 	binary.LittleEndian.PutUint32(metaData[1:], uint32(len(chunks)))
 	binary.LittleEndian.PutUint32(metaData[5:], checksum)
 
 	return l.env.Update(func(txn *lmdb.Txn) error {
 		// existing chunks and delete them
 		storedValue, err := txn.Get(l.db, key)
-		if err == nil && len(storedValue) > 0 && storedValue[0] == valueTypeChunked {
+		if err == nil && len(storedValue) > 0 && storedValue[0] == chunkedValue {
 			if len(storedValue) < 9 {
 				return fmt.Errorf("invalid chunk metadata for key %s: %w", string(key), ErrInvalidChunkMetadata)
 			}
@@ -235,7 +235,7 @@ func (l *LmdbEmbed) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []ma
 				}
 			}
 
-			if err := tx.Put(l.db, pKey, []byte{valueTypeColumns}, 0); err != nil {
+			if err := tx.Put(l.db, pKey, []byte{rowColumnValue}, 0); err != nil {
 				return err
 			}
 		}
@@ -277,7 +277,7 @@ func (l *LmdbEmbed) DeleteMayRowColumns(rowKeys [][]byte, columnEntriesPerRow []
 				}
 			}
 
-			if err := tx.Put(l.db, pKey, []byte{valueTypeColumns}, 0); err != nil {
+			if err := tx.Put(l.db, pKey, []byte{rowColumnValue}, 0); err != nil {
 				return err
 			}
 		}
@@ -361,9 +361,9 @@ func (l *LmdbEmbed) Delete(key []byte) error {
 
 		flag := storedValue[0]
 		switch flag {
-		case valueTypeFull:
+		case kvValue:
 			return txn.Del(l.db, key, nil)
-		case valueTypeChunked:
+		case chunkedValue:
 			if len(storedValue) < 9 {
 				return ErrInvalidChunkMetadata
 			}
@@ -404,12 +404,12 @@ func (l *LmdbEmbed) DeleteMany(keys [][]byte) error {
 
 			flag := storedValue[0]
 			switch flag {
-			case valueTypeFull:
+			case kvValue:
 				if err := txn.Del(l.db, key, nil); err != nil {
 					return err
 				}
 
-			case valueTypeChunked:
+			case chunkedValue:
 				if len(storedValue) < 9 {
 					return fmt.Errorf("invalid chunk metadata for key %s: %w", string(key), ErrInvalidChunkMetadata)
 				}
@@ -473,12 +473,12 @@ func (l *LmdbEmbed) Get(key []byte) ([]byte, error) {
 
 		flag := storedValue[0]
 		switch flag {
-		case valueTypeFull:
+		case kvValue:
 			value = make([]byte, len(storedValue[1:]))
 			copy(value, storedValue[1:])
 			return nil
 
-		case valueTypeChunked:
+		case chunkedValue:
 			if len(storedValue) < 9 {
 				return fmt.Errorf("invalid chunk metadata for key %s: %w", string(key), ErrInvalidChunkMetadata)
 			}
@@ -491,7 +491,7 @@ func (l *LmdbEmbed) Get(key []byte) ([]byte, error) {
 			value = make([]byte, fullValue.Len())
 			copy(value, fullValue.Bytes())
 			return nil
-		case valueTypeColumns:
+		case rowColumnValue:
 			return ErrUseGetColumnAPI
 		default:
 			// we don't know how to deal with this return the data and error.
@@ -566,7 +566,7 @@ func (l *LmdbEmbed) GetRowColumns(rowKey []byte, filter func(columnKey []byte) b
 
 		flag := storedValue[0]
 		switch flag {
-		case valueTypeColumns:
+		case rowColumnValue:
 			err := l.getColumns(txn, rowKey, filter, entries)
 			if err != nil {
 				if errors.Is(err, lmdb.NotFound) {

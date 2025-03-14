@@ -69,7 +69,7 @@ func (b *BoltDBEmbed) Set(key []byte, value []byte) error {
 			return ErrBucketNotFound
 		}
 		// indicate this is a full value, not chunked
-		storedValue := append([]byte{valueTypeFull}, value...)
+		storedValue := append([]byte{kvValue}, value...)
 
 		return bucket.Put(key, storedValue)
 	})
@@ -90,7 +90,7 @@ func (b *BoltDBEmbed) SetMany(keys [][]byte, value [][]byte) error {
 		}
 		for i, key := range keys {
 			// indicate this is a full value, not chunked
-			storedValue := append([]byte{valueTypeFull}, value[i]...)
+			storedValue := append([]byte{kvValue}, value[i]...)
 
 			err := bucket.Put(key, storedValue)
 			if err != nil {
@@ -117,7 +117,7 @@ func (b *BoltDBEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) er
 		// get last stored for keys, if present.
 		// older chunk needs to deleted for not leaking the space.
 		storedValue := bucket.Get(key)
-		if storedValue != nil && storedValue[0] == valueTypeChunked {
+		if storedValue != nil && storedValue[0] == chunkedValue {
 			if len(storedValue) < 9 {
 				return ErrInvalidChunkMetadata
 			}
@@ -134,7 +134,7 @@ func (b *BoltDBEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) er
 		chunkCount := uint32(len(chunks))
 		// Metadata: 1 byte flag + 4 bytes chunk count + 4 bytes checksum
 		metaData := make([]byte, 9)
-		metaData[0] = valueTypeChunked
+		metaData[0] = chunkedValue
 		binary.LittleEndian.PutUint32(metaData[1:], chunkCount)
 		binary.LittleEndian.PutUint32(metaData[5:], checksum)
 
@@ -189,7 +189,7 @@ func (b *BoltDBEmbed) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []
 				}
 			}
 
-			if err := bucket.Put(pKey, []byte{valueTypeColumns}); err != nil {
+			if err := bucket.Put(pKey, []byte{rowColumnValue}); err != nil {
 				return err
 			}
 		}
@@ -234,7 +234,7 @@ func (b *BoltDBEmbed) DeleteMayRowColumns(rowKeys [][]byte, columnEntriesPerRow 
 				}
 			}
 
-			if err := bucket.Put(pKey, []byte{valueTypeColumns}); err != nil {
+			if err := bucket.Put(pKey, []byte{rowColumnValue}); err != nil {
 				return err
 			}
 		}
@@ -312,11 +312,11 @@ func (b *BoltDBEmbed) Delete(key []byte) error {
 
 		flag := storedValue[0]
 		switch flag {
-		case valueTypeFull:
+		case kvValue:
 
 			return bucket.Delete(key)
 
-		case valueTypeChunked:
+		case chunkedValue:
 			if len(storedValue) < 9 {
 				return ErrInvalidChunkMetadata
 			}
@@ -357,12 +357,12 @@ func (b *BoltDBEmbed) DeleteMany(keys [][]byte) error {
 
 			flag := storedValue[0]
 			switch flag {
-			case valueTypeFull:
+			case kvValue:
 				if err := bucket.Delete(key); err != nil {
 					return err
 				}
 
-			case valueTypeChunked:
+			case chunkedValue:
 				if len(storedValue) < 9 {
 					return ErrInvalidChunkMetadata
 				}
@@ -416,12 +416,12 @@ func (b *BoltDBEmbed) Get(key []byte) ([]byte, error) {
 
 		flag := storedValue[0]
 		switch flag {
-		case valueTypeFull:
+		case kvValue:
 			value = make([]byte, len(storedValue[1:]))
 			copy(value, storedValue[1:])
 			return nil
 
-		case valueTypeChunked:
+		case chunkedValue:
 			if len(storedValue) < 9 {
 				return ErrInvalidChunkMetadata
 			}
@@ -450,7 +450,7 @@ func (b *BoltDBEmbed) Get(key []byte) ([]byte, error) {
 			value = make([]byte, fullValue.Len())
 			copy(value, fullValue.Bytes())
 			return nil
-		case valueTypeColumns:
+		case rowColumnValue:
 			return ErrUseGetColumnAPI
 		default:
 			// we don't know how to deal with this return the data and error.
@@ -492,7 +492,7 @@ func (b *BoltDBEmbed) GetRowColumns(rowKey []byte, filter func(columnKey []byte)
 
 		flag := storedValue[0]
 		switch flag {
-		case valueTypeColumns:
+		case rowColumnValue:
 
 			return b.getColumns(bucket, rowKey, filter, entries)
 

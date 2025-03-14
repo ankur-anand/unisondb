@@ -16,7 +16,7 @@ import (
 // btreeWriter defines the interface for interacting with a B-tree based storage
 // for setting individual values, chunks and many value at once.
 type btreeWriter interface {
-	// Set associates a value with a key.
+	// Put associates a value with a key.
 	Set(key []byte, value []byte) error
 	// SetMany associates multiple values with corresponding keys.
 	SetMany(keys [][]byte, values [][]byte) error
