@@ -13,7 +13,7 @@ import (
 )
 
 // BoltTxnQueue encapsulates Boltdb Transactions and provides an API that allow multiple
-// operation to be chained in queue that is supposed to be Executed in the same orders.
+// operation to be put in queue that is supposed to be Executed in the same orders.
 // It flushes the batch automatically if configured max batch Size threshold is reached.
 // Caller should call Commit in the end to finish any pending Txn not flushed via maxBatchSize.
 // Single instance of Txn are not concurrent safe.
@@ -29,23 +29,24 @@ type BoltTxnQueue struct {
 	deleteOps       float32
 }
 
-// NewBoltTxnQueue returns a initialized BoltTxnQueue for Batch API queuing and commit.
-func (b *BoltDBEmbed) NewBoltTxnQueue(maxBatchSize int) *BoltTxnQueue {
+// NewTxnQueue returns an initialized BoltTxnQueue for Batch API queuing and commit.
+func (b *BoltDBEmbed) NewTxnQueue(maxBatchSize int) *BoltTxnQueue {
 	return &BoltTxnQueue{
 		label:        b.label,
 		err:          nil,
 		maxBatchSize: maxBatchSize,
 		opsQueue:     make([]func(bucket *bbolt.Bucket) error, 0, maxBatchSize),
 		namespace:    b.namespace,
+		db:           b.db,
 	}
 }
 
 // BatchPut queue one or more key-value pairs inside a transaction that will be commited upon Commit or max batch size
 // threshold breach. If the value exists, it replaces the existing value, else sets a new value associated with the key.
 // Caller need to take care to not upsert the row column value, else there is no guarantee for consistency in storage.
-func (bq *BoltTxnQueue) BatchPut(keys, values [][]byte) *BoltTxnQueue {
+func (bq *BoltTxnQueue) BatchPut(keys, values [][]byte) error {
 	if bq.err != nil {
-		return bq
+		return bq.err
 	}
 
 	for i, key := range keys {
@@ -66,15 +67,15 @@ func (bq *BoltTxnQueue) BatchPut(keys, values [][]byte) *BoltTxnQueue {
 		})
 	}
 
-	return bq
+	return bq.err
 }
 
 // BatchDelete queue one or more key inside a transaction for deletion. It doesn't delete rows or columns.
 // Deletion happens either when Commit is called or max batch size threshold is reached.
 // Caller need to call BatchDeleteRows or BatchDeleteRowsColumns to work with rows and columns type value.
-func (bq *BoltTxnQueue) BatchDelete(keys [][]byte) *BoltTxnQueue {
+func (bq *BoltTxnQueue) BatchDelete(keys [][]byte) error {
 	if bq.err != nil {
-		return bq
+		return bq.err
 	}
 
 	for _, key := range keys {
@@ -107,14 +108,14 @@ func (bq *BoltTxnQueue) BatchDelete(keys [][]byte) *BoltTxnQueue {
 			return ErrInvalidOpsForValueType
 		})
 	}
-	return bq
+	return bq.err
 }
 
 // SetChunks stores a value that has been split into chunks, associating them with a single key.
 // It queues the operation in Txn, which is flushed when either max size threshold is reached or during commit call.
-func (bq *BoltTxnQueue) SetChunks(key []byte, chunks [][]byte, checksum uint32) *BoltTxnQueue {
+func (bq *BoltTxnQueue) SetChunks(key []byte, chunks [][]byte, checksum uint32) error {
 	if bq.err != nil {
-		return bq
+		return bq.err
 	}
 
 	metaData := make([]byte, 9)
@@ -162,19 +163,19 @@ func (bq *BoltTxnQueue) SetChunks(key []byte, chunks [][]byte, checksum uint32) 
 		return nil
 	})
 
-	return bq
+	return bq.err
 }
 
 // BatchPutRowColumns queues updates or inserts of multiple rows with the provided column entries.
 // Each row in `rowKeys` maps to a set of columns in `columnEntriesPerRow`.
-func (bq *BoltTxnQueue) BatchPutRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) *BoltTxnQueue {
+func (bq *BoltTxnQueue) BatchPutRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
 	if bq.err != nil {
-		return bq
+		return bq.err
 	}
 
 	if len(rowKeys) != len(columnEntriesPerRow) {
 		bq.err = ErrInvalidArguments
-		return bq
+		return bq.err
 	}
 
 	for i, rowKey := range rowKeys {
@@ -204,19 +205,19 @@ func (bq *BoltTxnQueue) BatchPutRowColumns(rowKeys [][]byte, columnEntriesPerRow
 		})
 	}
 
-	return bq
+	return bq.err
 }
 
 // BatchDeleteRowColumns queues deletes of multiple rows with the provided column entries.
 // Each row in `rowKeys` maps to a set of columns in `columnEntriesPerRow`.
-func (bq *BoltTxnQueue) BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) *BoltTxnQueue {
+func (bq *BoltTxnQueue) BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
 	if bq.err != nil {
-		return bq
+		return bq.err
 	}
 
 	if len(rowKeys) != len(columnEntriesPerRow) {
 		bq.err = ErrInvalidArguments
-		return bq
+		return bq.err
 	}
 
 	for i, rowKey := range rowKeys {
@@ -247,13 +248,13 @@ func (bq *BoltTxnQueue) BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPer
 		})
 	}
 
-	return bq
+	return bq.err
 }
 
 // BatchDeleteRows  queue deletes of the row and all it's associated Columns from the database.
-func (bq *BoltTxnQueue) BatchDeleteRows(rowKeys [][]byte) *BoltTxnQueue {
+func (bq *BoltTxnQueue) BatchDeleteRows(rowKeys [][]byte) error {
 	if bq.err != nil {
-		return bq
+		return bq.err
 	}
 
 	for _, rowKey := range rowKeys {
@@ -289,7 +290,7 @@ func (bq *BoltTxnQueue) BatchDeleteRows(rowKeys [][]byte) *BoltTxnQueue {
 		})
 	}
 
-	return bq
+	return bq.err
 }
 
 func (bq *BoltTxnQueue) flushBatch() error {

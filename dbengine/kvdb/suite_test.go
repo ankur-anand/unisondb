@@ -34,6 +34,16 @@ type btreeWriter interface {
 	Restore(reader io.Reader) error
 }
 
+type TxnBatcher interface {
+	BatchPut(keys, values [][]byte) error
+	BatchDelete(keys [][]byte) error
+	SetChunks(key []byte, chunks [][]byte, checksum uint32) error
+	BatchPutRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	BatchDeleteRows(rowKeys [][]byte) error
+	Commit() error
+}
+
 // btreeReader defines the interface for interacting with a B-tree based storage
 // for getting individual values, chunks and many value at once.
 type btreeReader interface {
@@ -54,8 +64,9 @@ type bTreeStore interface {
 
 // testSuite defines all the test cases that is common in both the lmdb and boltdb.
 type testSuite struct {
-	dbConstructor func(path string, config kvdb.Config) (bTreeStore, error)
-	store         bTreeStore
+	dbConstructor         func(path string, config kvdb.Config) (bTreeStore, error)
+	txnBatcherConstructor func(maxBatchSize int) TxnBatcher
+	store                 bTreeStore
 }
 
 type suite struct {
@@ -116,6 +127,10 @@ func getTestSuites(factory *testSuite) []suite {
 		{
 			name:    "store_set_columns_nm_row_column",
 			runFunc: factory.TestSetGetDelete_NMRowColumns,
+		},
+		{
+			name:    "txn_batch_put_get",
+			runFunc: factory.TestBoltTxnQueue_BatchPut,
 		},
 	}
 }
@@ -650,4 +665,20 @@ func (s *testSuite) TestSetGetDelete_NMRowColumns(t *testing.T) {
 		_, err = s.store.GetRowColumns([]byte(rowKey1), nil)
 		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "Failed to fetch row columns")
 	})
+}
+
+func (s *testSuite) TestBoltTxnQueue_BatchPut(t *testing.T) {
+	key := []byte("test_key_txn")
+	value := []byte("hello world_txn")
+	txn := s.txnBatcherConstructor(10)
+	keys := [][]byte{key}
+	values := [][]byte{value}
+
+	err := txn.BatchPut(keys, values)
+	assert.NoError(t, err, "Failed to batch put")
+	err = txn.Commit()
+	assert.NoError(t, err, "Failed to commit")
+	retrievedValue, err := s.store.Get(key)
+	assert.NoError(t, err, "Failed to retrieve value")
+	assert.Equal(t, value, retrievedValue, "retrieved value should be the same")
 }

@@ -39,6 +39,9 @@ func TestBolt_Suite(t *testing.T) {
 	ts := &testSuite{
 		store:         store,
 		dbConstructor: boltConstructor,
+		txnBatcherConstructor: func(maxBatchSize int) TxnBatcher {
+			return store.NewTxnQueue(maxBatchSize)
+		},
 	}
 
 	suites := getTestSuites(ts)

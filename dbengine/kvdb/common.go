@@ -36,6 +36,9 @@ var (
 	packageKey        = []string{"kvalchemy", "kvdb"}
 )
 
+type TxnStats struct {
+}
+
 var (
 	mSetTotal         = append(packageKey, []string{"set", "total"}...)
 	mGetTotal         = append(packageKey, []string{"get", "total"}...)
