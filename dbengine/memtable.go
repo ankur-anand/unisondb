@@ -346,7 +346,7 @@ func (b *columnDeleteBuffer) flush(db BTreeStore) error {
 	if len(b.keys) == 0 {
 		return nil
 	}
-	return db.DeleteMayRowColumns(b.keys, b.vals)
+	return db.DeleteManyRowColumns(b.keys, b.vals)
 }
 
 func (b *columnDeleteBuffer) reset() {

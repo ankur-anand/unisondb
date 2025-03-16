@@ -66,7 +66,7 @@ func handleColumnValuesTxn(record *walrecord.WalRecord, walIO *wal.WalIO, store 
 	}
 
 	if record.Operation() == walrecord.LogOperationDelete {
-		return len(records), store.DeleteMayRowColumns(rowKeys, rowColumns)
+		return len(records), store.DeleteManyRowColumns(rowKeys, rowColumns)
 	}
 
 	return 0, nil
