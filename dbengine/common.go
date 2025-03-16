@@ -61,7 +61,7 @@ type BtreeWriter interface {
 	DeleteMany(keys [][]byte) error
 
 	SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
-	DeleteMayRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	DeleteManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
 	DeleteEntireRows(rowKeys [][]byte) (int, error)
 
 	StoreMetadata(key []byte, value []byte) error
