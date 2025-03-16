@@ -27,6 +27,7 @@ type LMDBTxnQueue struct {
 	entriesModified float32
 	putOps          float32
 	deleteOps       float32
+	stats           *TxnStats
 }
 
 // NewTxnQueue returns an initialized LMDBTxnQueue for Batch API queuing and commit.
@@ -37,6 +38,7 @@ func (l *LmdbEmbed) NewTxnQueue(maxBatchSize int) *LMDBTxnQueue {
 		maxBatchSize: maxBatchSize,
 		label:        l.label,
 		opsQueue:     make([]func(*lmdb.Txn) error, 0, maxBatchSize),
+		stats:        &TxnStats{},
 	}
 }
 
@@ -63,6 +65,10 @@ func (lq *LMDBTxnQueue) BatchPut(keys, values [][]byte) error {
 
 			return nil
 		})
+	}
+
+	if len(lq.opsQueue) >= lq.maxBatchSize {
+		lq.err = lq.flushBatch()
 	}
 
 	return lq.err
@@ -111,6 +117,11 @@ func (lq *LMDBTxnQueue) BatchDelete(keys [][]byte) error {
 			return ErrInvalidOpsForValueType
 		})
 	}
+
+	if len(lq.opsQueue) >= lq.maxBatchSize {
+		lq.err = lq.flushBatch()
+	}
+
 	return lq.err
 }
 
@@ -163,6 +174,9 @@ func (lq *LMDBTxnQueue) SetChunks(key []byte, chunks [][]byte, checksum uint32) 
 		return nil
 	})
 
+	// We are saving chunk ASAP as this is already LOB, divided into chunks.
+	lq.err = lq.flushBatch()
+
 	return lq.err
 }
 
@@ -203,6 +217,10 @@ func (lq *LMDBTxnQueue) BatchPutRowColumns(rowKeys [][]byte, columnEntriesPerRow
 
 			return nil
 		})
+	}
+
+	if len(lq.opsQueue) >= lq.maxBatchSize {
+		lq.err = lq.flushBatch()
 	}
 
 	return lq.err
@@ -246,6 +264,10 @@ func (lq *LMDBTxnQueue) BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPer
 			}
 			return nil
 		})
+	}
+
+	if len(lq.opsQueue) >= lq.maxBatchSize {
+		lq.err = lq.flushBatch()
 	}
 
 	return lq.err
@@ -296,6 +318,10 @@ func (lq *LMDBTxnQueue) BatchDeleteRows(rowKeys [][]byte) error {
 		})
 	}
 
+	if len(lq.opsQueue) >= lq.maxBatchSize {
+		lq.err = lq.flushBatch()
+	}
+	
 	return lq.err
 }
 
@@ -339,12 +365,19 @@ func (lq *LMDBTxnQueue) flushBatch() error {
 		metrics.IncrCounterWithLabels(mSetTotal, lq.putOps, lq.label)
 		metrics.IncrCounterWithLabels(mDelTotal, lq.deleteOps, lq.label)
 		metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, lq.entriesModified, lq.label)
+		lq.stats.EntriesModified += lq.entriesModified
+		lq.stats.DeleteOps += lq.deleteOps
+		lq.stats.PutOps += lq.putOps
 		lq.opsQueue = nil
 		lq.putOps = 0
 		lq.deleteOps = 0
 		lq.entriesModified = 0
 	}
 	return err
+}
+
+func (lq *LMDBTxnQueue) Stats() TxnStats {
+	return *lq.stats
 }
 
 // Commit all the pending operation in queue.

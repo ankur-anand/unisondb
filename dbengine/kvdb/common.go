@@ -37,6 +37,9 @@ var (
 )
 
 type TxnStats struct {
+	EntriesModified float32
+	PutOps          float32
+	DeleteOps       float32
 }
 
 var (

@@ -27,6 +27,7 @@ type BoltTxnQueue struct {
 	entriesModified float32
 	putOps          float32
 	deleteOps       float32
+	stats           *TxnStats
 }
 
 // NewTxnQueue returns an initialized BoltTxnQueue for Batch API queuing and commit.
@@ -38,6 +39,7 @@ func (b *BoltDBEmbed) NewTxnQueue(maxBatchSize int) *BoltTxnQueue {
 		opsQueue:     make([]func(bucket *bbolt.Bucket) error, 0, maxBatchSize),
 		namespace:    b.namespace,
 		db:           b.db,
+		stats:        &TxnStats{},
 	}
 }
 
@@ -67,6 +69,10 @@ func (bq *BoltTxnQueue) BatchPut(keys, values [][]byte) error {
 		})
 	}
 
+	if len(bq.opsQueue) >= bq.maxBatchSize {
+		bq.err = bq.flushBatch()
+	}
+	
 	return bq.err
 }
 
@@ -108,6 +114,11 @@ func (bq *BoltTxnQueue) BatchDelete(keys [][]byte) error {
 			return ErrInvalidOpsForValueType
 		})
 	}
+
+	if len(bq.opsQueue) >= bq.maxBatchSize {
+		bq.err = bq.flushBatch()
+	}
+
 	return bq.err
 }
 
@@ -118,24 +129,17 @@ func (bq *BoltTxnQueue) SetChunks(key []byte, chunks [][]byte, checksum uint32) 
 		return bq.err
 	}
 
-	metaData := make([]byte, 9)
-	metaData[0] = chunkedValue
-	binary.LittleEndian.PutUint32(metaData[1:], uint32(len(chunks)))
-	binary.LittleEndian.PutUint32(metaData[5:], checksum)
-
 	bq.opsQueue = append(bq.opsQueue, func(txn *bbolt.Bucket) error {
+		// get last stored for keys, if present.
+		// older chunk needs to deleted for not leaking the space.
 		storedValue := txn.Get(key)
-		if storedValue == nil {
-			return nil
-		}
-
-		if len(storedValue) > 0 && storedValue[0] == chunkedValue {
+		if storedValue != nil && storedValue[0] == chunkedValue {
 			if len(storedValue) < 9 {
-				return fmt.Errorf("invalid chunk metadata for key %s: %w", string(key), ErrInvalidChunkMetadata)
+				return ErrInvalidChunkMetadata
 			}
+			chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
 
-			oldChunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
-			for i := uint32(0); i < oldChunkCount; i++ {
+			for i := 0; i < int(chunkCount); i++ {
 				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
 				if err := txn.Delete([]byte(chunkKey)); err != nil {
 					return err
@@ -143,25 +147,32 @@ func (bq *BoltTxnQueue) SetChunks(key []byte, chunks [][]byte, checksum uint32) 
 			}
 		}
 
-		bq.putOps++
-		bq.entriesModified++
-		// Store chunks
-		for i, chunk := range chunks {
-			bq.entriesModified++
-			chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-			err := txn.Put([]byte(chunkKey), chunk)
-			if err != nil {
-				return err
-			}
-		}
+		chunkCount := uint32(len(chunks))
+		// Metadata: 1 byte flag + 4 bytes chunk count + 4 bytes checksum
+		metaData := make([]byte, 9)
+		metaData[0] = chunkedValue
+		binary.LittleEndian.PutUint32(metaData[1:], chunkCount)
+		binary.LittleEndian.PutUint32(metaData[5:], checksum)
 
-		// Store metadata
+		// chunk metadata
 		if err := txn.Put(key, metaData); err != nil {
 			return err
 		}
 
+		// individual chunk
+		for i, chunk := range chunks {
+			chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
+			if err := txn.Put([]byte(chunkKey), chunk); err != nil {
+				return err
+			}
+		}
+
 		return nil
 	})
+
+	if len(bq.opsQueue) >= bq.maxBatchSize {
+		bq.err = bq.flushBatch()
+	}
 
 	return bq.err
 }
@@ -203,6 +214,10 @@ func (bq *BoltTxnQueue) BatchPutRowColumns(rowKeys [][]byte, columnEntriesPerRow
 
 			return nil
 		})
+	}
+
+	if len(bq.opsQueue) >= bq.maxBatchSize {
+		bq.err = bq.flushBatch()
 	}
 
 	return bq.err
@@ -248,6 +263,10 @@ func (bq *BoltTxnQueue) BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPer
 		})
 	}
 
+	if len(bq.opsQueue) >= bq.maxBatchSize {
+		bq.err = bq.flushBatch()
+	}
+
 	return bq.err
 }
 
@@ -288,6 +307,10 @@ func (bq *BoltTxnQueue) BatchDeleteRows(rowKeys [][]byte) error {
 
 			return nil
 		})
+	}
+
+	if len(bq.opsQueue) >= bq.maxBatchSize {
+		bq.err = bq.flushBatch()
 	}
 
 	return bq.err
@@ -343,12 +366,20 @@ func (bq *BoltTxnQueue) flushBatch() error {
 		metrics.IncrCounterWithLabels(mSetTotal, bq.putOps, bq.label)
 		metrics.IncrCounterWithLabels(mDelTotal, bq.deleteOps, bq.label)
 		metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, bq.entriesModified, bq.label)
+		bq.stats.EntriesModified += bq.entriesModified
+		bq.stats.DeleteOps += bq.deleteOps
+		bq.stats.PutOps += bq.putOps
+
 		bq.opsQueue = nil
 		bq.putOps = 0
 		bq.deleteOps = 0
 		bq.entriesModified = 0
 	}
 	return err
+}
+
+func (bq *BoltTxnQueue) Stats() TxnStats {
+	return *bq.stats
 }
 
 // Commit all the pending operation in queue.
