@@ -27,7 +27,7 @@ type btreeWriter interface {
 	// DeleteMany delete multiple values with corresponding keys.
 	DeleteMany(keys [][]byte) error
 	SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
-	DeleteMayRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	DeleteManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
 	DeleteEntireRows(rowKeys [][]byte) (int, error)
 	StoreMetadata(key []byte, value []byte) error
 	FSync() error
@@ -408,7 +408,7 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 	t.Run("invalid-arguments", func(t *testing.T) {
 		err := s.store.SetManyRowColumns(rowKeys, nil)
 		assert.ErrorIs(t, err, kvdb.ErrInvalidArguments)
-		err = s.store.DeleteMayRowColumns(rowKeys, nil)
+		err = s.store.DeleteManyRowColumns(rowKeys, nil)
 		assert.ErrorIs(t, err, kvdb.ErrInvalidArguments)
 	})
 
@@ -441,7 +441,7 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 	deleteColumnPerRow = append(deleteColumnPerRow, deleteColumn)
 
 	t.Run("delete_column", func(t *testing.T) {
-		err := s.store.DeleteMayRowColumns(rowKeys, deleteColumnPerRow)
+		err := s.store.DeleteManyRowColumns(rowKeys, deleteColumnPerRow)
 		assert.NoError(t, err, "Failed to delete row columns")
 
 		retrievedEntries, err := s.store.GetRowColumns([]byte(rowKey), nil)
@@ -558,7 +558,7 @@ func (s *testSuite) TestSetGetDelete_RowColumns_Filter(t *testing.T) {
 			nonExistentColumns[key] = []byte(value)
 		}
 
-		err := s.store.DeleteMayRowColumns(rowKeys, []map[string][]byte{nonExistentColumns})
+		err := s.store.DeleteManyRowColumns(rowKeys, []map[string][]byte{nonExistentColumns})
 		assert.NoError(t, err)
 	})
 }
@@ -627,7 +627,7 @@ func (s *testSuite) TestSetGetDelete_NMRowColumns(t *testing.T) {
 	deleteColumnPerRow = append(deleteColumnPerRow, deleteColumn)
 
 	t.Run("delete_column_1", func(t *testing.T) {
-		err := s.store.DeleteMayRowColumns([][]byte{[]byte(rowKey1)}, deleteColumnPerRow)
+		err := s.store.DeleteManyRowColumns([][]byte{[]byte(rowKey1)}, deleteColumnPerRow)
 		assert.NoError(t, err, "Failed to delete row columns")
 
 		retrievedEntries, err := s.store.GetRowColumns([]byte(rowKey1), nil)
@@ -697,11 +697,11 @@ func (s *testSuite) TestTxnQueue_BatchPutGetDelete(t *testing.T) {
 
 	err := txn.BatchPut(keys, values)
 	assert.NoError(t, err, "Failed to batch put")
-	retrievedValue, err := s.store.Get(key)
+	_, err = s.store.Get(key)
 	assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "Failed to retrieve value")
 	err = txn.Commit()
 	assert.NoError(t, err, "Failed to commit")
-	retrievedValue, err = s.store.Get(key)
+	retrievedValue, err := s.store.Get(key)
 	assert.NoError(t, err, "Failed to retrieve value")
 	assert.Equal(t, value, retrievedValue, "retrieved value should be the same")
 	err = txn.BatchDelete(keys)

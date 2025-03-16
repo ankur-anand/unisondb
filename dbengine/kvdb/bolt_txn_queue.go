@@ -72,7 +72,7 @@ func (bq *BoltTxnQueue) BatchPut(keys, values [][]byte) error {
 	if len(bq.opsQueue) >= bq.maxBatchSize {
 		bq.err = bq.flushBatch()
 	}
-	
+
 	return bq.err
 }
 

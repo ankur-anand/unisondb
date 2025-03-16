@@ -321,7 +321,7 @@ func (lq *LMDBTxnQueue) BatchDeleteRows(rowKeys [][]byte) error {
 	if len(lq.opsQueue) >= lq.maxBatchSize {
 		lq.err = lq.flushBatch()
 	}
-	
+
 	return lq.err
 }
 

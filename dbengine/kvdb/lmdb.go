@@ -106,6 +106,7 @@ func (l *LmdbEmbed) Close() error {
 // Set associates a value with a key within a specific namespace.
 func (l *LmdbEmbed) Set(key []byte, value []byte) error {
 	metrics.IncrCounterWithLabels(mSetTotal, 1, l.label)
+	metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, 1, l.label)
 	startTime := time.Now()
 	defer func() {
 		metrics.MeasureSinceWithLabels(mSetLatency, startTime, l.label)
@@ -126,10 +127,11 @@ func (l *LmdbEmbed) SetMany(keys [][]byte, values [][]byte) error {
 		return fmt.Errorf("keys and values length mismatch: keys=%d values=%d", len(keys), len(values))
 	}
 
-	metrics.IncrCounterWithLabels(mSetManyTotal, 1, l.label)
+	metrics.IncrCounterWithLabels(mSetTotal, 1, l.label)
+	metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, float32(len(keys)), l.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels(mSetManyLatency, startTime, l.label)
+		metrics.MeasureSinceWithLabels(mSetLatency, startTime, l.label)
 	}()
 
 	maxValueSize := 0
@@ -160,10 +162,11 @@ func (l *LmdbEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) erro
 		return errors.New("empty chunks array")
 	}
 
-	metrics.IncrCounterWithLabels(mChunkSetTotal, 1, l.label)
+	metrics.IncrCounterWithLabels(mSetTotal, 1, l.label)
+	metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, float32(len(chunks)+1), l.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels(mChunksSetLatency, startTime, l.label)
+		metrics.MeasureSinceWithLabels(mSetLatency, startTime, l.label)
 	}()
 
 	metaData := make([]byte, 9)
@@ -214,7 +217,7 @@ func (l *LmdbEmbed) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []ma
 
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels(mRowSetLatency, startTime, l.label)
+		metrics.MeasureSinceWithLabels(mDelLatency, startTime, l.label)
 	}()
 
 	totalColumns := 0
@@ -242,19 +245,20 @@ func (l *LmdbEmbed) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []ma
 		return nil
 	})
 
-	metrics.IncrCounterWithLabels(mRowSetTotal, float32(totalColumns), l.label)
+	metrics.IncrCounterWithLabels(mSetTotal, 1, l.label)
+	metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, float32(totalColumns+len(rowKeys)), l.label)
 	return err
 }
 
-// DeleteMayRowColumns delete the provided columnEntries from the associated row.
-func (l *LmdbEmbed) DeleteMayRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
+// DeleteManyRowColumns delete the provided columnEntries from the associated row.
+func (l *LmdbEmbed) DeleteManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
 	if len(rowKeys) != len(columnEntriesPerRow) {
 		return ErrInvalidArguments
 	}
 
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels(mRowDeleteLatency, startTime, l.label)
+		metrics.MeasureSinceWithLabels(mDelLatency, startTime, l.label)
 	}()
 
 	totalColumns := 0
@@ -284,7 +288,8 @@ func (l *LmdbEmbed) DeleteMayRowColumns(rowKeys [][]byte, columnEntriesPerRow []
 		return nil
 	})
 
-	metrics.IncrCounterWithLabels(mRowDeleteTotal, float32(totalColumns), l.label)
+	metrics.IncrCounterWithLabels(mDelTotal, 1, l.label)
+	metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, float32(totalColumns+len(rowKeys)), l.label)
 	return err
 }
 
@@ -296,7 +301,7 @@ func (l *LmdbEmbed) DeleteEntireRows(rowKeys [][]byte) (int, error) {
 
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels(mRowDeleteLatency, startTime, l.label)
+		metrics.MeasureSinceWithLabels(mDelLatency, startTime, l.label)
 	}()
 	columnsDeleted := -len(rowKeys)
 	err := l.env.Update(func(tx *lmdb.Txn) error {
@@ -336,7 +341,8 @@ func (l *LmdbEmbed) DeleteEntireRows(rowKeys [][]byte) (int, error) {
 		return nil
 	})
 
-	metrics.IncrCounterWithLabels(mRowDeleteTotal, float32(columnsDeleted), l.label)
+	metrics.IncrCounterWithLabels(mDelTotal, 1, l.label)
+	metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, float32(columnsDeleted+len(rowKeys)), l.label)
 	return columnsDeleted, err
 }
 
@@ -362,12 +368,15 @@ func (l *LmdbEmbed) Delete(key []byte) error {
 		flag := storedValue[0]
 		switch flag {
 		case kvValue:
+			metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, 1, l.label)
 			return txn.Del(l.db, key, nil)
 		case chunkedValue:
 			if len(storedValue) < 9 {
 				return ErrInvalidChunkMetadata
 			}
 			chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
+			metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, float32(chunkCount), l.label)
+
 			for i := 0; i < int(chunkCount); i++ {
 				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
 				if err := txn.Del(l.db, []byte(chunkKey), nil); err != nil {
@@ -386,10 +395,10 @@ func (l *LmdbEmbed) DeleteMany(keys [][]byte) error {
 		return nil
 	}
 
-	metrics.IncrCounterWithLabels(mDelManyTotal, 1, l.label)
+	metrics.IncrCounterWithLabels(mDelTotal, 1, l.label)
 	startTime := time.Now()
 	defer func() {
-		metrics.MeasureSinceWithLabels(mDelManyLatency, startTime, l.label)
+		metrics.MeasureSinceWithLabels(mDelLatency, startTime, l.label)
 	}()
 
 	return l.env.Update(func(txn *lmdb.Txn) error {
@@ -405,6 +414,7 @@ func (l *LmdbEmbed) DeleteMany(keys [][]byte) error {
 			flag := storedValue[0]
 			switch flag {
 			case kvValue:
+				metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, 1, l.label)
 				if err := txn.Del(l.db, key, nil); err != nil {
 					return err
 				}
@@ -427,7 +437,7 @@ func (l *LmdbEmbed) DeleteMany(keys [][]byte) error {
 
 func (l *LmdbEmbed) deleteChunk(key []byte, storedValue []byte, txn *lmdb.Txn) error {
 	chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
-
+	metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, float32(chunkCount), l.label)
 	// Delete all chunks
 	for i := 0; i < int(chunkCount); i++ {
 		chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
