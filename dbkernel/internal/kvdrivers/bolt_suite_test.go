@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	kv2 "github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
 	"github.com/ankur-anand/unisondb/internal/etc"
 	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/assert"
@@ -15,7 +15,7 @@ import (
 func TestBolt_Suite(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "bolt_test.bolt.db")
-	store, err := kv2.NewBoltdb(path, kv2.Config{
+	store, err := kvdrivers.NewBoltdb(path, kvdrivers.Config{
 		Namespace: "test",
 		NoSync:    true,
 	})
@@ -32,8 +32,8 @@ func TestBolt_Suite(t *testing.T) {
 		panic(err)
 	}
 
-	boltConstructor := func(path string, config kv2.Config) (bTreeStore, error) {
-		return kv2.NewBoltdb(path, config)
+	boltConstructor := func(path string, config kvdrivers.Config) (bTreeStore, error) {
+		return kvdrivers.NewBoltdb(path, config)
 	}
 
 	ts := &testSuite{

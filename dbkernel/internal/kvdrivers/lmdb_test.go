@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	kv2 "github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
 	"github.com/ankur-anand/unisondb/internal/etc"
 	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/assert"
@@ -15,7 +15,7 @@ import (
 func TestLMDB_Suite(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "lmdb_test.lmdb")
-	store, err := kv2.NewLmdb(path, kv2.Config{
+	store, err := kvdrivers.NewLmdb(path, kvdrivers.Config{
 		Namespace: "test",
 		NoSync:    false,
 		MmapSize:  1 << 30,
@@ -35,8 +35,8 @@ func TestLMDB_Suite(t *testing.T) {
 	assert.NoError(t, err, "failed to create lmdb")
 	assert.NotNil(t, store, "store should not be nil")
 
-	lmdbConstructor := func(path string, config kv2.Config) (bTreeStore, error) {
-		return kv2.NewLmdb(path, config)
+	lmdbConstructor := func(path string, config kvdrivers.Config) (bTreeStore, error) {
+		return kvdrivers.NewLmdb(path, config)
 	}
 
 	ts := &testSuite{
