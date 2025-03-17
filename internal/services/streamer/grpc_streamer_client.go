@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/internal/services"
-	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
+	v2 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
 	"github.com/prometheus/common/helpers/templates"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -26,7 +26,7 @@ const (
 
 // WalIO provide.
 type WalIO interface {
-	Write(data *v1.WALRecord) error
+	Write(data *v2.WALRecord) error
 }
 
 type GrpcStreamerClient struct {
@@ -67,7 +67,7 @@ func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 			return fmt.Errorf("%w [%d]", services.ErrClientMaxRetriesExceeded, maxRetries)
 		}
 
-		client, err := v1.NewWALReplicationServiceClient(c.gcc).StreamWAL(ctx, &v1.StreamWALRequest{
+		client, err := v2.NewWALReplicationServiceClient(c.gcc).StreamWAL(ctx, &v2.StreamWALRequest{
 			Offset: c.offset,
 		})
 
@@ -100,7 +100,7 @@ func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 	}
 }
 
-func (c *GrpcStreamerClient) receiveWALRecords(client v1.WALReplicationService_StreamWALClient, startTime time.Time) error {
+func (c *GrpcStreamerClient) receiveWALRecords(client v2.WALReplicationService_StreamWALClient, startTime time.Time) error {
 	for {
 		res, err := client.Recv()
 		if err != nil {

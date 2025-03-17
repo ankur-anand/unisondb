@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v5.29.3
-// source: kvalchemy/replicator/v1/service.proto
+// source: unisondb/replicator/v1/service.proto
 
 package v1
 
@@ -122,7 +122,7 @@ var WALReplicationService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "kvalchemy/replicator/v1/service.proto",
+	Metadata: "unisondb/replicator/v1/service.proto",
 }
 
 const (
@@ -372,7 +372,7 @@ var KVStoreWriteService_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "kvalchemy/replicator/v1/service.proto",
+	Metadata: "unisondb/replicator/v1/service.proto",
 }
 
 const (
@@ -477,5 +477,5 @@ var KVStoreReadService_ServiceDesc = grpc.ServiceDesc{
 			ServerStreams: true,
 		},
 	},
-	Metadata: "kvalchemy/replicator/v1/service.proto",
+	Metadata: "unisondb/replicator/v1/service.proto",
 }

@@ -1,7 +1,7 @@
 syntax = "proto3";
 package kvalchemy.replicator.v1;
 
-option go_package = "github.com/ankur-anand/kvalchemy/proto/gen/go/kvalchemy/replicator/v1";
+option go_package = "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1";
 
 import "google/protobuf/timestamp.proto";
 

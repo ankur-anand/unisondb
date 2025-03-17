@@ -8,13 +8,13 @@ import (
 	"github.com/ankur-anand/unisondb/internal/middleware"
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/pkg/splitter"
-	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
+	v2 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
 	"google.golang.org/grpc"
 )
 
 type KVReaderService struct {
 	storageEngines map[string]*storage.Engine
-	v1.UnimplementedKVStoreReadServiceServer
+	v2.UnimplementedKVStoreReadServiceServer
 }
 
 func NewKVReaderService(engine map[string]*storage.Engine) *KVReaderService {
@@ -23,7 +23,7 @@ func NewKVReaderService(engine map[string]*storage.Engine) *KVReaderService {
 	}
 }
 
-func (k *KVReaderService) Get(request *v1.GetRequest, g grpc.ServerStreamingServer[v1.GetResponse]) error {
+func (k *KVReaderService) Get(request *v2.GetRequest, g grpc.ServerStreamingServer[v2.GetResponse]) error {
 	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
 
 	if namespace == "" {
@@ -46,7 +46,7 @@ func (k *KVReaderService) Get(request *v1.GetRequest, g grpc.ServerStreamingServ
 
 	// if the value is too large then the
 	if len(value) < capValueSize {
-		err := g.SendMsg(&v1.GetResponse{
+		err := g.SendMsg(&v2.GetResponse{
 			Data:               value,
 			FinalCrc32Checksum: crc32.ChecksumIEEE(value),
 			Chunked:            false,
@@ -60,7 +60,7 @@ func (k *KVReaderService) Get(request *v1.GetRequest, g grpc.ServerStreamingServ
 	checksum := crc32.ChecksumIEEE(value)
 	chunks := splitter.SplitIntoChunks(value)
 	for _, chunk := range chunks {
-		err := g.SendMsg(&v1.GetResponse{
+		err := g.SendMsg(&v2.GetResponse{
 			Data:               chunk.Data,
 			FinalCrc32Checksum: checksum,
 			Chunked:            true,

@@ -10,7 +10,7 @@ import (
 	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
 	"github.com/ankur-anand/unisondb/internal/middleware"
 	"github.com/ankur-anand/unisondb/internal/services"
-	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
+	v2 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
 	"google.golang.org/grpc"
 )
 
@@ -19,7 +19,7 @@ const streamTimeout = 15 * time.Minute
 
 type KVWriterService struct {
 	storageEngines map[string]*storage.Engine
-	v1.UnimplementedKVStoreWriteServiceServer
+	v2.UnimplementedKVStoreWriteServiceServer
 }
 
 func NewKVWriterService(engines map[string]*storage.Engine) *KVWriterService {
@@ -28,7 +28,7 @@ func NewKVWriterService(engines map[string]*storage.Engine) *KVWriterService {
 	}
 }
 
-func (k *KVWriterService) Put(ctx context.Context, request *v1.PutRequest) (*v1.PutResponse, error) {
+func (k *KVWriterService) Put(ctx context.Context, request *v2.PutRequest) (*v2.PutResponse, error) {
 	namespace, reqID, method := middleware.GetRequestInfo(ctx)
 	if namespace == "" {
 		return nil, services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)
@@ -43,10 +43,10 @@ func (k *KVWriterService) Put(ctx context.Context, request *v1.PutRequest) (*v1.
 		return nil, services.ToGRPCError(namespace, reqID, method, err)
 	}
 
-	return &v1.PutResponse{}, nil
+	return &v2.PutResponse{}, nil
 }
 
-func (k *KVWriterService) PutStream(g grpc.ClientStreamingServer[v1.PutStreamRequest, v1.PutStreamResponse]) error {
+func (k *KVWriterService) PutStream(g grpc.ClientStreamingServer[v2.PutStreamRequest, v2.PutStreamResponse]) error {
 	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
 	if namespace == "" {
 		return services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)
@@ -75,7 +75,7 @@ func (k *KVWriterService) PutStream(g grpc.ClientStreamingServer[v1.PutStreamReq
 	}
 }
 
-func (k *KVWriterService) PutStreamChunksForKey(g grpc.ClientStreamingServer[v1.PutStreamChunksForKeyRequest, v1.PutStreamChunksForKeyResponse]) error {
+func (k *KVWriterService) PutStreamChunksForKey(g grpc.ClientStreamingServer[v2.PutStreamChunksForKeyRequest, v2.PutStreamChunksForKeyResponse]) error {
 	ctx, cancel := context.WithTimeout(g.Context(), streamTimeout)
 	defer cancel()
 
@@ -110,12 +110,12 @@ func (k *KVWriterService) PutStreamChunksForKey(g grpc.ClientStreamingServer[v1.
 			}
 
 			switch req := msg.GetRequestType().(type) {
-			case *v1.PutStreamChunksForKeyRequest_StartMarker:
+			case *v2.PutStreamChunksForKeyRequest_StartMarker:
 				key = req.StartMarker.GetKey()
 				txn, err = k.handleStartMarker(engine, g, req)
-			case *v1.PutStreamChunksForKeyRequest_Chunk:
+			case *v2.PutStreamChunksForKeyRequest_Chunk:
 				err = k.handleChunk(txn, key, req)
-			case *v1.PutStreamChunksForKeyRequest_CommitMarker:
+			case *v2.PutStreamChunksForKeyRequest_CommitMarker:
 				err = k.handleCommitMarker(txn, req)
 				committed = err == nil
 			}
@@ -128,21 +128,21 @@ func (k *KVWriterService) PutStreamChunksForKey(g grpc.ClientStreamingServer[v1.
 }
 
 func (k *KVWriterService) handleStartMarker(engine *storage.Engine,
-	g grpc.ClientStreamingServer[v1.PutStreamChunksForKeyRequest, v1.PutStreamChunksForKeyResponse],
-	req *v1.PutStreamChunksForKeyRequest_StartMarker) (*storage.Txn, error) {
+	g grpc.ClientStreamingServer[v2.PutStreamChunksForKeyRequest, v2.PutStreamChunksForKeyResponse],
+	req *v2.PutStreamChunksForKeyRequest_StartMarker) (*storage.Txn, error) {
 	batch, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.EntryTypeChunked)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := g.SendMsg(&v1.PutStreamChunksForKeyResponse{}); err != nil {
+	if err := g.SendMsg(&v2.PutStreamChunksForKeyResponse{}); err != nil {
 		return nil, err
 	}
 
 	return batch, nil
 }
 
-func (k *KVWriterService) handleChunk(txn *storage.Txn, key []byte, req *v1.PutStreamChunksForKeyRequest_Chunk) error {
+func (k *KVWriterService) handleChunk(txn *storage.Txn, key []byte, req *v2.PutStreamChunksForKeyRequest_Chunk) error {
 	if txn == nil {
 		return services.ErrPutChunkPrecondition
 	}
@@ -152,7 +152,7 @@ func (k *KVWriterService) handleChunk(txn *storage.Txn, key []byte, req *v1.PutS
 }
 
 func (k *KVWriterService) handleCommitMarker(txn *storage.Txn,
-	req *v1.PutStreamChunksForKeyRequest_CommitMarker) error {
+	req *v2.PutStreamChunksForKeyRequest_CommitMarker) error {
 	if txn == nil {
 		return services.ErrPutChunkPrecondition
 	}
@@ -165,7 +165,7 @@ func (k *KVWriterService) handleCommitMarker(txn *storage.Txn,
 	return txn.Commit()
 }
 
-func (k *KVWriterService) Delete(ctx context.Context, request *v1.DeleteRequest) (*v1.DeleteResponse, error) {
+func (k *KVWriterService) Delete(ctx context.Context, request *v2.DeleteRequest) (*v2.DeleteResponse, error) {
 	namespace, reqID, method := middleware.GetRequestInfo(ctx)
 	if namespace == "" {
 		return nil, services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)
@@ -179,10 +179,10 @@ func (k *KVWriterService) Delete(ctx context.Context, request *v1.DeleteRequest)
 		return nil, services.ToGRPCError(namespace, reqID, method, err)
 	}
 
-	return &v1.DeleteResponse{}, nil
+	return &v2.DeleteResponse{}, nil
 }
 
-func (k *KVWriterService) DeleteStream(g grpc.ClientStreamingServer[v1.DeleteStreamRequest, v1.DeleteStreamResponse]) error {
+func (k *KVWriterService) DeleteStream(g grpc.ClientStreamingServer[v2.DeleteStreamRequest, v2.DeleteStreamResponse]) error {
 	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
 	if namespace == "" {
 		return services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)

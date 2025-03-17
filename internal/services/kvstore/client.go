@@ -9,7 +9,7 @@ import (
 
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/pkg/splitter"
-	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
+	v2 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
@@ -27,15 +27,15 @@ var (
 
 type Client struct {
 	gcc          *grpc.ClientConn
-	writerClient v1.KVStoreWriteServiceClient
-	readerClient v1.KVStoreReadServiceClient
+	writerClient v2.KVStoreWriteServiceClient
+	readerClient v2.KVStoreReadServiceClient
 }
 
 func NewClient(gcc *grpc.ClientConn) *Client {
 	return &Client{
 		gcc:          gcc,
-		writerClient: v1.NewKVStoreWriteServiceClient(gcc),
-		readerClient: v1.NewKVStoreReadServiceClient(gcc),
+		writerClient: v2.NewKVStoreWriteServiceClient(gcc),
+		readerClient: v2.NewKVStoreReadServiceClient(gcc),
 	}
 }
 
@@ -51,7 +51,7 @@ func (c *Client) PutKV(ctx context.Context, namespace, key string, value []byte)
 	md := metadata.Pairs("x-namespace", namespace)
 	ctx = metadata.NewOutgoingContext(ctx, md)
 
-	_, err := c.writerClient.Put(ctx, &v1.PutRequest{
+	_, err := c.writerClient.Put(ctx, &v2.PutRequest{
 		Key:   []byte(key),
 		Value: value,
 	})
@@ -71,7 +71,7 @@ func (c *Client) DeleteKV(ctx context.Context, namespace, key string) error {
 	md := metadata.Pairs("x-namespace", namespace)
 	ctx = metadata.NewOutgoingContext(ctx, md)
 
-	_, err := c.writerClient.Delete(ctx, &v1.DeleteRequest{
+	_, err := c.writerClient.Delete(ctx, &v2.DeleteRequest{
 		Key: []byte(key),
 	})
 
@@ -105,8 +105,8 @@ func (c *Client) PutStreamChunksForKey(ctx context.Context, namespace, key strin
 		return errors.New(cErr.Message())
 	}
 
-	err = stream.Send(&v1.PutStreamChunksForKeyRequest{
-		RequestType: &v1.PutStreamChunksForKeyRequest_StartMarker{StartMarker: &v1.ChunkStartMarker{Key: []byte(key)}},
+	err = stream.Send(&v2.PutStreamChunksForKeyRequest{
+		RequestType: &v2.PutStreamChunksForKeyRequest_StartMarker{StartMarker: &v2.ChunkStartMarker{Key: []byte(key)}},
 	})
 
 	if err != nil {
@@ -116,8 +116,8 @@ func (c *Client) PutStreamChunksForKey(ctx context.Context, namespace, key strin
 
 	checksum := uint32(0)
 	for _, chunk := range chunks {
-		err = stream.Send(&v1.PutStreamChunksForKeyRequest{
-			RequestType: &v1.PutStreamChunksForKeyRequest_Chunk{Chunk: &v1.ChunkPutValue{Value: chunk}},
+		err = stream.Send(&v2.PutStreamChunksForKeyRequest{
+			RequestType: &v2.PutStreamChunksForKeyRequest_Chunk{Chunk: &v2.ChunkPutValue{Value: chunk}},
 		})
 		checksum = crc32.Update(checksum, crc32.IEEETable, chunk)
 		if err != nil {
@@ -127,8 +127,8 @@ func (c *Client) PutStreamChunksForKey(ctx context.Context, namespace, key strin
 	}
 
 	// commit
-	err = stream.Send(&v1.PutStreamChunksForKeyRequest{
-		RequestType: &v1.PutStreamChunksForKeyRequest_CommitMarker{CommitMarker: &v1.ChunkCommitMarker{
+	err = stream.Send(&v2.PutStreamChunksForKeyRequest{
+		RequestType: &v2.PutStreamChunksForKeyRequest_CommitMarker{CommitMarker: &v2.ChunkCommitMarker{
 			FinalCrc32Checksum: checksum,
 		}},
 	})
@@ -148,7 +148,7 @@ func (c *Client) GetKV(ctx context.Context, namespace, key string) ([]byte, erro
 	}
 	md := metadata.Pairs("x-namespace", namespace)
 	ctx = metadata.NewOutgoingContext(ctx, md)
-	response, err := c.readerClient.Get(ctx, &v1.GetRequest{
+	response, err := c.readerClient.Get(ctx, &v2.GetRequest{
 		Key: []byte(key),
 	})
 

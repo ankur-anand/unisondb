@@ -1,4 +1,4 @@
-protofiles = kvalchemy/*/*/*.proto
+protofiles = unisondb/*/*/*.proto
 
 gen-dir:
 	@mkdir -p gen/go

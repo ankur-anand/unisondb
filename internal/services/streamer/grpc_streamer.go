@@ -11,7 +11,7 @@ import (
 	"github.com/ankur-anand/unisondb/internal/middleware"
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/pkg/replicator"
-	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
+	v2 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -37,7 +37,7 @@ type GrpcStreamer struct {
 	// namespace mapped engine
 	storageEngines map[string]*dbengine.Engine
 	dynamicTimeout time.Duration
-	v1.UnimplementedWALReplicationServiceServer
+	v2.UnimplementedWALReplicationServiceServer
 	errGrp *errgroup.Group
 }
 
@@ -50,7 +50,7 @@ func NewGrpcStreamer(errGrp *errgroup.Group, storageEngines map[string]*dbengine
 }
 
 // StreamWAL stream the underlying WAL record on the connection stream.
-func (s *GrpcStreamer) StreamWAL(request *v1.StreamWALRequest, g grpc.ServerStreamingServer[v1.StreamWALResponse]) error {
+func (s *GrpcStreamer) StreamWAL(request *v2.StreamWALRequest, g grpc.ServerStreamingServer[v2.StreamWALResponse]) error {
 	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
 
 	if namespace == "" {
@@ -75,7 +75,7 @@ func (s *GrpcStreamer) StreamWAL(request *v1.StreamWALRequest, g grpc.ServerStre
 		"offset", meta,
 	)
 
-	walReceiver := make(chan []*v1.WALRecord, 2)
+	walReceiver := make(chan []*v2.WALRecord, 2)
 	replicatorErr := make(chan error, 1)
 	defer close(walReceiver)
 
@@ -116,13 +116,13 @@ func (s *GrpcStreamer) StreamWAL(request *v1.StreamWALRequest, g grpc.ServerStre
 //
 //nolint:gocognit
 func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
-	g grpc.ServerStreamingServer[v1.StreamWALResponse],
-	walReceiver chan []*v1.WALRecord,
+	g grpc.ServerStreamingServer[v2.StreamWALResponse],
+	walReceiver chan []*v2.WALRecord,
 	replicatorErr chan error) error {
 	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
 
 	var (
-		batch                  []*v1.WALRecord
+		batch                  []*v2.WALRecord
 		totalBatchSize         int
 		lastReceivedRecordTime = time.Now()
 	)
@@ -131,7 +131,7 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 		if err := s.flushBatch(batch, g); err != nil {
 			return err
 		}
-		batch = []*v1.WALRecord{}
+		batch = []*v2.WALRecord{}
 		totalBatchSize = 0
 		return nil
 	}
@@ -181,14 +181,14 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 	}
 }
 
-func (s *GrpcStreamer) flushBatch(batch []*v1.WALRecord, g grpc.ServerStream) error {
+func (s *GrpcStreamer) flushBatch(batch []*v2.WALRecord, g grpc.ServerStream) error {
 	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
 	metricsStreamSendTotal.WithLabelValues(namespace, string(method), "grpc").Add(float64(len(batch)))
 	if len(batch) == 0 {
 		return nil
 	}
 	slog.Debug("[kvalchemy.streamer.grpc] Batch flushing", "size", len(batch))
-	response := &v1.StreamWALResponse{WalRecords: batch, SentAt: timestamppb.Now()}
+	response := &v2.StreamWALResponse{WalRecords: batch, SentAt: timestamppb.Now()}
 
 	start := time.Now()
 	defer func() {
