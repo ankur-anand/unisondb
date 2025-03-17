@@ -33,7 +33,7 @@ var (
 
 var (
 	sysBucketMetaData = "sys.kv.unison.db.wal.metadata.bucket"
-	packageKey        = []string{"unisondb", "kv", "drivers"}
+	packageKey        = []string{"unisondb", "kvdrivers"}
 )
 
 type TxnStats struct {
