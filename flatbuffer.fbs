@@ -1,5 +1,5 @@
 // FlatBuffer schema for Write-Ahead Log (WAL) records with chunked support and checksums
-namespace fbschema.logrecord;
+namespace schemas.logrecord;
 
 enum TransactionState: ubyte {
   None = 0,
