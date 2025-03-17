@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdb"
+	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/wal"
 	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/bits-and-blooms/bloom/v3"
@@ -22,7 +22,7 @@ type walRecovery struct {
 // recoverWAL recover wal from last check point saved in btree store.
 func (wr *walRecovery) recoverWAL() error {
 	value, err := wr.store.RetrieveMetadata(sysKeyWalCheckPoint)
-	if err != nil && !errors.Is(err, kvdb.ErrKeyNotFound) {
+	if err != nil && !errors.Is(err, kvdrivers.ErrKeyNotFound) {
 		return fmt.Errorf("recover WAL failed %w", err)
 	}
 

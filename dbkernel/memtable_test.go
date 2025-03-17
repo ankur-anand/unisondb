@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdb"
+	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/wal"
 	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/brianvoe/gofakeit/v7"
@@ -25,7 +25,7 @@ func setupMemTableWithLMDB(t *testing.T, capacity int64) *memTable {
 
 	dbFile := filepath.Join(dir, "test_flush.db")
 
-	db, err := kvdb.NewLmdb(dbFile, kvdb.Config{
+	db, err := kvdrivers.NewLmdb(dbFile, kvdrivers.Config{
 		Namespace: testNamespace,
 		NoSync:    true,
 		MmapSize:  1 << 30,
@@ -57,7 +57,7 @@ func setupMemTableWithBoltDB(t *testing.T, capacity int64) *memTable {
 
 	dbFile := filepath.Join(dir, "test_flush.db")
 
-	db, err := kvdb.NewBoltdb(dbFile, kvdb.Config{
+	db, err := kvdrivers.NewBoltdb(dbFile, kvdrivers.Config{
 		Namespace: testNamespace,
 		NoSync:    true,
 		MmapSize:  1 << 30,
@@ -376,7 +376,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 		for k := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
 			assert.Nil(t, retrievedValue)
-			assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "failed to get")
+			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "failed to get")
 		}
 	})
 }

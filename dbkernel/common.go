@@ -4,7 +4,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdb"
+	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/wal"
 	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 )
@@ -17,10 +17,10 @@ const (
 
 var (
 	// ErrKeyNotFound is a sentinel error for missing keys.
-	ErrKeyNotFound     = kvdb.ErrKeyNotFound
-	ErrBucketNotFound  = kvdb.ErrBucketNotFound
-	ErrRecordCorrupted = kvdb.ErrRecordCorrupted
-	ErrUseGetColumnAPI = kvdb.ErrUseGetColumnAPI
+	ErrKeyNotFound     = kvdrivers.ErrKeyNotFound
+	ErrBucketNotFound  = kvdrivers.ErrBucketNotFound
+	ErrRecordCorrupted = kvdrivers.ErrRecordCorrupted
+	ErrUseGetColumnAPI = kvdrivers.ErrUseGetColumnAPI
 
 	ErrInCloseProcess   = errors.New("in-Close process")
 	ErrDatabaseDirInUse = errors.New("pid.lock is held by another process")
@@ -96,11 +96,11 @@ const (
 
 // EngineConfig embeds all the config needed for Engine.
 type EngineConfig struct {
-	ValueThreshold int64       `toml:"value_threshold"`
-	ArenaSize      int64       `toml:"arena_size"`
-	WalConfig      wal.Config  `toml:"wal_config"`
-	BtreeConfig    kvdb.Config `toml:"btree_config"`
-	DBEngine       DBEngine    `toml:"db_engine"`
+	ValueThreshold int64            `toml:"value_threshold"`
+	ArenaSize      int64            `toml:"arena_size"`
+	WalConfig      wal.Config       `toml:"wal_config"`
+	BtreeConfig    kvdrivers.Config `toml:"btree_config"`
+	DBEngine       DBEngine         `toml:"db_engine"`
 }
 
 // NewDefaultEngineConfig returns an initialized default config for engine.
@@ -109,7 +109,7 @@ func NewDefaultEngineConfig() *EngineConfig {
 		ValueThreshold: 2 * 1024,
 		ArenaSize:      4 << 20,
 		WalConfig:      *wal.NewDefaultConfig(),
-		BtreeConfig: kvdb.Config{
+		BtreeConfig: kvdrivers.Config{
 			Namespace: "kv.alchemy.sys.default",
 			NoSync:    true,
 			MmapSize:  4 << 30,

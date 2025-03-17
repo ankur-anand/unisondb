@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdb"
+	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/wal"
 	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/bits-and-blooms/bloom/v3"
@@ -154,13 +154,13 @@ func (e *Engine) initStorage(dataDir, namespace string, conf *EngineConfig) erro
 	var bTreeStore BTreeStore
 	switch conf.DBEngine {
 	case BoltDBEngine:
-		db, err := kvdb.NewBoltdb(dbFile, conf.BtreeConfig)
+		db, err := kvdrivers.NewBoltdb(dbFile, conf.BtreeConfig)
 		if err != nil {
 			return err
 		}
 		bTreeStore = db
 	case LMDBEngine:
-		db, err := kvdb.NewLmdb(dbFile, conf.BtreeConfig)
+		db, err := kvdrivers.NewLmdb(dbFile, conf.BtreeConfig)
 		if err != nil {
 			return err
 		}
@@ -198,11 +198,11 @@ func tryFileLock(fileLock *flock.Flock) error {
 // loadMetaValues loads meta value that the engine stores.
 func (e *Engine) loadMetaValues() error {
 	data, err := e.dataStore.RetrieveMetadata(sysKeyWalCheckPoint)
-	if err != nil && !errors.Is(err, kvdb.ErrKeyNotFound) {
+	if err != nil && !errors.Is(err, kvdrivers.ErrKeyNotFound) {
 		return err
 	}
 	// there is no value even for bloom filter.
-	if errors.Is(err, kvdb.ErrKeyNotFound) {
+	if errors.Is(err, kvdrivers.ErrKeyNotFound) {
 		return nil
 	}
 	metadata := UnmarshalMetadata(data)

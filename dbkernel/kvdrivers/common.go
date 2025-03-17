@@ -1,4 +1,4 @@
-package kvdb
+package kvdrivers
 
 import (
 	"errors"
@@ -32,8 +32,8 @@ var (
 )
 
 var (
-	sysBucketMetaData = "sys.kv.alchemy.wal.metadata.bucket"
-	packageKey        = []string{"kvalchemy", "kvdb"}
+	sysBucketMetaData = "sys.kv.unison.db.wal.metadata.bucket"
+	packageKey        = []string{"unisondb", "kv", "drivers"}
 )
 
 type TxnStats struct {

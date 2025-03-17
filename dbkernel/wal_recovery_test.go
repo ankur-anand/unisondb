@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdb"
+	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/wal"
 	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/bits-and-blooms/bloom/v3"
@@ -33,7 +33,7 @@ func TestWalRecovery(t *testing.T) {
 
 	dbFile := filepath.Join(tdir, "test_flush.db")
 
-	db, err := kvdb.NewLmdb(dbFile, kvdb.Config{
+	db, err := kvdrivers.NewLmdb(dbFile, kvdrivers.Config{
 		Namespace: testNamespace,
 		NoSync:    true,
 		MmapSize:  1 << 30,
@@ -143,7 +143,7 @@ func TestWalRecovery(t *testing.T) {
 
 		for k := range unCommitedKeys {
 			value, err := db.Get([]byte(k))
-			assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value)
 		}
 
@@ -240,7 +240,7 @@ func TestWalRecovery(t *testing.T) {
 
 		for k := range unCommitedKeys {
 			value, err := db.Get([]byte(k))
-			assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value)
 		}
 	})
@@ -273,7 +273,7 @@ func TestWalRecovery(t *testing.T) {
 		assert.Equal(t, *recovery.lastRecoveredPos, *lastOffset)
 		assert.Equal(t, recovery.recoveredCount, 1)
 		value, err := db.Get([]byte(key.(string)))
-		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 		assert.Nil(t, value, "deleted key value should be nil")
 		delete(allCommitedKeys, key.(string))
 		allCommitedDeleteKeys[key.(string)] = struct{}{}
@@ -353,7 +353,7 @@ func TestWalRecovery(t *testing.T) {
 
 		for _, key := range deleteKeys {
 			value, err := db.Get([]byte(key))
-			assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "%s", key)
+			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "%s", key)
 			assert.Nil(t, value, "deleted key value should be nil %s", key)
 			allCommitedDeleteKeys[key] = struct{}{}
 			delete(allCommitedKeys, key)
@@ -369,13 +369,13 @@ func TestWalRecovery(t *testing.T) {
 
 		for k := range unCommitedKeys {
 			value, err := db.Get([]byte(k))
-			assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value)
 		}
 
 		for key := range allCommitedDeleteKeys {
 			value, err := db.Get([]byte(key))
-			assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value, "deleted key value should be nil %s", key)
 		}
 	})

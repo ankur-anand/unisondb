@@ -10,7 +10,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdb"
+	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/wal"
 	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/dgraph-io/badger/v4/y"
@@ -103,7 +103,7 @@ func (e *Engine) CurrentOffset() *Offset {
 // GetWalCheckPoint returns the last checkpoint metadata saved in the database.
 func (e *Engine) GetWalCheckPoint() (*Metadata, error) {
 	data, err := e.dataStore.RetrieveMetadata(sysKeyWalCheckPoint)
-	if err != nil && !errors.Is(err, kvdb.ErrKeyNotFound) {
+	if err != nil && !errors.Is(err, kvdrivers.ErrKeyNotFound) {
 		return nil, err
 	}
 	metadata := UnmarshalMetadata(data)

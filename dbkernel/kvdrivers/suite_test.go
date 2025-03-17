@@ -1,4 +1,4 @@
-package kvdb_test
+package kvdrivers_test
 
 import (
 	"bytes"
@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdb"
+	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 )
@@ -42,7 +42,7 @@ type TxnBatcher interface {
 	BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
 	BatchDeleteRows(rowKeys [][]byte) error
 	Commit() error
-	Stats() kvdb.TxnStats
+	Stats() kvdrivers.TxnStats
 }
 
 // btreeReader defines the interface for interacting with a B-tree based storage
@@ -65,7 +65,7 @@ type bTreeStore interface {
 
 // testSuite defines all the test cases that is common in both the lmdb and boltdb.
 type testSuite struct {
-	dbConstructor         func(path string, config kvdb.Config) (bTreeStore, error)
+	dbConstructor         func(path string, config kvdrivers.Config) (bTreeStore, error)
 	txnBatcherConstructor func(maxBatchSize int) TxnBatcher
 	store                 bTreeStore
 }
@@ -177,7 +177,7 @@ func (s *testSuite) TestSetGetAndDelete(t *testing.T) {
 	err = s.store.Delete(key)
 	assert.NoError(t, err, "Failed to delete key")
 	retrievedValue, err = s.store.Get(key)
-	assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "error should be ErrKeyNotFound")
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be ErrKeyNotFound")
 	assert.Nil(t, retrievedValue, "retrieved value should be nil")
 }
 
@@ -203,7 +203,7 @@ func (s *testSuite) TestManySetGetAndDeleteMany(t *testing.T) {
 	for _, key := range keys {
 		retrievedValue, err := s.store.Get(key)
 		assert.Empty(t, retrievedValue, "retrieved value should be empty")
-		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "error should be ErrKeyNotFound")
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be ErrKeyNotFound")
 	}
 }
 
@@ -250,9 +250,9 @@ func (s *testSuite) TestChunkSetAndDelete(t *testing.T) {
 	assert.Equal(t, expectedValue, retrievedValue, "Retrieved chunked value does not match")
 
 	keys := make(map[string]error)
-	keys["chunked_key_chunk_0"] = kvdb.ErrInvalidOpsForValueType // as we are fetching the stored chunk value
-	keys["chunked_key_chunk_1"] = kvdb.ErrInvalidOpsForValueType
-	keys["chunked_key_chunk_2"] = kvdb.ErrKeyNotFound
+	keys["chunked_key_chunk_0"] = kvdrivers.ErrInvalidOpsForValueType // as we are fetching the stored chunk value
+	keys["chunked_key_chunk_1"] = kvdrivers.ErrInvalidOpsForValueType
+	keys["chunked_key_chunk_2"] = kvdrivers.ErrKeyNotFound
 
 	for key, e := range keys {
 		_, err := s.store.Get([]byte(key))
@@ -262,11 +262,11 @@ func (s *testSuite) TestChunkSetAndDelete(t *testing.T) {
 	err = s.store.Delete(key)
 	assert.NoError(t, err, "Failed to delete key")
 	retrievedValue, err = s.store.Get(key)
-	assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "error should be ErrKeyNotFound")
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be ErrKeyNotFound")
 	assert.Nil(t, retrievedValue, "retrieved value should be nil")
 	for key := range keys {
 		_, err := s.store.Get([]byte(key))
-		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "error should be match")
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be match")
 	}
 }
 
@@ -289,7 +289,7 @@ func (s *testSuite) TestSnapshotAndRetrieve(t *testing.T) {
 
 	restoreDir := t.TempDir()
 	path := filepath.Join(restoreDir, "snapshot")
-	conf := kvdb.Config{
+	conf := kvdrivers.Config{
 		Namespace: "test",
 		NoSync:    true,
 		MmapSize:  1 << 30,
@@ -347,7 +347,7 @@ func (s *testSuite) TestStoreMetadataAndRetrieveMetadata(t *testing.T) {
 func (s *testSuite) TestRetrieveMetadata(t *testing.T) {
 	key := []byte("hello")
 	retrievedValue, err := s.store.RetrieveMetadata(key)
-	assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 	assert.Nil(t, retrievedValue, "Retrieved value should be nil")
 
 }
@@ -387,7 +387,7 @@ func (s *testSuite) TestSetGetAndDeleteMany_Combined(t *testing.T) {
 
 	for _, key := range keysToBeDeleted {
 		retrievedValue, err := s.store.Get(key)
-		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "Failed to retrieve value")
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to retrieve value")
 		assert.Nil(t, retrievedValue, "Retrieved value should be nil")
 	}
 }
@@ -407,20 +407,20 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 
 	t.Run("invalid-arguments", func(t *testing.T) {
 		err := s.store.SetManyRowColumns(rowKeys, nil)
-		assert.ErrorIs(t, err, kvdb.ErrInvalidArguments)
+		assert.ErrorIs(t, err, kvdrivers.ErrInvalidArguments)
 		err = s.store.DeleteManyRowColumns(rowKeys, nil)
-		assert.ErrorIs(t, err, kvdb.ErrInvalidArguments)
+		assert.ErrorIs(t, err, kvdrivers.ErrInvalidArguments)
 	})
 
 	t.Run("set", func(t *testing.T) {
 		err := s.store.SetManyRowColumns(rowKeys, columEntriesPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
 		_, err = s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 
 		for key, entry := range entries {
 			value, err := s.store.Get([]byte(rowKey + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
 			assert.Equal(t, value, entry)
 		}
 
@@ -451,10 +451,10 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 
 	t.Run("get_delete", func(t *testing.T) {
 		_, err := s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 		for key := range deleteColumn {
 			value, err := s.store.Get([]byte(rowKey + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value, "Retrieved value should be nil")
 		}
 	})
@@ -473,14 +473,14 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 		err := s.store.SetManyRowColumns(rowKeys, updateColumnPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
 		_, err = s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 
 		for key, entry := range entries {
 			if _, ok := deleteColumn[key]; ok {
 				continue
 			}
 			value, err := s.store.Get([]byte(rowKey + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
 			assert.Equal(t, value, entry)
 		}
 	})
@@ -534,13 +534,13 @@ func (s *testSuite) TestSetGetDelete_RowColumns_Filter(t *testing.T) {
 		err := s.store.Delete([]byte(rowKey))
 		assert.NoError(t, err, "delete call failed.")
 		_, err = s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 
 		err = s.store.Delete([]byte(rowKey + "::"))
-		assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+		assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
 		for key := range entries {
 			err := s.store.Delete([]byte(rowKey + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
 		}
 	})
 
@@ -589,20 +589,20 @@ func (s *testSuite) TestSetGetDelete_NMRowColumns(t *testing.T) {
 		err := s.store.SetManyRowColumns(rowKeys, columEntriesPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
 		_, err = s.store.Get([]byte(rowKey1))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 
 		for key, entry := range columnsRow1 {
 			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
 			assert.Equal(t, value, entry)
 		}
 
 		_, err = s.store.Get([]byte(rowKey2))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 
 		for key, entry := range columnsRow2 {
 			value, err := s.store.Get([]byte(rowKey2 + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
 			assert.Equal(t, value, entry)
 		}
 
@@ -637,10 +637,10 @@ func (s *testSuite) TestSetGetDelete_NMRowColumns(t *testing.T) {
 
 	t.Run("get_delete", func(t *testing.T) {
 		_, err := s.store.Get([]byte(rowKey1))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 		for key := range deleteColumn {
 			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value, "Retrieved value should be nil")
 		}
 	})
@@ -659,14 +659,14 @@ func (s *testSuite) TestSetGetDelete_NMRowColumns(t *testing.T) {
 		err := s.store.SetManyRowColumns([][]byte{[]byte(rowKey1)}, updateColumnPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
 		_, err = s.store.Get([]byte(rowKey1))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 
 		for key, entry := range columnsRow1 {
 			if _, ok := deleteColumn[key]; ok {
 				continue
 			}
 			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
 			assert.Equal(t, value, entry)
 		}
 	})
@@ -681,10 +681,10 @@ func (s *testSuite) TestSetGetDelete_NMRowColumns(t *testing.T) {
 
 	t.Run("get_key_not_found", func(t *testing.T) {
 		_, err := s.store.GetRowColumns([]byte(rowKey2), nil)
-		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "Failed to fetch row columns")
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to fetch row columns")
 
 		_, err = s.store.GetRowColumns([]byte(rowKey1), nil)
-		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "Failed to fetch row columns")
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to fetch row columns")
 	})
 }
 
@@ -698,7 +698,7 @@ func (s *testSuite) TestTxnQueue_BatchPutGetDelete(t *testing.T) {
 	err := txn.BatchPut(keys, values)
 	assert.NoError(t, err, "Failed to batch put")
 	_, err = s.store.Get(key)
-	assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "Failed to retrieve value")
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to retrieve value")
 	err = txn.Commit()
 	assert.NoError(t, err, "Failed to commit")
 	retrievedValue, err := s.store.Get(key)
@@ -712,7 +712,7 @@ func (s *testSuite) TestTxnQueue_BatchPutGetDelete(t *testing.T) {
 	err = txn.Commit()
 	assert.NoError(t, err, "Failed to commit")
 	_, err = s.store.Get(key)
-	assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "Failed to retrieve value")
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to retrieve value")
 }
 
 func (s *testSuite) TestTxnSetGetAndDeleteMany(t *testing.T) {
@@ -742,7 +742,7 @@ func (s *testSuite) TestTxnSetGetAndDeleteMany(t *testing.T) {
 	for _, key := range keys {
 		retrievedValue, err := s.store.Get(key)
 		assert.Empty(t, retrievedValue, "retrieved value should be empty")
-		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "error should be ErrKeyNotFound")
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be ErrKeyNotFound")
 	}
 }
 
@@ -793,9 +793,9 @@ func (s *testSuite) TestTxn_ChunkSetAndDelete(t *testing.T) {
 	assert.Equal(t, expectedValue, retrievedValue, "Retrieved chunked value does not match")
 
 	keys := make(map[string]error)
-	keys["chunked_key_chunk_0"] = kvdb.ErrInvalidOpsForValueType // as we are fetching the stored chunk value
-	keys["chunked_key_chunk_1"] = kvdb.ErrInvalidOpsForValueType
-	keys["chunked_key_chunk_2"] = kvdb.ErrKeyNotFound
+	keys["chunked_key_chunk_0"] = kvdrivers.ErrInvalidOpsForValueType // as we are fetching the stored chunk value
+	keys["chunked_key_chunk_1"] = kvdrivers.ErrInvalidOpsForValueType
+	keys["chunked_key_chunk_2"] = kvdrivers.ErrKeyNotFound
 
 	for key, e := range keys {
 		_, err := s.store.Get([]byte(key))
@@ -808,11 +808,11 @@ func (s *testSuite) TestTxn_ChunkSetAndDelete(t *testing.T) {
 	assert.NoError(t, txn.Commit(), "Failed to commit")
 
 	retrievedValue, err = s.store.Get(key)
-	assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "error should be ErrKeyNotFound")
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be ErrKeyNotFound")
 	assert.Nil(t, retrievedValue, "retrieved value should be nil")
 	for key := range keys {
 		_, err := s.store.Get([]byte(key))
-		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "error should be match")
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be match")
 	}
 }
 
@@ -833,9 +833,9 @@ func (s *testSuite) TestTxn_SetGetDelete_RowColumns(t *testing.T) {
 
 	t.Run("invalid-arguments", func(t *testing.T) {
 		err := txn.BatchPutRowColumns(rowKeys, nil)
-		assert.ErrorIs(t, err, kvdb.ErrInvalidArguments)
+		assert.ErrorIs(t, err, kvdrivers.ErrInvalidArguments)
 		err = txn.BatchDeleteRowColumns(rowKeys, nil)
-		assert.ErrorIs(t, err, kvdb.ErrInvalidArguments)
+		assert.ErrorIs(t, err, kvdrivers.ErrInvalidArguments)
 	})
 
 	txn = s.txnBatcherConstructor(10)
@@ -845,11 +845,11 @@ func (s *testSuite) TestTxn_SetGetDelete_RowColumns(t *testing.T) {
 		assert.NoError(t, err, "Failed to set row columns")
 		assert.NoError(t, txn.Commit(), "Failed to commit")
 		_, err = s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 
 		for key, entry := range entries {
 			value, err := s.store.Get([]byte(rowKey + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
 			assert.Equal(t, value, entry)
 		}
 
@@ -880,10 +880,10 @@ func (s *testSuite) TestTxn_SetGetDelete_RowColumns(t *testing.T) {
 
 	t.Run("get_delete", func(t *testing.T) {
 		_, err := s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 		for key := range deleteColumn {
 			value, err := s.store.Get([]byte(rowKey + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value, "Retrieved value should be nil")
 		}
 	})
@@ -903,14 +903,14 @@ func (s *testSuite) TestTxn_SetGetDelete_RowColumns(t *testing.T) {
 		assert.NoError(t, err, "Failed to set row columns")
 		assert.NoError(t, txn.Commit(), "Failed to commit")
 		_, err = s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 
 		for key, entry := range entries {
 			if _, ok := deleteColumn[key]; ok {
 				continue
 			}
 			value, err := s.store.Get([]byte(rowKey + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
 			assert.Equal(t, value, entry)
 		}
 	})
@@ -962,7 +962,7 @@ func (s *testSuite) TestTxn_SetGetAndDeleteMany_Combined(t *testing.T) {
 	assert.NoError(t, txn.Commit(), "Failed to commit")
 	for _, key := range keysToBeDeleted {
 		retrievedValue, err := s.store.Get(key)
-		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "Failed to retrieve value")
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to retrieve value")
 		assert.Nil(t, retrievedValue, "Retrieved value should be nil")
 	}
 }
@@ -994,20 +994,20 @@ func (s *testSuite) TestTxn_SetGetDelete_NMRowColumns(t *testing.T) {
 		err := txn.BatchPutRowColumns(rowKeys, columEntriesPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
 		_, err = s.store.Get([]byte(rowKey1))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 
 		for key, entry := range columnsRow1 {
 			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
 			assert.Equal(t, value, entry)
 		}
 
 		_, err = s.store.Get([]byte(rowKey2))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 
 		for key, entry := range columnsRow2 {
 			value, err := s.store.Get([]byte(rowKey2 + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
 			assert.Equal(t, value, entry)
 		}
 
@@ -1044,10 +1044,10 @@ func (s *testSuite) TestTxn_SetGetDelete_NMRowColumns(t *testing.T) {
 
 	t.Run("get_delete", func(t *testing.T) {
 		_, err := s.store.Get([]byte(rowKey1))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 		for key := range deleteColumn {
 			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value, "Retrieved value should be nil")
 		}
 	})
@@ -1067,14 +1067,14 @@ func (s *testSuite) TestTxn_SetGetDelete_NMRowColumns(t *testing.T) {
 		err := txn.BatchPutRowColumns([][]byte{[]byte(rowKey1)}, updateColumnPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
 		_, err = s.store.Get([]byte(rowKey1))
-		assert.ErrorIs(t, err, kvdb.ErrUseGetColumnAPI)
+		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 
 		for key, entry := range columnsRow1 {
 			if _, ok := deleteColumn[key]; ok {
 				continue
 			}
 			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
-			assert.ErrorIs(t, err, kvdb.ErrInvalidOpsForValueType)
+			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
 			assert.Equal(t, value, entry)
 		}
 	})
@@ -1090,9 +1090,9 @@ func (s *testSuite) TestTxn_SetGetDelete_NMRowColumns(t *testing.T) {
 
 	t.Run("get_key_not_found", func(t *testing.T) {
 		_, err := s.store.GetRowColumns([]byte(rowKey2), nil)
-		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "Failed to fetch row columns")
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to fetch row columns")
 
 		_, err = s.store.GetRowColumns([]byte(rowKey1), nil)
-		assert.ErrorIs(t, err, kvdb.ErrKeyNotFound, "Failed to fetch row columns")
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to fetch row columns")
 	})
 }

@@ -1,4 +1,4 @@
-package kvdb_test
+package kvdrivers_test
 
 import (
 	"bytes"
@@ -6,24 +6,24 @@ import (
 	"testing"
 	"time"
 
-	kv2 "github.com/ankur-anand/unisondb/dbkernel/kvdb"
+	kv2 "github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
 	"github.com/ankur-anand/unisondb/internal/etc"
 	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestLMDB_Suite(t *testing.T) {
+func TestBolt_Suite(t *testing.T) {
 	tempDir := t.TempDir()
-	path := filepath.Join(tempDir, "lmdb_test.lmdb")
-	store, err := kv2.NewLmdb(path, kv2.Config{
+	path := filepath.Join(tempDir, "bolt_test.bolt.db")
+	store, err := kv2.NewBoltdb(path, kv2.Config{
 		Namespace: "test",
-		NoSync:    false,
-		MmapSize:  1 << 30,
+		NoSync:    true,
 	})
 
-	assert.NoError(t, err)
+	assert.NoError(t, err, "failed to create boltdb")
+	assert.NotNil(t, store, "store should not be nil")
 	inm := metrics.NewInmemSink(1*time.Millisecond, time.Minute)
-	cfg := metrics.DefaultConfig("lmdb_test")
+	cfg := metrics.DefaultConfig("bolt_test")
 	cfg.TimerGranularity = time.Second
 	cfg.EnableHostname = false
 	cfg.EnableRuntimeMetrics = true
@@ -32,23 +32,20 @@ func TestLMDB_Suite(t *testing.T) {
 		panic(err)
 	}
 
-	assert.NoError(t, err, "failed to create lmdb")
-	assert.NotNil(t, store, "store should not be nil")
-
-	lmdbConstructor := func(path string, config kv2.Config) (bTreeStore, error) {
-		return kv2.NewLmdb(path, config)
+	boltConstructor := func(path string, config kv2.Config) (bTreeStore, error) {
+		return kv2.NewBoltdb(path, config)
 	}
 
 	ts := &testSuite{
 		store:         store,
-		dbConstructor: lmdbConstructor,
+		dbConstructor: boltConstructor,
 		txnBatcherConstructor: func(maxBatchSize int) TxnBatcher {
 			return store.NewTxnQueue(maxBatchSize)
 		},
 	}
 
 	suites := getTestSuites(ts)
-	t.Run("lmdb", func(t *testing.T) {
+	t.Run("boltdb", func(t *testing.T) {
 		for _, tc := range suites {
 			t.Run(tc.name, func(t *testing.T) {
 				tc.runFunc(t)
