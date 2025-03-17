@@ -4,13 +4,13 @@ import (
 	"errors"
 	"io"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
-	"github.com/ankur-anand/unisondb/dbkernel/wal"
-	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 )
 
 const (
-	dbFileName  = "alchemy.db"
+	dbFileName  = "unison.db"
 	walDirName  = "wal"
 	pidLockName = "pid.lock"
 )
@@ -32,18 +32,18 @@ var (
 	// Marks values stored directly in memory.
 	directValuePrefix  byte = 254
 	walReferencePrefix byte = 255 // Marks values stored as a reference in WAL
-	logOperationDelete      = byte(walrecord.LogOperationDelete)
-	logOperationInsert      = byte(walrecord.LogOperationInsert)
-	entryTypeRow            = byte(walrecord.EntryTypeRow)
+	logOperationDelete      = byte(logrecord.LogOperationTypeDelete)
+	logOperationInsert      = byte(logrecord.LogOperationTypeInsert)
+	entryTypeRow            = byte(logrecord.LogEntryTypeRow)
 )
 
 var (
-	sysKeyWalCheckPoint = []byte("sys.kv.alchemy.key.wal.checkpoint")
-	sysKeyBloomFilter   = []byte("sys.kv.alchemy.key.bloom-filter")
+	sysKeyWalCheckPoint = []byte("sys.kv.unisondb.key.wal.checkpoint")
+	sysKeyBloomFilter   = []byte("sys.kv.unisondb.key.bloom-filter")
 )
 
 var (
-	packageKey = []string{"kvalchemy", "dbengine"}
+	packageKey = []string{"unisondb", "dbkernel"}
 )
 
 // BtreeWriter defines the interface for interacting with a B-tree based storage
@@ -110,7 +110,7 @@ func NewDefaultEngineConfig() *EngineConfig {
 		ArenaSize:      4 << 20,
 		WalConfig:      *wal.NewDefaultConfig(),
 		BtreeConfig: kvdrivers.Config{
-			Namespace: "kv.alchemy.sys.default",
+			Namespace: "kv.unisondb.sys.default",
 			NoSync:    true,
 			MmapSize:  4 << 30,
 		},
