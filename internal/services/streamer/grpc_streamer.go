@@ -9,9 +9,9 @@ import (
 
 	"github.com/ankur-anand/unisondb/dbengine"
 	"github.com/ankur-anand/unisondb/internal/middleware"
+	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/pkg/replicator"
 	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
-	"github.com/ankur-anand/unisondb/services"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"

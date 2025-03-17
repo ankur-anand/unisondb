@@ -9,8 +9,8 @@ import (
 	"math/rand/v2"
 	"time"
 
+	"github.com/ankur-anand/unisondb/internal/services"
 	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
-	"github.com/ankur-anand/unisondb/services"
 	"github.com/prometheus/common/helpers/templates"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

@@ -7,9 +7,9 @@ import (
 	"hash/crc32"
 	"io"
 
+	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/pkg/splitter"
 	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
-	"github.com/ankur-anand/unisondb/services"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"

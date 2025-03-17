@@ -9,8 +9,8 @@ import (
 	storage "github.com/ankur-anand/unisondb/dbengine"
 	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
 	"github.com/ankur-anand/unisondb/internal/middleware"
+	"github.com/ankur-anand/unisondb/internal/services"
 	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
-	"github.com/ankur-anand/unisondb/services"
 	"google.golang.org/grpc"
 )
 
