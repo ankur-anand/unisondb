@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/cmd/replicator/config"
-	"github.com/ankur-anand/unisondb/dbengine"
+	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/middleware"
-	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
-	"github.com/ankur-anand/unisondb/services/kvstore"
-	"github.com/ankur-anand/unisondb/services/streamer"
+	"github.com/ankur-anand/unisondb/internal/services/kvstore"
+	"github.com/ankur-anand/unisondb/internal/services/streamer"
+	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
 	"github.com/hashicorp/go-metrics"
 	hashiprom "github.com/hashicorp/go-metrics/prometheus"
 	"github.com/pelletier/go-toml/v2"
@@ -87,10 +87,10 @@ func main() {
 
 type mainServer struct {
 	cfg           config.Config
-	engines       map[string]*dbengine.Engine
+	engines       map[string]*dbkernel.Engine
 	grpcServer    *grpc.Server
 	httpServer    *http.Server
-	storageConfig *dbengine.EngineConfig
+	storageConfig *dbkernel.EngineConfig
 
 	// callbacks when shutdown.
 	deferCallback []func(ctx context.Context)
@@ -107,7 +107,7 @@ func (ms *mainServer) init(ctx context.Context) error {
 	fatalIfErr(err)
 	err = toml.Unmarshal(cfgBytes, &ms.cfg)
 	fatalIfErr(err)
-	ms.engines = make(map[string]*dbengine.Engine)
+	ms.engines = make(map[string]*dbkernel.Engine)
 	return nil
 }
 
@@ -127,7 +127,7 @@ func (ms *mainServer) initTelemetry(ctx context.Context) error {
 }
 
 func (ms *mainServer) setupStorageConfig(ctx context.Context) error {
-	storeConfig := dbengine.NewDefaultEngineConfig()
+	storeConfig := dbkernel.NewDefaultEngineConfig()
 
 	ms.storageConfig = storeConfig
 	return nil
@@ -135,7 +135,7 @@ func (ms *mainServer) setupStorageConfig(ctx context.Context) error {
 
 func (ms *mainServer) setupStorage(ctx context.Context) error {
 	for _, namespace := range ms.cfg.Storage.Namespaces {
-		store, err := dbengine.NewStorageEngine(ms.cfg.Storage.BaseDir, namespace, ms.storageConfig)
+		store, err := dbkernel.NewStorageEngine(ms.cfg.Storage.BaseDir, namespace, ms.storageConfig)
 		fatalIfErr(err)
 		ms.engines[namespace] = store
 		ms.deferCallback = append(ms.deferCallback, func(ctx context.Context) {

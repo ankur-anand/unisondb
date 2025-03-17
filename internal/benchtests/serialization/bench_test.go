@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
+	"github.com/ankur-anand/kvalchemy/dbkernel/wal/walrecord"
 	"github.com/vmihailenco/msgpack/v5"
 	"google.golang.org/protobuf/proto"
 )

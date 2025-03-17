@@ -3,18 +3,18 @@ package store
 import (
 	"context"
 
-	"github.com/ankur-anand/kvalchemy/dbengine"
+	"github.com/ankur-anand/kvalchemy/dbkernel"
 )
 
 type KVAlchemy struct {
 	namespace string
-	engine    *dbengine.Engine
+	engine    *dbkernel.Engine
 }
 
 func NewKVAlchemy(dir, namespace string) (*KVAlchemy, error) {
-	cfg := dbengine.NewDefaultEngineConfig()
+	cfg := dbkernel.NewDefaultEngineConfig()
 	cfg.ValueThreshold = 100 * 1024
-	engine, err := dbengine.NewStorageEngine(dir, namespace, cfg)
+	engine, err := dbkernel.NewStorageEngine(dir, namespace, cfg)
 	return &KVAlchemy{
 		namespace: namespace,
 		engine:    engine,

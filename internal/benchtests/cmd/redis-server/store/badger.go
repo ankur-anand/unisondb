@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"sync/atomic"
 
-	"github.com/ankur-anand/kvalchemy/dbengine"
-	"github.com/ankur-anand/kvalchemy/dbengine/compress"
-	"github.com/ankur-anand/kvalchemy/dbengine/wal/walrecord"
+	"github.com/ankur-anand/kvalchemy/dbkernel"
+	"github.com/ankur-anand/kvalchemy/dbkernel/compress"
+	"github.com/ankur-anand/kvalchemy/dbkernel/wal/walrecord"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -38,7 +38,7 @@ func (b *BadgerStore) Set(key, value []byte) error {
 		return err
 	}
 	wr := walrecord.Record{
-		Hlc:          dbengine.HLCNow(b.globalCounter.Add(1)),
+		Hlc:          dbkernel.HLCNow(b.globalCounter.Add(1)),
 		Key:          key,
 		Value:        compressed,
 		LogOperation: walrecord.LogOperationInsert,
@@ -94,7 +94,7 @@ func (b *BadgerStore) Get(key []byte) ([]byte, error) {
 
 func (b *BadgerStore) Delete(key []byte) error {
 	wr := walrecord.Record{
-		Hlc:          dbengine.HLCNow(b.globalCounter.Add(1)),
+		Hlc:          dbkernel.HLCNow(b.globalCounter.Add(1)),
 		Key:          key,
 		LogOperation: walrecord.LogOperationDelete,
 	}
