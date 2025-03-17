@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	packageKey = []string{"kvalchemy"}
+	packageKey = []string{"unisondb"}
 )
 
 // Default permission values.

@@ -7,7 +7,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/ankur-anand/wal"
 	"github.com/hashicorp/go-metrics"
 	"github.com/pkg/errors"
@@ -164,12 +164,12 @@ func (w *WalIO) NewReaderWithStart(offset *Offset) (*Reader, error) {
 }
 
 // GetTransactionRecords returns all the WalRecord that is part of the particular Txn.
-func (w *WalIO) GetTransactionRecords(startOffset *Offset) ([]*walrecord.WalRecord, error) {
+func (w *WalIO) GetTransactionRecords(startOffset *Offset) ([]*logrecord.LogRecord, error) {
 	if startOffset == nil {
 		return nil, nil
 	}
 
-	var records []*walrecord.WalRecord
+	var records []*logrecord.LogRecord
 	nextOffset := startOffset
 
 	for {
@@ -178,7 +178,7 @@ func (w *WalIO) GetTransactionRecords(startOffset *Offset) ([]*walrecord.WalReco
 			return nil, fmt.Errorf("failed to read WAL at offset %+v: %w", nextOffset, err)
 		}
 
-		record := walrecord.GetRootAsWalRecord(walEntry, 0)
+		record := logrecord.GetRootAsLogRecord(walEntry, 0)
 		records = append(records, record)
 
 		if record.PrevTxnWalIndexLength() == 0 {

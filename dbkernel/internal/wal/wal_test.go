@@ -7,15 +7,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel/wal"
-	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
+	wal2 "github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/etc"
+	"github.com/ankur-anand/unisondb/internal/logcodec"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/assert"
 )
 
-func setupWalTest(t *testing.T) *wal.WalIO {
+func setupWalTest(t *testing.T) *wal2.WalIO {
 	dir := t.TempDir()
 
 	inm := metrics.NewInmemSink(1*time.Millisecond, time.Minute)
@@ -28,7 +29,7 @@ func setupWalTest(t *testing.T) *wal.WalIO {
 		panic(err)
 	}
 
-	walInstance, err := wal.NewWalIO(dir, "test_namespace", wal.NewDefaultConfig(), m)
+	walInstance, err := wal2.NewWalIO(dir, "test_namespace", wal2.NewDefaultConfig(), m)
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -99,7 +100,7 @@ func TestWalIO_Suite(t *testing.T) {
 	})
 
 	t.Run("concurrent_read_write", func(t *testing.T) {
-		var offsets []*wal.Offset
+		var offsets []*wal2.Offset
 		var offsetMu sync.Mutex
 
 		numWriters := 4
@@ -151,29 +152,36 @@ func TestWalIO_Suite(t *testing.T) {
 	t.Run("get_transaction_records", func(t *testing.T) {
 		var keys []string
 		var values []string
-		var firstOffset *wal.Offset
+		var firstOffset *wal2.Offset
 		for i := 0; i < 10; i++ {
 			key := gofakeit.Name()
 			data := gofakeit.LetterN(10)
 			keys = append(keys, key)
 			values = append(values, data)
-			var prevOffset *wal.Offset
+			var prevOffset *wal2.Offset
 			var err error
 
-			record := walrecord.Record{
-				Index:         uint64(i),
-				Hlc:           uint64(i),
-				Key:           []byte(key),
-				Value:         []byte(data),
-				LogOperation:  walrecord.LogOperationInsert,
-				EntryType:     walrecord.EntryTypeKV,
-				TxnStatus:     walrecord.TxnStatusTxnNone,
-				TxnID:         []byte(gofakeit.UUID()),
-				PrevTxnOffset: prevOffset,
+			record := &logcodec.LogRecord{
+				LSN:             123456789,
+				HLC:             987654321,
+				OperationType:   logrecord.LogOperationTypeInsert,
+				TxnState:        logrecord.TransactionStateNone,
+				EntryType:       logrecord.LogEntryTypeKV,
+				TxnID:           []byte("transaction-001"),
+				PrevTxnWalIndex: nil,
+				Payload: logcodec.LogOperationData{
+					KeyValueBatchEntries: &logcodec.KeyValueBatchEntries{
+						Entries: []logcodec.KeyValueEntry{
+							{
+								Key:   []byte(key),
+								Value: []byte(data),
+							},
+						},
+					},
+				},
 			}
 
-			fbRecord, err := record.FBEncode()
-			assert.NoError(t, err)
+			fbRecord := record.FBEncode()
 			prevOffset, err = walInstance.Append(fbRecord)
 			assert.NoError(t, err)
 			assert.NotNil(t, prevOffset)
@@ -185,12 +193,16 @@ func TestWalIO_Suite(t *testing.T) {
 		records, err := walInstance.GetTransactionRecords(firstOffset)
 		assert.NoError(t, err)
 		for i, record := range records {
-			assert.Equal(t, record.Operation(), walrecord.LogOperationInsert, "expected operation didn't matched")
-			assert.Equal(t, uint64(i), record.Index(), "expected index didn't match")
+			assert.Equal(t, record.OperationType(), logrecord.LogOperationTypeInsert,
+				"expected operation didn't matched")
+			assert.Equal(t, uint64(i), record.Lsn(), "expected index didn't match")
 			assert.Equal(t, uint64(i), record.Hlc(), "expected hlc didn't match")
-			assert.Equal(t, record.EntryType(), walrecord.EntryTypeKV, "expected value type didn't match")
-			assert.Equal(t, string(record.KeyBytes()), keys[i], "expected key didn't match")
-			assert.Equal(t, string(record.ValueBytes()), values[i], "expected value didn't match")
+			assert.Equal(t, record.EntryType(), logrecord.LogEntryTypeKV,
+				"expected value type didn't match")
+
+			deserialized := logcodec.DeserializeFBRootLogRecord(record)
+			assert.Equal(t, string(deserialized.Payload.KeyValueBatchEntries.Entries[0].Key), keys[i], "expected key didn't match")
+			assert.Equal(t, string(deserialized.Payload.KeyValueBatchEntries.Entries[0].Value), values[i], "expected value didn't match")
 		}
 	})
 
@@ -204,20 +216,27 @@ func TestWalIO_Suite(t *testing.T) {
 		key := gofakeit.Name()
 		data := gofakeit.LetterN(10)
 
-		record := walrecord.Record{
-			Index:         1,
-			Hlc:           1,
-			Key:           []byte(key),
-			Value:         []byte(data),
-			LogOperation:  walrecord.LogOperationInsert,
-			EntryType:     walrecord.EntryTypeKV,
-			TxnStatus:     walrecord.TxnStatusTxnNone,
-			TxnID:         []byte(gofakeit.UUID()),
-			PrevTxnOffset: nil,
+		record := &logcodec.LogRecord{
+			LSN:             123456789,
+			HLC:             987654321,
+			OperationType:   logrecord.LogOperationTypeInsert,
+			TxnState:        logrecord.TransactionStateNone,
+			EntryType:       logrecord.LogEntryTypeKV,
+			TxnID:           []byte("transaction-001"),
+			PrevTxnWalIndex: nil,
+			Payload: logcodec.LogOperationData{
+				KeyValueBatchEntries: &logcodec.KeyValueBatchEntries{
+					Entries: []logcodec.KeyValueEntry{
+						{
+							Key:   []byte(key),
+							Value: []byte(data),
+						},
+					},
+				},
+			},
 		}
 
-		fbRecord, err := record.FBEncode()
-		assert.NoError(t, err)
+		fbRecord := record.FBEncode()
 
 		offset, err := walInstance.Append(fbRecord)
 		assert.NoError(t, err)
@@ -226,7 +245,8 @@ func TestWalIO_Suite(t *testing.T) {
 		records, err := walInstance.GetTransactionRecords(offset)
 		assert.NoError(t, err)
 		assert.Len(t, records, 1, "should return only 1 transaction record")
-		assert.Equal(t, key, string(records[0].KeyBytes()), "key should match")
-		assert.Equal(t, data, string(records[0].ValueBytes()), "value should match")
+		deserialized := logcodec.DeserializeFBRootLogRecord(records[0])
+		assert.Equal(t, key, string(deserialized.Payload.KeyValueBatchEntries.Entries[0].Key), "key should match")
+		assert.Equal(t, data, string(deserialized.Payload.KeyValueBatchEntries.Entries[0].Value), "value should match")
 	})
 }
