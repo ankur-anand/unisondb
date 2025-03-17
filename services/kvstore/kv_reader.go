@@ -6,9 +6,9 @@ import (
 
 	storage "github.com/ankur-anand/unisondb/dbengine"
 	"github.com/ankur-anand/unisondb/internal/middleware"
+	"github.com/ankur-anand/unisondb/pkg/splitter"
 	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
 	"github.com/ankur-anand/unisondb/services"
-	"github.com/ankur-anand/unisondb/splitter"
 	"google.golang.org/grpc"
 )
 

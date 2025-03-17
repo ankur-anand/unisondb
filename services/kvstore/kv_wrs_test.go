@@ -11,9 +11,9 @@ import (
 
 	storage "github.com/ankur-anand/unisondb/dbengine"
 	"github.com/ankur-anand/unisondb/internal/middleware"
+	"github.com/ankur-anand/unisondb/pkg/splitter"
 	v1 "github.com/ankur-anand/unisondb/proto/gen/go/kvalchemy/replicator/v1"
 	"github.com/ankur-anand/unisondb/services/kvstore"
-	"github.com/ankur-anand/unisondb/splitter"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc"
