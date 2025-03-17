@@ -1,12 +1,12 @@
-package dbengine
+package dbkernel
 
 import (
 	"errors"
 	"io"
 
-	"github.com/ankur-anand/unisondb/dbengine/kvdb"
-	"github.com/ankur-anand/unisondb/dbengine/wal"
-	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbkernel/kvdb"
+	"github.com/ankur-anand/unisondb/dbkernel/wal"
+	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 )
 
 const (

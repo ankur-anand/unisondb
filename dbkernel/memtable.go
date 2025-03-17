@@ -1,4 +1,4 @@
-package dbengine
+package dbkernel
 
 import (
 	"bytes"
@@ -9,8 +9,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbengine/wal"
-	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbkernel/wal"
+	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/dgraph-io/badger/v4/skl"
 	"github.com/dgraph-io/badger/v4/y"
 )

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbengine/wal"
-	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbkernel/wal"
+	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/ankur-anand/unisondb/internal/etc"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/hashicorp/go-metrics"

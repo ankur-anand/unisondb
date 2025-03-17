@@ -4,7 +4,7 @@ import (
 	"errors"
 	"hash/crc32"
 
-	storage "github.com/ankur-anand/unisondb/dbengine"
+	storage "github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/middleware"
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/pkg/splitter"

@@ -1,4 +1,4 @@
-package dbengine_test
+package dbkernel_test
 
 import (
 	"bytes"
@@ -6,8 +6,8 @@ import (
 	"hash/crc32"
 	"testing"
 
-	"github.com/ankur-anand/unisondb/dbengine"
-	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 )
@@ -16,11 +16,11 @@ func TestTxnNew(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test__txn_put_get"
 
-	conf := dbengine.NewDefaultEngineConfig()
-	conf.DBEngine = dbengine.BoltDBEngine
+	conf := dbkernel.NewDefaultEngineConfig()
+	conf.DBEngine = dbkernel.BoltDBEngine
 	conf.BtreeConfig.Namespace = namespace
 
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, conf)
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, conf)
 	assert.NoError(t, err)
 	ctx := context.Background()
 	t.Cleanup(func() {
@@ -34,20 +34,20 @@ func TestTxnNew(t *testing.T) {
 	assert.NoError(t, err, "NewBatch operation should succeed")
 
 	_, err = engine.NewTxn(walrecord.LogOperationDelete, walrecord.EntryTypeChunked)
-	assert.ErrorIs(t, err, dbengine.ErrUnsupportedTxnType, "delete should not allow chunked  value type")
+	assert.ErrorIs(t, err, dbkernel.ErrUnsupportedTxnType, "delete should not allow chunked  value type")
 
 	_, err = engine.NewTxn(walrecord.LogOperationNoop, walrecord.EntryTypeChunked)
-	assert.ErrorIs(t, err, dbengine.ErrUnsupportedTxnType, "Noop Txn should not succeed")
+	assert.ErrorIs(t, err, dbkernel.ErrUnsupportedTxnType, "Noop Txn should not succeed")
 }
 
 func TestTxn_Chunked_Commit(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test__txn_put_get"
 
-	conf := dbengine.NewDefaultEngineConfig()
+	conf := dbkernel.NewDefaultEngineConfig()
 	conf.BtreeConfig.Namespace = namespace
 
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, conf)
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, conf)
 	assert.NoError(t, err)
 	ctx := context.Background()
 	t.Cleanup(func() {
@@ -86,7 +86,7 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 	assert.NoError(t, err, "Append operation should succeed")
 	err = txn.AppendKVTxn(key, []byte(batchValues[0]))
 	// changing key from the chunked value type should error out,
-	assert.ErrorIs(t, err, dbengine.ErrKeyChangedForChunkedType, "Append operation should fail")
+	assert.ErrorIs(t, err, dbkernel.ErrKeyChangedForChunkedType, "Append operation should fail")
 
 	txn, err = engine.NewTxn(walrecord.LogOperationInsert, walrecord.EntryTypeChunked)
 	assert.NoError(t, err, "NewBatch operation should succeed")
@@ -102,7 +102,7 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 	// get value without commit
 	// write should not be visible for now.
 	got, err := engine.Get(batchKey)
-	assert.ErrorIs(t, err, dbengine.ErrKeyNotFound, "Key not Found Error should be present.")
+	assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Key not Found Error should be present.")
 	assert.Nil(t, got, "Get operation should succeed")
 
 	err = txn.Commit()
@@ -119,10 +119,10 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test__txn_put_get"
 
-	conf := dbengine.NewDefaultEngineConfig()
+	conf := dbkernel.NewDefaultEngineConfig()
 	conf.BtreeConfig.Namespace = namespace
 
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, conf)
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, conf)
 	assert.NoError(t, err)
 	ctx := context.Background()
 	t.Cleanup(func() {
@@ -148,7 +148,7 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 			assert.NoError(t, err, "Append operation should succeed")
 
 			value, err = engine.Get(key)
-			assert.ErrorIs(t, err, dbengine.ErrKeyNotFound, "Key not Found Error should be present.")
+			assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Key not Found Error should be present.")
 			assert.Nil(t, value, "Get operation should succeed")
 		}
 
@@ -188,7 +188,7 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 			}
 
 			if ok {
-				assert.ErrorIs(t, err, dbengine.ErrKeyNotFound, "Key not Found Error should be present.")
+				assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Key not Found Error should be present.")
 				assert.Nil(t, receivedValue, "Get operation should succeed")
 			}
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbengine"
+	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
@@ -16,7 +16,7 @@ func TestReplicator_Replicate(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test_put_get"
 
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := engine.Close(context.Background())
@@ -77,7 +77,7 @@ outer:
 
 	wg.Wait()
 	lastRecord := recvRecords[len(recvRecords)-1]
-	lastOffset := dbengine.DecodeOffset(lastRecord.Offset)
+	lastOffset := dbkernel.DecodeOffset(lastRecord.Offset)
 	r, err := engine.NewReaderWithStart(lastOffset)
 	assert.NoError(t, err)
 	pendingReadCount := 0
@@ -99,7 +99,7 @@ func TestReplicator_ReplicateReaderTimer(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test_timer"
 
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {

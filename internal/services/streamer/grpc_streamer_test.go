@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbengine"
-	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/ankur-anand/unisondb/internal/middleware"
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
@@ -53,7 +53,7 @@ func bufDialer(lis *bufconn.Listener) func(ctx context.Context, s string) (net.C
 }
 
 func TestServer_Invalid_Request(t *testing.T) {
-	var engines = make(map[string]*dbengine.Engine)
+	var engines = make(map[string]*dbkernel.Engine)
 	var nameSpaces = make([]string, 0)
 
 	for i := 0; i < 1; i++ {
@@ -76,7 +76,7 @@ func TestServer_Invalid_Request(t *testing.T) {
 	}
 	defer os.RemoveAll(temp)
 	for _, nameSpace := range nameSpaces {
-		se, err := dbengine.NewStorageEngine(temp, nameSpace, dbengine.NewDefaultEngineConfig())
+		se, err := dbkernel.NewStorageEngine(temp, nameSpace, dbkernel.NewDefaultEngineConfig())
 		if err != nil {
 			panic(err)
 		}
@@ -160,7 +160,7 @@ func TestServer_Invalid_Request(t *testing.T) {
 }
 
 func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
-	var engines = make(map[string]*dbengine.Engine)
+	var engines = make(map[string]*dbkernel.Engine)
 	var nameSpaces = make([]string, 0)
 
 	for i := 0; i < 1; i++ {
@@ -183,7 +183,7 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 	}
 	defer os.RemoveAll(temp)
 	for _, nameSpace := range nameSpaces {
-		se, err := dbengine.NewStorageEngine(temp, nameSpace, dbengine.NewDefaultEngineConfig())
+		se, err := dbkernel.NewStorageEngine(temp, nameSpace, dbkernel.NewDefaultEngineConfig())
 		assert.NoError(t, err)
 		assert.NotNil(t, se)
 		// for each engine write the records, few of them being more than 1 MB in size.
@@ -287,7 +287,7 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 }
 
 func TestServer_StreamWAL_Client(t *testing.T) {
-	var engines = make(map[string]*dbengine.Engine)
+	var engines = make(map[string]*dbkernel.Engine)
 	var nameSpaces = make([]string, 0)
 
 	for i := 0; i < 1; i++ {
@@ -310,7 +310,7 @@ func TestServer_StreamWAL_Client(t *testing.T) {
 	}
 	defer os.RemoveAll(temp)
 	for _, nameSpace := range nameSpaces {
-		se, err := dbengine.NewStorageEngine(temp, nameSpace, dbengine.NewDefaultEngineConfig())
+		se, err := dbkernel.NewStorageEngine(temp, nameSpace, dbkernel.NewDefaultEngineConfig())
 		assert.NoError(t, err)
 		assert.NotNil(t, se)
 		// for each engine write the records, few of them being more than 1 MB in size.
@@ -383,7 +383,7 @@ func TestServer_StreamWAL_Client(t *testing.T) {
 }
 
 func TestServer_StreamWAL_MaxRetry(t *testing.T) {
-	var engines = make(map[string]*dbengine.Engine)
+	var engines = make(map[string]*dbkernel.Engine)
 	var nameSpaces = make([]string, 0)
 
 	for i := 0; i < 1; i++ {
@@ -406,7 +406,7 @@ func TestServer_StreamWAL_MaxRetry(t *testing.T) {
 	}
 	defer os.RemoveAll(temp)
 	for _, nameSpace := range nameSpaces {
-		se, err := dbengine.NewStorageEngine(temp, nameSpace, dbengine.NewDefaultEngineConfig())
+		se, err := dbkernel.NewStorageEngine(temp, nameSpace, dbkernel.NewDefaultEngineConfig())
 		assert.NoError(t, err)
 		assert.NotNil(t, se)
 		// for each engine write the records, few of them being more than 1 MB in size.

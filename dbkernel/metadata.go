@@ -1,9 +1,9 @@
-package dbengine
+package dbkernel
 
 import (
 	"encoding/binary"
 
-	"github.com/ankur-anand/unisondb/dbengine/wal"
+	"github.com/ankur-anand/unisondb/dbkernel/wal"
 )
 
 // Metadata represents a checkpoint in the Write-Ahead Log (WAL).

@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ankur-anand/kvalchemy/dbengine"
+	"github.com/ankur-anand/kvalchemy/dbkernel"
 	"github.com/ankur-anand/kvalchemy/internal/benchtests/cmd/redis-server/store"
 	"github.com/ankur-anand/kvalchemy/internal/etc"
 	"github.com/hashicorp/go-metrics"
@@ -110,7 +110,7 @@ func main() {
 
 					val, err := se.Get(cmd.Args[1])
 
-					if errors.Is(err, dbengine.ErrKeyNotFound) {
+					if errors.Is(err, dbkernel.ErrKeyNotFound) {
 						conn.WriteNull()
 						return
 					}

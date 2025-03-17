@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	kv2 "github.com/ankur-anand/unisondb/dbengine/kvdb"
+	kv2 "github.com/ankur-anand/unisondb/dbkernel/kvdb"
 	"github.com/ankur-anand/unisondb/internal/etc"
 	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/assert"

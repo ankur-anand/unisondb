@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbengine"
+	"github.com/ankur-anand/unisondb/dbkernel"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -39,18 +39,18 @@ var (
 // Replicator replicates from the engine and send batched wal records,
 // as configured or if timeout expires.
 type Replicator struct {
-	engine           *dbengine.Engine
+	engine           *dbkernel.Engine
 	batchSize        int
 	batchDuration    time.Duration
-	lastOffset       *dbengine.Offset
+	lastOffset       *dbkernel.Offset
 	replicatorEngine string
 }
 
 // NewReplicator returns an initialized Replicator that could be used for replicating
 // the wal.
-func NewReplicator(e *dbengine.Engine, batchSize int,
+func NewReplicator(e *dbkernel.Engine, batchSize int,
 	batchDuration time.Duration,
-	startOffset *dbengine.Offset, replicatorEngine string) *Replicator {
+	startOffset *dbkernel.Offset, replicatorEngine string) *Replicator {
 	return &Replicator{
 		engine:           e,
 		batchSize:        batchSize,
@@ -76,7 +76,7 @@ func (r *Replicator) Replicate(ctx context.Context, recordsChan chan<- []*v1.WAL
 
 		err := r.engine.WaitForAppend(ctx, r.batchDuration, r.lastOffset)
 
-		if err != nil && !errors.Is(err, dbengine.ErrWaitTimeoutExceeded) {
+		if err != nil && !errors.Is(err, dbkernel.ErrWaitTimeoutExceeded) {
 			return err
 		}
 
@@ -158,7 +158,7 @@ func (r *Replicator) replicateFromReader(ctx context.Context, recordsChan chan<-
 	return nil
 }
 
-func (r *Replicator) getReader() (*dbengine.Reader, error) {
+func (r *Replicator) getReader() (*dbkernel.Reader, error) {
 	if r.lastOffset == nil {
 		reader, err := r.engine.NewReader()
 		return reader, err

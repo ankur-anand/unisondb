@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	storage "github.com/ankur-anand/unisondb/dbengine"
+	storage "github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/middleware"
 	"github.com/ankur-anand/unisondb/internal/services/kvstore"
 	"github.com/ankur-anand/unisondb/pkg/splitter"

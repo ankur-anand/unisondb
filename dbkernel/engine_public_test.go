@@ -1,4 +1,4 @@
-package dbengine_test
+package dbkernel_test
 
 import (
 	"context"
@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/anishathalye/porcupine"
-	"github.com/ankur-anand/unisondb/dbengine"
-	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,9 +23,9 @@ func TestStorageEngine(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test_namespace"
 
-	conf := dbengine.NewDefaultEngineConfig()
+	conf := dbkernel.NewDefaultEngineConfig()
 	// Initialize Engine
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, conf)
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, conf)
 	assert.NoError(t, err, "Failed to initialize storage engine")
 	assert.NotNil(t, engine, "Engine should not be nil")
 
@@ -36,7 +36,7 @@ func TestPutGet_Delete(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test_put_get"
 
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := engine.Close(context.Background())
@@ -69,7 +69,7 @@ func TestPutGet_Delete(t *testing.T) {
 
 	t.Run("delete_get", func(t *testing.T) {
 		retrievedValue, err := engine.Get(key)
-		assert.ErrorIs(t, err, dbengine.ErrKeyNotFound, "Get operation should succeed")
+		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Get operation should succeed")
 		assert.Nil(t, retrievedValue, "Retrieved value should match the inserted value")
 	})
 }
@@ -78,7 +78,7 @@ func TestConcurrentWrites(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test_concurrent"
 
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := engine.Close(context.Background())
@@ -118,7 +118,7 @@ func TestSnapshot(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test_persistence"
 
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 
 	key := []byte("persist_key")
@@ -130,7 +130,7 @@ func TestSnapshot(t *testing.T) {
 	err = engine.Close(context.Background())
 	assert.NoError(t, err, "Failed to close engine")
 
-	engine, err = dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	engine, err = dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 
 	retrievedValue, err := engine.Get(key)
@@ -144,7 +144,7 @@ func TestNoMultiple_ProcessNot_Allowed(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test_persistence"
 
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := engine.Close(context.Background())
@@ -154,15 +154,15 @@ func TestNoMultiple_ProcessNot_Allowed(t *testing.T) {
 	})
 
 	// Second run: should error out.
-	_, err = dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
-	assert.ErrorIs(t, err, dbengine.ErrDatabaseDirInUse, "expected pid lock err")
+	_, err = dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	assert.ErrorIs(t, err, dbkernel.ErrDatabaseDirInUse, "expected pid lock err")
 }
 
 func TestEngine_WaitForAppend(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test_persistence"
 
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := engine.Close(context.Background())
@@ -178,7 +178,7 @@ func TestEngine_WaitForAppend(t *testing.T) {
 	timeout := 100 * time.Millisecond
 
 	err = engine.WaitForAppend(ctx, timeout, nil)
-	assert.ErrorIs(t, err, dbengine.ErrWaitTimeoutExceeded, "no put op has been called should timeout")
+	assert.ErrorIs(t, err, dbkernel.ErrWaitTimeoutExceeded, "no put op has been called should timeout")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -226,7 +226,7 @@ func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test_persistence"
 
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := engine.Close(context.Background())
@@ -264,7 +264,7 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test_persistence"
 
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := engine.Close(context.Background())
@@ -280,7 +280,7 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 	putKV[string(putKey)] = putValue
 
 	eof := make(chan struct{})
-	read := func(reader *dbengine.Reader) {
+	read := func(reader *dbkernel.Reader) {
 		err := engine.WaitForAppend(context.Background(), 1*time.Minute, nil)
 		assert.NoError(t, err, "WaitForAppend should return without timeout after Put")
 		for {
@@ -349,7 +349,7 @@ func TestEngineLinearizability(t *testing.T) {
 	dir := t.TempDir()
 	nameSpace := "test_namespace"
 	// Create the engine
-	engine, err := dbengine.NewStorageEngine(dir, nameSpace, dbengine.NewDefaultEngineConfig())
+	engine, err := dbkernel.NewStorageEngine(dir, nameSpace, dbkernel.NewDefaultEngineConfig())
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -483,7 +483,7 @@ func TestEngine_RowOperations(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test_persistence"
 
-	engine, err := dbengine.NewStorageEngine(baseDir, namespace, dbengine.NewDefaultEngineConfig())
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := engine.Close(t.Context())
@@ -579,7 +579,7 @@ func TestEngine_RowOperations(t *testing.T) {
 		err = engine.DeleteRow(randomRow)
 		assert.NoError(t, err, "DeleteRow operation should succeed")
 		rowEntry, err := engine.GetRowColumns(randomRow, nil)
-		assert.ErrorIs(t, err, dbengine.ErrKeyNotFound, "failed to build column map")
+		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "failed to build column map")
 		assert.Nil(t, rowEntry, "unexpected column values")
 	})
 }

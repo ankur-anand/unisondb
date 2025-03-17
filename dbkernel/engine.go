@@ -1,4 +1,4 @@
-package dbengine
+package dbkernel
 
 import (
 	"bytes"
@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbengine/kvdb"
-	"github.com/ankur-anand/unisondb/dbengine/wal"
-	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbkernel/kvdb"
+	"github.com/ankur-anand/unisondb/dbkernel/wal"
+	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/dustin/go-humanize"

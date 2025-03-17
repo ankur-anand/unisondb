@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbengine"
+	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/middleware"
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/pkg/replicator"
@@ -35,13 +35,13 @@ var (
 // GrpcStreamer implements gRPC-based WALReplicationService.
 type GrpcStreamer struct {
 	// namespace mapped engine
-	storageEngines map[string]*dbengine.Engine
+	storageEngines map[string]*dbkernel.Engine
 	dynamicTimeout time.Duration
 	v2.UnimplementedWALReplicationServiceServer
 	errGrp *errgroup.Group
 }
 
-func NewGrpcStreamer(errGrp *errgroup.Group, storageEngines map[string]*dbengine.Engine, dynamicTimeout time.Duration) *GrpcStreamer {
+func NewGrpcStreamer(errGrp *errgroup.Group, storageEngines map[string]*dbkernel.Engine, dynamicTimeout time.Duration) *GrpcStreamer {
 	return &GrpcStreamer{
 		storageEngines: storageEngines,
 		dynamicTimeout: dynamicTimeout,
@@ -173,7 +173,7 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 				}
 			}
 		case err := <-replicatorErr:
-			if errors.Is(err, dbengine.ErrInvalidOffset) {
+			if errors.Is(err, dbkernel.ErrInvalidOffset) {
 				return services.ToGRPCError(namespace, reqID, method, services.ErrInvalidMetadata)
 			}
 			return services.ToGRPCError(namespace, reqID, method, err)
@@ -205,7 +205,7 @@ func (s *GrpcStreamer) flushBatch(batch []*v2.WALRecord, g grpc.ServerStream) er
 }
 
 // decodeMetadata protects from panic and decodes.
-func decodeMetadata(data []byte) (o *dbengine.Offset, err error) {
+func decodeMetadata(data []byte) (o *dbkernel.Offset, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("decode ChunkPosition: Panic recovered %v", r)
@@ -214,6 +214,6 @@ func decodeMetadata(data []byte) (o *dbengine.Offset, err error) {
 	if len(data) == 0 {
 		return nil, nil
 	}
-	o = dbengine.DecodeOffset(data)
+	o = dbkernel.DecodeOffset(data)
 	return o, err
 }

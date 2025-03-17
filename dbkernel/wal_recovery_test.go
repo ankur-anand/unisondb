@@ -1,13 +1,13 @@
-package dbengine
+package dbkernel
 
 import (
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/unisondb/dbengine/kvdb"
-	"github.com/ankur-anand/unisondb/dbengine/wal"
-	"github.com/ankur-anand/unisondb/dbengine/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbkernel/kvdb"
+	"github.com/ankur-anand/unisondb/dbkernel/wal"
+	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/hashicorp/go-metrics"

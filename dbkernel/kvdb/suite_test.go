@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/unisondb/dbengine/kvdb"
+	"github.com/ankur-anand/unisondb/dbkernel/kvdb"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 )
