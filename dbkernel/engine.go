@@ -14,9 +14,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
-	"github.com/ankur-anand/unisondb/dbkernel/wal"
-	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
+	kvdrivers2 "github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/memtable"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
+	"github.com/ankur-anand/unisondb/internal/logcodec"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/dustin/go-humanize"
@@ -62,8 +64,8 @@ type Engine struct {
 	fileLock          *flock.Flock
 	wg                *sync.WaitGroup
 	bloom             *bloom.BloomFilter
-	activeMemTable    *memTable
-	sealedMemTables   []*memTable
+	activeMemTable    *memtable.MemTable
+	sealedMemTables   []*memtable.MemTable
 	flushReqSignal    chan struct{}
 	pendingMetadata   *pendingMetadata
 	fsyncReqSignal    chan struct{}
@@ -73,8 +75,9 @@ type Engine struct {
 	shutdown              atomic.Bool
 
 	// uses a cond broadcast for notification.
-	notifierMu sync.RWMutex
-	notifier   *sync.Cond
+	notifierMu    sync.RWMutex
+	notifier      *sync.Cond
+	newTxnBatcher func(maxBatchSize int) TxnBatcher
 
 	// used only during testing
 	callback func()
@@ -154,13 +157,13 @@ func (e *Engine) initStorage(dataDir, namespace string, conf *EngineConfig) erro
 	var bTreeStore BTreeStore
 	switch conf.DBEngine {
 	case BoltDBEngine:
-		db, err := kvdrivers.NewBoltdb(dbFile, conf.BtreeConfig)
+		db, err := kvdrivers2.NewBoltdb(dbFile, conf.BtreeConfig)
 		if err != nil {
 			return err
 		}
 		bTreeStore = db
 	case LMDBEngine:
-		db, err := kvdrivers.NewLmdb(dbFile, conf.BtreeConfig)
+		db, err := kvdrivers2.NewLmdb(dbFile, conf.BtreeConfig)
 		if err != nil {
 			return err
 		}
@@ -176,7 +179,7 @@ func (e *Engine) initStorage(dataDir, namespace string, conf *EngineConfig) erro
 		return errors.New("arena capacity too small min capacity 2 KB")
 	}
 
-	mTable := newMemTable(conf.ArenaSize, bTreeStore, walIO, namespace)
+	mTable := memtable.NewMemTable(conf.ArenaSize, bTreeStore, walIO, namespace)
 	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001) // 1M keys, 0.01% false positives
 	e.bloom = bloomFilter
 	e.activeMemTable = mTable
@@ -198,11 +201,11 @@ func tryFileLock(fileLock *flock.Flock) error {
 // loadMetaValues loads meta value that the engine stores.
 func (e *Engine) loadMetaValues() error {
 	data, err := e.dataStore.RetrieveMetadata(sysKeyWalCheckPoint)
-	if err != nil && !errors.Is(err, kvdrivers.ErrKeyNotFound) {
+	if err != nil && !errors.Is(err, kvdrivers2.ErrKeyNotFound) {
 		return err
 	}
 	// there is no value even for bloom filter.
-	if errors.Is(err, kvdrivers.ErrKeyNotFound) {
+	if errors.Is(err, kvdrivers2.ErrKeyNotFound) {
 		return nil
 	}
 	metadata := UnmarshalMetadata(data)
@@ -249,7 +252,7 @@ func (e *Engine) recoverWAL() error {
 		return err
 	}
 
-	slog.Info("[kvalchemy.dbengine] wal recovered",
+	slog.Info("[unisondb.dbkernal] wal recovered",
 		"recovered_count", recovery.recoveredCount,
 		"namespace", e.namespace,
 		"btree_engine", e.config.DBEngine,
@@ -277,8 +280,8 @@ func (e *Engine) recoverWAL() error {
 		case e.fsyncReqSignal <- struct{}{}:
 		default:
 			// this path should not happen in normal code base.
-			slog.Error("[kvalchemy.dbengine] fsync req signal channel is full while recovering itself")
-			panic("[kvalchemy.dbengine] fsync req signal channel is full while recovering itself")
+			slog.Error("[unisondb.dbkernal] fsync req signal channel is full while recovering itself")
+			panic("[unisondb.dbkernal] fsync req signal channel is full while recovering itself")
 		}
 	}
 
@@ -297,26 +300,34 @@ func (e *Engine) recoverWAL() error {
 //   - Updates the Bloom filter for quick existence checks.
 //
 // 5. Store the current Chunk Position in the variable.
-func (e *Engine) persistKeyValue(key []byte, value []byte, op walrecord.LogOperation) error {
+func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.LogOperationType) error {
+	kvEntries := make([]logcodec.KeyValueEntry, 0, len(keys))
+
+	for i, entry := range keys {
+		kv := logcodec.KeyValueEntry{
+			Key:   entry,
+			Value: values[i],
+		}
+		kvEntries = append(kvEntries, kv)
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	index := e.writeSeenCounter.Add(1)
 	hlc := HLCNow(index)
-	record := walrecord.Record{
-		Index:        index,
-		Hlc:          hlc,
-		Key:          key,
-		Value:        value,
-		LogOperation: op,
-		TxnStatus:    walrecord.TxnStatusTxnNone,
-		EntryType:    walrecord.EntryTypeKV,
+
+	record := logcodec.LogRecord{
+		LSN:           index,
+		HLC:           hlc,
+		OperationType: op,
+		TxnState:      logrecord.TransactionStateNone,
+		EntryType:     logrecord.LogEntryTypeKV,
+		Payload: logcodec.LogOperationData{
+			KeyValueBatchEntries: &logcodec.KeyValueBatchEntries{Entries: kvEntries},
+		},
 	}
 
-	encoded, err := record.FBEncode()
-
-	if err != nil {
-		return err
-	}
+	encoded := record.FBEncode()
 
 	// Write to WAL
 	offset, err := e.walIO.Append(encoded)
@@ -324,49 +335,58 @@ func (e *Engine) persistKeyValue(key []byte, value []byte, op walrecord.LogOpera
 		return err
 	}
 
-	var memValue y.ValueStruct
-	if int64(len(value)) <= e.config.ValueThreshold {
-		memValue = getValueStruct(byte(op), true, encoded)
-	} else {
-		memValue = getValueStruct(byte(op), false, offset.Encode())
+	for _, entry := range kvEntries {
+		var memValue y.ValueStruct
+		if int64(len(encoded)) <= e.config.ValueThreshold {
+			memValue = getValueStruct(byte(op), true, encoded)
+		} else {
+			memValue = getValueStruct(byte(op), false, offset.Encode())
+		}
+
+		err = e.memTableWrite(entry.Key, memValue, offset)
+
+		if err != nil {
+			return err
+		}
 	}
 
-	err = e.memTableWrite(key, memValue, offset)
-
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
 // persistRowColumnAction writes the columnEntries for the given rowKey in the wal and mem-table.
-func (e *Engine) persistRowColumnAction(op walrecord.LogOperation, rowKey []byte, columnEntries map[string][]byte) error {
+func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [][]byte, columnsEntries []map[string][]byte) error {
+	rowEntries := make([]logcodec.RowUpdateEntry, 0, len(rowKeys))
+
+	for i, entry := range rowKeys {
+		column := columnsEntries[i]
+		columnEntries := make([]logcodec.ColumnData, 0, len(column))
+		for cName, cValue := range column {
+			columnEntries = append(columnEntries, logcodec.ColumnData{
+				Name:  cName,
+				Value: cValue,
+			})
+		}
+		rowEntries = append(rowEntries, logcodec.RowUpdateEntry{Key: entry, Columns: columnEntries})
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	index := e.writeSeenCounter.Add(1)
 	hlc := HLCNow(index)
-	valueSize := 0
-	for k, v := range columnEntries {
-		valueSize += len(k) + len(v)
+
+	record := logcodec.LogRecord{
+		LSN:           index,
+		HLC:           hlc,
+		OperationType: op,
+		TxnState:      logrecord.TransactionStateNone,
+		EntryType:     logrecord.LogEntryTypeRow,
+		Payload: logcodec.LogOperationData{
+			RowUpdateEntries: &logcodec.RowUpdateEntries{Entries: rowEntries},
+		},
 	}
 
-	record := walrecord.Record{
-		Index:         index,
-		Hlc:           hlc,
-		Key:           rowKey,
-		Value:         nil,
-		LogOperation:  op,
-		TxnStatus:     walrecord.TxnStatusTxnNone,
-		EntryType:     walrecord.EntryTypeRow,
-		ColumnEntries: columnEntries,
-	}
-
-	encoded, err := record.FBEncode()
-
-	if err != nil {
-		return err
-	}
+	encoded := record.FBEncode()
 
 	// Write to WAL
 	offset, err := e.walIO.Append(encoded)
@@ -374,19 +394,21 @@ func (e *Engine) persistRowColumnAction(op walrecord.LogOperation, rowKey []byte
 		return err
 	}
 
-	var memValue y.ValueStruct
-	if int64(valueSize) <= e.config.ValueThreshold {
-		memValue = getValueStruct(byte(op), true, encoded)
-	} else {
-		memValue = getValueStruct(byte(op), false, offset.Encode())
+	for _, entry := range rowEntries {
+		var memValue y.ValueStruct
+		if int64(len(encoded)) <= e.config.ValueThreshold {
+			memValue = getValueStruct(byte(op), true, encoded)
+		} else {
+			memValue = getValueStruct(byte(op), false, offset.Encode())
+		}
+		memValue.UserMeta = entryTypeRow
+		err = e.memTableWrite(entry.Key, memValue, offset)
+
+		if err != nil {
+			return err
+		}
 	}
 
-	memValue.UserMeta = entryTypeRow
-	err = e.memTableWrite(rowKey, memValue, offset)
-
-	if err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -403,7 +425,7 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, offset *wal.Offset) 
 	var err error
 	err = e.activeMemTable.put(key, v, offset)
 	if err != nil {
-		if errors.Is(err, errArenaSizeWillExceed) {
+		if errors.Is(err, memtable.ErrArenaSizeWillExceed) {
 			metrics.IncrCounterWithLabels(mKeyMemTableRotationTotal, 1, e.metricsLabel)
 			e.rotateMemTable()
 			err = e.activeMemTable.put(key, v, offset)
@@ -427,7 +449,7 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, offset *wal.Offset) 
 func (e *Engine) rotateMemTableNoFlush() {
 	// put the old table in the queue
 	oldTable := e.activeMemTable
-	e.activeMemTable = newMemTable(e.config.ArenaSize, e.dataStore, e.walIO, e.namespace)
+	e.activeMemTable = memtable.newMemTable(e.config.ArenaSize, e.dataStore, e.walIO, e.namespace)
 	e.sealedMemTables = append(e.sealedMemTables, oldTable)
 	e.callback()
 }
@@ -435,7 +457,7 @@ func (e *Engine) rotateMemTableNoFlush() {
 func (e *Engine) rotateMemTable() {
 	// put the old table in the queue
 	oldTable := e.activeMemTable
-	e.activeMemTable = newMemTable(e.config.ArenaSize, e.dataStore, e.walIO, e.namespace)
+	e.activeMemTable = memtable.newMemTable(e.config.ArenaSize, e.dataStore, e.walIO, e.namespace)
 	e.sealedMemTables = append(e.sealedMemTables, oldTable)
 	select {
 	case e.flushReqSignal <- struct{}{}:
@@ -488,7 +510,7 @@ func (e *Engine) asyncMemTableFlusher(ctx context.Context) {
 
 // handleFlush flushes the sealed mem-table to btree store.
 func (e *Engine) handleFlush(ctx context.Context) {
-	var mt *memTable
+	var mt *memtable.memTable
 	e.mu.Lock()
 	metrics.SetGaugeWithLabels(mKeySealedMemTableTotal, float32(len(e.sealedMemTables)), e.metricsLabel)
 	if len(e.sealedMemTables) > 0 {

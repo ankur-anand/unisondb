@@ -3,7 +3,7 @@ package dbkernel
 import (
 	"encoding/binary"
 
-	"github.com/ankur-anand/unisondb/dbkernel/wal"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 )
 
 // Metadata represents a checkpoint in the Write-Ahead Log (WAL).

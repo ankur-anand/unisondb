@@ -1,4 +1,4 @@
-package dbkernel
+package memtable
 
 import (
 	"context"
@@ -7,8 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
-	"github.com/ankur-anand/unisondb/dbkernel/wal"
+	"github.com/ankur-anand/unisondb/dbkernel"
+	kvdrivers2 "github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
+	wal2 "github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/dgraph-io/badger/v4/y"
@@ -20,12 +21,12 @@ const (
 	testNamespace = "test_namespace"
 )
 
-func setupMemTableWithLMDB(t *testing.T, capacity int64) *memTable {
+func setupMemTableWithLMDB(t *testing.T, capacity int64) *MemTable {
 	dir := t.TempDir()
 
 	dbFile := filepath.Join(dir, "test_flush.db")
 
-	db, err := kvdrivers.NewLmdb(dbFile, kvdrivers.Config{
+	db, err := kvdrivers2.NewLmdb(dbFile, kvdrivers2.Config{
 		Namespace: testNamespace,
 		NoSync:    true,
 		MmapSize:  1 << 30,
@@ -42,22 +43,22 @@ func setupMemTableWithLMDB(t *testing.T, capacity int64) *memTable {
 	err = os.MkdirAll(walDir, 0777)
 	assert.NoError(t, err)
 
-	walInstance, err := wal.NewWalIO(walDir, testNamespace, wal.NewDefaultConfig(), metrics.Default())
+	walInstance, err := wal2.NewWalIO(walDir, testNamespace, wal2.NewDefaultConfig(), metrics.Default())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := walInstance.Close()
 		assert.NoError(t, err, "failed to close wal")
 	})
 
-	return newMemTable(capacity, db, walInstance, testNamespace)
+	return NewMemTable(capacity, db, walInstance, testNamespace)
 }
 
-func setupMemTableWithBoltDB(t *testing.T, capacity int64) *memTable {
+func setupMemTableWithBoltDB(t *testing.T, capacity int64) *MemTable {
 	dir := t.TempDir()
 
 	dbFile := filepath.Join(dir, "test_flush.db")
 
-	db, err := kvdrivers.NewBoltdb(dbFile, kvdrivers.Config{
+	db, err := kvdrivers2.NewBoltdb(dbFile, kvdrivers2.Config{
 		Namespace: testNamespace,
 		NoSync:    true,
 		MmapSize:  1 << 30,
@@ -74,65 +75,65 @@ func setupMemTableWithBoltDB(t *testing.T, capacity int64) *memTable {
 	err = os.MkdirAll(walDir, 0777)
 	assert.NoError(t, err)
 
-	walInstance, err := wal.NewWalIO(walDir, testNamespace, wal.NewDefaultConfig(), metrics.Default())
+	walInstance, err := wal2.NewWalIO(walDir, testNamespace, wal2.NewDefaultConfig(), metrics.Default())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := walInstance.Close()
 		assert.NoError(t, err, "failed to close wal")
 	})
 
-	return newMemTable(capacity, db, walInstance, testNamespace)
+	return NewMemTable(capacity, db, walInstance, testNamespace)
 }
 
 func TestMemTable_PutAndGet(t *testing.T) {
 	const capacity = 1 << 20
-	table := newMemTable(capacity, nil, nil, "")
+	table := NewMemTable(capacity, nil, nil, "")
 
 	// Create a test key, value, and WAL position.
 	key := []byte("test-key")
 	val := y.ValueStruct{Value: []byte("test-value")}
-	pos := new(wal.Offset)
+	pos := new(wal2.Offset)
 	pos.SegmentId = 1
 
 	assert.True(t, table.canPut(key, val), "expected canPut to return true for key %q", key)
-	err := table.put(key, val, pos)
-	assert.NoError(t, err, "unexpected error on put")
+	err := table.Put(key, val, pos)
+	assert.NoError(t, err, "unexpected error on Put")
 
-	gotVal := table.get(key)
+	gotVal := table.Get(key)
 
-	assert.Equal(t, val.Value, gotVal.Value, "unexpected value on get")
-	assert.Equal(t, table.lastOffset, pos, "unexpected offset on get")
-	assert.Equal(t, table.firstOffset, pos, "unexpected offset on get")
+	assert.Equal(t, val.Value, gotVal.Value, "unexpected value on Get")
+	assert.Equal(t, table.lastOffset, pos, "unexpected offset on Get")
+	assert.Equal(t, table.firstOffset, pos, "unexpected offset on Get")
 }
 
 func TestMemTable_CannotPut(t *testing.T) {
 	const capacity = 1 << 10
-	table := newMemTable(capacity, nil, nil, "")
+	table := NewMemTable(capacity, nil, nil, "")
 
 	key := []byte("key")
 	// more than 1 KB
 	value := gofakeit.LetterN(1100)
 	val := y.ValueStruct{Value: []byte(value)}
-	pos := new(wal.Offset)
+	pos := new(wal2.Offset)
 	pos.SegmentId = 1
 
 	// should not panic
-	err := table.put(key, val, pos)
-	assert.ErrorIs(t, err, errArenaSizeWillExceed, "expected error on put")
+	err := table.Put(key, val, pos)
+	assert.ErrorIs(t, err, ErrArenaSizeWillExceed, "expected error on Put")
 }
 
 func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 
 	t.Run("flush_direct_value", func(t *testing.T) {
-		// put direct values on mem table.
+		// Put direct values on mem table.
 		memTable := setupMemTableWithLMDB(t, 1<<20)
 		recordCount := 10
 		kv := generateNFBRecord(t, uint64(recordCount))
 		for k, v := range kv {
 			offset, err := memTable.wIO.Append(v)
 			assert.NoError(t, err)
-			vs := getValueStruct(logOperationInsert, true, v)
-			err = memTable.put([]byte(k), vs, offset)
+			vs := dbkernel.getValueStruct(dbkernel.logOperationInsert, true, v)
+			err = memTable.Put([]byte(k), vs, offset)
 			assert.NoError(t, err)
 		}
 
@@ -141,18 +142,18 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
-			assert.NoError(t, err, "failed to get")
+			assert.NoError(t, err, "failed to Get")
 			recordValue := walrecord.GetRootAsWalRecord(v, 0)
-			assert.Equal(t, recordValue.ValueBytes(), retrievedValue, "unexpected value on get")
+			assert.Equal(t, recordValue.ValueBytes(), retrievedValue, "unexpected value on Get")
 		}
 	})
 
 	t.Run("flush_chunk_value", func(t *testing.T) {
-		// put direct values on mem table.
+		// Put direct values on mem table.
 		memTable := setupMemTableWithLMDB(t, 1<<20)
 		recordCount := 10
 		key, values, checksum := generateNChunkFBRecord(t, uint64(recordCount))
-		var lastOffset *wal.Offset
+		var lastOffset *wal2.Offset
 		for _, value := range values {
 			value.PrevTxnOffset = lastOffset
 			encoded, err := value.FBEncode()
@@ -166,7 +167,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 			Index:         0,
 			Hlc:           0,
 			Key:           []byte(key),
-			Value:         marshalChecksum(checksum),
+			Value:         dbkernel.marshalChecksum(checksum),
 			LogOperation:  walrecord.LogOperationTxnMarker,
 			EntryType:     walrecord.EntryTypeChunked,
 			TxnStatus:     walrecord.TxnStatusCommit,
@@ -180,8 +181,8 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		assert.NoError(t, err)
 		lastOffset = offset
 
-		vs := getValueStruct(logOperationInsert, true, encoded)
-		err = memTable.put([]byte(key), vs, offset)
+		vs := dbkernel.getValueStruct(dbkernel.logOperationInsert, true, encoded)
+		err = memTable.Put([]byte(key), vs, offset)
 		assert.NoError(t, err)
 
 		count, err := memTable.flush(context.Background())
@@ -189,20 +190,20 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		assert.Equal(t, recordCount+2, count, "expected records to be flushed")
 
 		retrievedValue, err := memTable.db.Get([]byte(key))
-		assert.NoError(t, err, "failed to get")
-		assert.Equal(t, checksum, crc32.ChecksumIEEE(retrievedValue), "unexpected value on get")
+		assert.NoError(t, err, "failed to Get")
+		assert.Equal(t, checksum, crc32.ChecksumIEEE(retrievedValue), "unexpected value on Get")
 	})
 
 	t.Run("flush_indirect_value", func(t *testing.T) {
-		// put direct values on mem table.
+		// Put direct values on mem table.
 		memTable := setupMemTableWithLMDB(t, 1<<20)
 		recordCount := 10
 		kv := generateNFBRecord(t, uint64(recordCount))
 		for k, v := range kv {
 			offset, err := memTable.wIO.Append(v)
 			assert.NoError(t, err)
-			vs := getValueStruct(logOperationInsert, false, offset.Encode())
-			err = memTable.put([]byte(k), vs, offset)
+			vs := dbkernel.getValueStruct(dbkernel.logOperationInsert, false, offset.Encode())
+			err = memTable.Put([]byte(k), vs, offset)
 			assert.NoError(t, err)
 		}
 
@@ -211,9 +212,9 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
-			assert.NoError(t, err, "failed to get")
+			assert.NoError(t, err, "failed to Get")
 			recordValue := walrecord.GetRootAsWalRecord(v, 0)
-			assert.Equal(t, recordValue.ValueBytes(), retrievedValue, "unexpected value on get")
+			assert.Equal(t, recordValue.ValueBytes(), retrievedValue, "unexpected value on Get")
 		}
 	})
 }
@@ -221,15 +222,15 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 
 	t.Run("flush_direct_value", func(t *testing.T) {
-		// put direct values on mem table.
+		// Put direct values on mem table.
 		memTable := setupMemTableWithBoltDB(t, 1<<20)
 		recordCount := 10
 		kv := generateNFBRecord(t, uint64(recordCount))
 		for k, v := range kv {
 			offset, err := memTable.wIO.Append(v)
 			assert.NoError(t, err)
-			vs := getValueStruct(logOperationInsert, true, v)
-			err = memTable.put([]byte(k), vs, offset)
+			vs := dbkernel.getValueStruct(dbkernel.logOperationInsert, true, v)
+			err = memTable.Put([]byte(k), vs, offset)
 			assert.NoError(t, err)
 		}
 
@@ -238,18 +239,18 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
-			assert.NoError(t, err, "failed to get")
+			assert.NoError(t, err, "failed to Get")
 			recordValue := walrecord.GetRootAsWalRecord(v, 0)
-			assert.Equal(t, recordValue.ValueBytes(), retrievedValue, "unexpected value on get")
+			assert.Equal(t, recordValue.ValueBytes(), retrievedValue, "unexpected value on Get")
 		}
 	})
 
 	t.Run("flush_chunk_value", func(t *testing.T) {
-		// put direct values on mem table.
+		// Put direct values on mem table.
 		memTable := setupMemTableWithBoltDB(t, 1<<20)
 		recordCount := 10
 		key, values, checksum := generateNChunkFBRecord(t, uint64(recordCount))
-		var lastOffset *wal.Offset
+		var lastOffset *wal2.Offset
 		for _, value := range values {
 			value.PrevTxnOffset = lastOffset
 			encoded, err := value.FBEncode()
@@ -263,7 +264,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 			Index:         0,
 			Hlc:           0,
 			Key:           []byte(key),
-			Value:         marshalChecksum(checksum),
+			Value:         dbkernel.marshalChecksum(checksum),
 			LogOperation:  walrecord.LogOperationTxnMarker,
 			EntryType:     walrecord.EntryTypeChunked,
 			TxnStatus:     walrecord.TxnStatusCommit,
@@ -277,8 +278,8 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		assert.NoError(t, err)
 		lastOffset = offset
 
-		vs := getValueStruct(logOperationInsert, true, encoded)
-		err = memTable.put([]byte(key), vs, offset)
+		vs := dbkernel.getValueStruct(dbkernel.logOperationInsert, true, encoded)
+		err = memTable.Put([]byte(key), vs, offset)
 		assert.NoError(t, err)
 
 		count, err := memTable.flush(context.Background())
@@ -286,20 +287,20 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		assert.Equal(t, recordCount+2, count, "expected records to be flushed")
 
 		retrievedValue, err := memTable.db.Get([]byte(key))
-		assert.NoError(t, err, "failed to get")
-		assert.Equal(t, checksum, crc32.ChecksumIEEE(retrievedValue), "unexpected value on get")
+		assert.NoError(t, err, "failed to Get")
+		assert.Equal(t, checksum, crc32.ChecksumIEEE(retrievedValue), "unexpected value on Get")
 	})
 
 	t.Run("flush_indirect_value", func(t *testing.T) {
-		// put direct values on mem table.
+		// Put direct values on mem table.
 		memTable := setupMemTableWithBoltDB(t, 1<<20)
 		recordCount := 10
 		kv := generateNFBRecord(t, uint64(recordCount))
 		for k, v := range kv {
 			offset, err := memTable.wIO.Append(v)
 			assert.NoError(t, err)
-			vs := getValueStruct(logOperationInsert, false, offset.Encode())
-			err = memTable.put([]byte(k), vs, offset)
+			vs := dbkernel.getValueStruct(dbkernel.logOperationInsert, false, offset.Encode())
+			err = memTable.Put([]byte(k), vs, offset)
 			assert.NoError(t, err)
 		}
 
@@ -308,16 +309,16 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
-			assert.NoError(t, err, "failed to get")
+			assert.NoError(t, err, "failed to Get")
 			recordValue := walrecord.GetRootAsWalRecord(v, 0)
-			assert.Equal(t, recordValue.ValueBytes(), retrievedValue, "unexpected value on get")
+			assert.Equal(t, recordValue.ValueBytes(), retrievedValue, "unexpected value on Get")
 		}
 	})
 }
 
 func TestMemTable_Flush_SetDelete(t *testing.T) {
 
-	// put direct values on mem table.
+	// Put direct values on mem table.
 	memTable := setupMemTableWithBoltDB(t, 1<<20)
 	recordCount := 10
 	kv := generateNFBRecord(t, uint64(recordCount))
@@ -327,8 +328,8 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 		for k, v := range kv {
 			offset, err := memTable.wIO.Append(v)
 			assert.NoError(t, err)
-			vs := getValueStruct(logOperationInsert, true, v)
-			err = memTable.put([]byte(k), vs, offset)
+			vs := dbkernel.getValueStruct(dbkernel.logOperationInsert, true, v)
+			err = memTable.Put([]byte(k), vs, offset)
 			assert.NoError(t, err)
 		}
 
@@ -337,18 +338,18 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
-			assert.NoError(t, err, "failed to get")
+			assert.NoError(t, err, "failed to Get")
 			recordValue := walrecord.GetRootAsWalRecord(v, 0)
-			assert.Equal(t, recordValue.ValueBytes(), retrievedValue, "unexpected value on get")
+			assert.Equal(t, recordValue.ValueBytes(), retrievedValue, "unexpected value on Get")
 		}
 	})
 
 	t.Run("flush_delete_value", func(t *testing.T) {
 		for k, v := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
-			assert.NoError(t, err, "failed to get")
+			assert.NoError(t, err, "failed to Get")
 			recordValue := walrecord.GetRootAsWalRecord(v, 0)
-			assert.Equal(t, recordValue.ValueBytes(), retrievedValue, "unexpected value on get")
+			assert.Equal(t, recordValue.ValueBytes(), retrievedValue, "unexpected value on Get")
 			record := walrecord.Record{
 				Index:         1,
 				Hlc:           1,
@@ -365,8 +366,8 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 			assert.NoError(t, err)
 			offset, err := memTable.wIO.Append(encoded)
 			assert.NoError(t, err)
-			vs := getValueStruct(logOperationDelete, true, encoded)
-			err = memTable.put([]byte(k), vs, offset)
+			vs := dbkernel.getValueStruct(dbkernel.logOperationDelete, true, encoded)
+			err = memTable.Put([]byte(k), vs, offset)
 			assert.NoError(t, err)
 		}
 
@@ -376,7 +377,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 		for k := range kv {
 			retrievedValue, err := memTable.db.Get([]byte(k))
 			assert.Nil(t, retrievedValue)
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "failed to get")
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound, "failed to Get")
 		}
 	})
 }
@@ -479,7 +480,7 @@ func TestRow_KeysPut(t *testing.T) {
 
 			record := &walrecord.Record{
 				Index:         uint64(j),
-				Hlc:           HLCNow(uint64(j)),
+				Hlc:           dbkernel.HLCNow(uint64(j)),
 				Key:           []byte(rowKey),
 				Value:         nil,
 				LogOperation:  walrecord.LogOperationInsert,
@@ -493,17 +494,17 @@ func TestRow_KeysPut(t *testing.T) {
 			encoded, err := record.FBEncode()
 			assert.NoError(t, err)
 
-			v := getValueStruct(logOperationInsert, true, encoded)
-			v.UserMeta = entryTypeRow
-			err = mmTable.put([]byte(rowKey), v, nil)
+			v := dbkernel.getValueStruct(dbkernel.logOperationInsert, true, encoded)
+			v.UserMeta = dbkernel.entryTypeRow
+			err = mmTable.Put([]byte(rowKey), v, nil)
 			assert.NoError(t, err)
 		}
 	}
 
 	for k, v := range rowsEntries {
-		rowEntries := mmTable.getRowYValue([]byte(k))
+		rowEntries := mmTable.GetRowYValue([]byte(k))
 		buildColumns := make(map[string][]byte)
-		err := buildColumnMap(buildColumns, rowEntries, mmTable.wIO)
+		err := dbkernel.buildColumnMap(buildColumns, rowEntries, mmTable.wIO)
 		assert.NoError(t, err, "failed to build column map")
 		assert.Equal(t, len(v), len(buildColumns), "unexpected number of column values")
 		assert.Equal(t, v, buildColumns, "unexpected column values")
@@ -519,7 +520,7 @@ func TestRow_KeysPut(t *testing.T) {
 
 	record := &walrecord.Record{
 		Index:         uint64(50),
-		Hlc:           HLCNow(uint64(50)),
+		Hlc:           dbkernel.HLCNow(uint64(50)),
 		Key:           []byte(randomRow),
 		Value:         nil,
 		LogOperation:  walrecord.LogOperationDelete,
@@ -533,14 +534,14 @@ func TestRow_KeysPut(t *testing.T) {
 	encoded, err := record.FBEncode()
 	assert.NoError(t, err)
 
-	v := getValueStruct(logOperationDelete, true, encoded)
-	v.UserMeta = entryTypeRow
-	err = mmTable.put([]byte(randomRow), v, nil)
+	v := dbkernel.getValueStruct(dbkernel.logOperationDelete, true, encoded)
+	v.UserMeta = dbkernel.entryTypeRow
+	err = mmTable.Put([]byte(randomRow), v, nil)
 	assert.NoError(t, err)
 
-	rowEntries := mmTable.getRowYValue([]byte(randomRow))
+	rowEntries := mmTable.GetRowYValue([]byte(randomRow))
 	buildColumns := make(map[string][]byte)
-	err = buildColumnMap(buildColumns, rowEntries, mmTable.wIO)
+	err = dbkernel.buildColumnMap(buildColumns, rowEntries, mmTable.wIO)
 	assert.NoError(t, err, "failed to build column map")
 	assert.Equal(t, len(buildColumns), len(columnMap)-len(deleteEntries), "unexpected number of column values")
 	assert.NotContains(t, buildColumns, deleteEntries, "unexpected column values")

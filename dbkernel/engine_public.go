@@ -10,9 +10,10 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
-	"github.com/ankur-anand/unisondb/dbkernel/wal"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/hashicorp/go-metrics"
 )
@@ -69,7 +70,7 @@ func (cw *countingWriter) Write(p []byte) (int, error) {
 
 // BtreeSnapshot returns the snapshot of the current btree store.
 func (e *Engine) BtreeSnapshot(w io.Writer) (int64, error) {
-	slog.Info("[kvalchemy.dbengine] BTree snapshot received")
+	slog.Info("[unisondb.dbkernal] BTree snapshot received")
 	startTime := time.Now()
 	cw := &countingWriter{w: w}
 	metrics.IncrCounterWithLabels(mKeySnapshotTotal, 1, e.metricsLabel)
@@ -80,7 +81,7 @@ func (e *Engine) BtreeSnapshot(w io.Writer) (int64, error) {
 
 	err := e.dataStore.Snapshot(cw)
 	if err != nil {
-		slog.Error("[kvalchemy.dbengine] BTree snapshot error", "error", err)
+		slog.Error("[unisondb.dbkernal] BTree snapshot error", "error", err)
 	}
 	return cw.count, err
 }
@@ -121,7 +122,7 @@ func (e *Engine) Put(key, value []byte) error {
 		metrics.MeasureSinceWithLabels(mKeyPutDuration, startTime, e.metricsLabel)
 	}()
 
-	return e.persistKeyValue(key, value, walrecord.LogOperationInsert)
+	return e.persistKeyValue([][]byte{key}, [][]byte{value}, logrecord.LogOperationTypeInsert)
 }
 
 // Delete removes a key and its value pair from WAL and MemTable.
@@ -136,7 +137,7 @@ func (e *Engine) Delete(key []byte) error {
 		metrics.MeasureSinceWithLabels(mKeyDeleteDuration, startTime, e.metricsLabel)
 	}()
 
-	return e.persistKeyValue(key, nil, walrecord.LogOperationDelete)
+	return e.persistKeyValue([][]byte{key}, nil, logrecord.LogOperationTypeDelete)
 }
 
 // WaitForAppend blocks until a put/delete operation occurs or timeout happens or context cancelled is done.
@@ -261,7 +262,9 @@ func (e *Engine) SetColumnsInRow(rowKey string, columnEntries map[string][]byte)
 		metrics.MeasureSinceWithLabels(mKeyRowSetDuration, startTime, e.metricsLabel)
 	}()
 
-	return e.persistRowColumnAction(walrecord.LogOperationInsert, []byte(rowKey), columnEntries)
+	columnsEntries := make([]map[string][]byte, 0, 1)
+	columnsEntries = append(columnsEntries, columnEntries)
+	return e.persistRowColumnAction(logrecord.LogOperationTypeInsert, [][]byte{[]byte(rowKey)}, columnsEntries)
 }
 
 // DeleteColumnsFromRow removes the specified columns from the given row key.
@@ -274,8 +277,9 @@ func (e *Engine) DeleteColumnsFromRow(rowKey string, columnEntries map[string][]
 	defer func() {
 		metrics.MeasureSinceWithLabels(mKeyRowDeleteDuration, startTime, e.metricsLabel)
 	}()
-
-	return e.persistRowColumnAction(walrecord.LogOperationDelete, []byte(rowKey), columnEntries)
+	columnsEntries := make([]map[string][]byte, 0, 1)
+	columnsEntries = append(columnsEntries, columnEntries)
+	return e.persistRowColumnAction(logrecord.LogOperationTypeDelete, [][]byte{[]byte(rowKey)}, columnsEntries)
 }
 
 // DeleteRow removes an entire row and all its associated column entries.
@@ -289,7 +293,7 @@ func (e *Engine) DeleteRow(rowKey string) error {
 		metrics.MeasureSinceWithLabels(mKeyRowDeleteDuration, startTime, e.metricsLabel)
 	}()
 
-	return e.persistRowColumnAction(walrecord.LogOperationDeleteRow, []byte(rowKey), nil)
+	return e.persistRowColumnAction(logrecord.LogOperationTypeDeleteRowByKey, [][]byte{[]byte(rowKey)}, nil)
 }
 
 // GetRowColumns returns all the column value associated with the row. It's filters columns if predicate
@@ -315,7 +319,7 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 			return nil, ErrKeyNotFound
 		}
 		first := e.activeMemTable.getRowYValue(key)
-		if len(first) != 0 && first[len(first)-1].Meta == byte(walrecord.LogOperationDeleteRow) {
+		if len(first) != 0 && first[len(first)-1].Meta == byte(logrecord.LogOperationTypeDeleteRowByKey) {
 			return nil, ErrKeyNotFound
 		}
 		// get the columns value from the old sealed table to new mem table.

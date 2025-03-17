@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
-	"github.com/ankur-anand/unisondb/dbkernel/wal"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 )

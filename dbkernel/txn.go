@@ -6,7 +6,7 @@ import (
 	"hash/crc32"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel/wal"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/hashicorp/go-metrics"

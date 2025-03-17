@@ -5,8 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
-	"github.com/ankur-anand/unisondb/dbkernel/wal"
+	kvdrivers2 "github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/memtable"
+	wal2 "github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"
@@ -20,11 +21,11 @@ func TestWalRecovery(t *testing.T) {
 	err := os.MkdirAll(walDir, 0777)
 	assert.NoError(t, err)
 
-	walConfig := wal.NewDefaultConfig()
+	walConfig := wal2.NewDefaultConfig()
 	//walConfig.FSync = true
 	//walConfig.SyncInterval = 0
 	//walConfig.BytesPerSync = 0
-	walInstance, err := wal.NewWalIO(walDir, testNamespace, walConfig, metrics.Default())
+	walInstance, err := wal2.NewWalIO(walDir, memtable.testNamespace, walConfig, metrics.Default())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := walInstance.Close()
@@ -33,8 +34,8 @@ func TestWalRecovery(t *testing.T) {
 
 	dbFile := filepath.Join(tdir, "test_flush.db")
 
-	db, err := kvdrivers.NewLmdb(dbFile, kvdrivers.Config{
-		Namespace: testNamespace,
+	db, err := kvdrivers2.NewLmdb(dbFile, kvdrivers2.Config{
+		Namespace: memtable.testNamespace,
 		NoSync:    true,
 		MmapSize:  1 << 30,
 	})
@@ -51,7 +52,7 @@ func TestWalRecovery(t *testing.T) {
 	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001)
 	// 50 full insert value.
 	recordCount := 50
-	kv := generateNFBRecord(t, uint64(recordCount))
+	kv := memtable.generateNFBRecord(t, uint64(recordCount))
 
 	for k, v := range kv {
 		_, err := walInstance.Append(v)
@@ -61,8 +62,8 @@ func TestWalRecovery(t *testing.T) {
 
 	// 9 chunked Value. One is start record
 	recordCount = 10
-	key, values, checksum := generateNChunkFBRecord(t, uint64(recordCount))
-	var lastOffset *wal.Offset
+	key, values, checksum := memtable.generateNChunkFBRecord(t, uint64(recordCount))
+	var lastOffset *wal2.Offset
 	for _, value := range values {
 		value.PrevTxnOffset = lastOffset
 		encoded, err := value.FBEncode()
@@ -119,8 +120,8 @@ func TestWalRecovery(t *testing.T) {
 
 	t.Run("chunked_uncommited_not_recovered", func(t *testing.T) {
 		recordCount = 10
-		key, newVal, _ := generateNChunkFBRecord(t, uint64(recordCount))
-		var lastOff *wal.Offset
+		key, newVal, _ := memtable.generateNChunkFBRecord(t, uint64(recordCount))
+		var lastOff *wal2.Offset
 		for _, value := range newVal {
 			value.PrevTxnOffset = lastOff
 			encoded, err := value.FBEncode()
@@ -143,7 +144,7 @@ func TestWalRecovery(t *testing.T) {
 
 		for k := range unCommitedKeys {
 			value, err := db.Get([]byte(k))
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 			assert.Nil(t, value)
 		}
 
@@ -151,10 +152,10 @@ func TestWalRecovery(t *testing.T) {
 
 	t.Run("full_commited_insert_recovered", func(t *testing.T) {
 		recordCount = 10
-		_, nkv, checksum := generateNChunkFBRecord(t, uint64(recordCount))
+		_, nkv, checksum := memtable.generateNChunkFBRecord(t, uint64(recordCount))
 
 		txID := gofakeit.UUID()
-		var lastOffset *wal.Offset
+		var lastOffset *wal2.Offset
 		for _, value := range nkv {
 			value.PrevTxnOffset = lastOffset
 			value.Key = []byte(gofakeit.UUID())
@@ -200,10 +201,10 @@ func TestWalRecovery(t *testing.T) {
 
 	t.Run("full_uncommited_not_recovered_without_savepoint", func(t *testing.T) {
 		recordCount = 10
-		_, nkv, _ := generateNChunkFBRecord(t, uint64(recordCount))
+		_, nkv, _ := memtable.generateNChunkFBRecord(t, uint64(recordCount))
 
 		txID := gofakeit.UUID()
-		var lOffset *wal.Offset
+		var lOffset *wal2.Offset
 		for _, value := range nkv {
 			value.PrevTxnOffset = lOffset
 			value.Key = []byte(gofakeit.UUID())
@@ -240,7 +241,7 @@ func TestWalRecovery(t *testing.T) {
 
 		for k := range unCommitedKeys {
 			value, err := db.Get([]byte(k))
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 			assert.Nil(t, value)
 		}
 	})
@@ -273,7 +274,7 @@ func TestWalRecovery(t *testing.T) {
 		assert.Equal(t, *recovery.lastRecoveredPos, *lastOffset)
 		assert.Equal(t, recovery.recoveredCount, 1)
 		value, err := db.Get([]byte(key.(string)))
-		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+		assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 		assert.Nil(t, value, "deleted key value should be nil")
 		delete(allCommitedKeys, key.(string))
 		allCommitedDeleteKeys[key.(string)] = struct{}{}
@@ -289,9 +290,9 @@ func TestWalRecovery(t *testing.T) {
 			deleteKeys = append(deleteKeys, key.(string))
 		}
 
-		_, nkv, _ := generateNChunkFBRecord(t, uint64(10))
+		_, nkv, _ := memtable.generateNChunkFBRecord(t, uint64(10))
 
-		var lastOffset *wal.Offset
+		var lastOffset *wal2.Offset
 		startRecord := walrecord.Record{
 			Index:         0,
 			Hlc:           0,
@@ -353,7 +354,7 @@ func TestWalRecovery(t *testing.T) {
 
 		for _, key := range deleteKeys {
 			value, err := db.Get([]byte(key))
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "%s", key)
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound, "%s", key)
 			assert.Nil(t, value, "deleted key value should be nil %s", key)
 			allCommitedDeleteKeys[key] = struct{}{}
 			delete(allCommitedKeys, key)
@@ -369,13 +370,13 @@ func TestWalRecovery(t *testing.T) {
 
 		for k := range unCommitedKeys {
 			value, err := db.Get([]byte(k))
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 			assert.Nil(t, value)
 		}
 
 		for key := range allCommitedDeleteKeys {
 			value, err := db.Get([]byte(key))
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 			assert.Nil(t, value, "deleted key value should be nil %s", key)
 		}
 	})

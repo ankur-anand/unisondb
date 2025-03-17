@@ -158,6 +158,27 @@ func DeserializeLogRecord(buf []byte) *LogRecord {
 	return record
 }
 
+// DeserializeFBRootLogRecord converts the FlatBuffer WAL Log Record to Go Struct LogRecord.
+func DeserializeFBRootLogRecord(fbRecord *logrecord.LogRecord) *LogRecord {
+	record := &LogRecord{}
+	deserializeScalarIntoLogRecord(record, fbRecord)
+
+	payloadType := fbRecord.PayloadType()
+
+	// https://flatbuffers.dev/tutorial/#union-access
+	// union only stores a FlatBuffer table
+	switch payloadType {
+	case logrecord.LogOperationDataKeyValueBatchEntries:
+
+		deserializeKeyValueEntriesIntoLogRecord(record, fbRecord)
+
+	case logrecord.LogOperationDataRowUpdateEntries:
+
+		deserializeRowEntriesIntoRecords(record, fbRecord)
+	}
+	return record
+}
+
 func deserializeScalarIntoLogRecord(record *LogRecord, fbRecord *logrecord.LogRecord) {
 	record.LSN = fbRecord.Lsn()
 	record.HLC = fbRecord.Hlc()
