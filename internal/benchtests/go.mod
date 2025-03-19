@@ -3,7 +3,6 @@ module github.com/ankur-anand/kvalchemy/internal/benchtests
 go 1.24.0
 
 require (
-	github.com/ankur-anand/kvalchemy v0.0.0-00010101000000-000000000000
 	github.com/brianvoe/gofakeit/v7 v7.2.1
 	github.com/dgraph-io/badger/v4 v4.5.1
 	github.com/hashicorp/go-metrics v0.5.4
@@ -49,4 +48,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/ankur-anand/kvalchemy => ../../
+replace github.com/ankur-anand/unisondb => ../../

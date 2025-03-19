@@ -1,0 +1,78 @@
+// FlatBuffer schema for Write-Ahead Log (WAL) records with chunked support and checksums
+namespace logrecord;
+
+enum TransactionState: ubyte {
+  None = 0,
+  Begin = 1,
+  Prepare = 2,
+  Commit = 3,
+}
+
+enum LogOperationType : ubyte {
+  NoOperation = 0,
+  Insert = 1,
+  Delete = 2,
+  TxnMarker = 3,
+  DeleteRowByKey = 4,
+}
+
+enum LogEntryType : ubyte {
+  KV = 0,      // Not a chunked value
+  Chunked = 1,
+  Row = 2,
+}
+
+// Column Entry: Supports multiple column updates per WAL record.
+// To Support the wide column database.
+table ColumnData {
+    name: string;
+    value: [ubyte];
+}
+
+table KeyValueEntry {
+  key: [ubyte];
+  value: [ubyte];
+}
+
+table RowUpdateEntry {
+  key: [ubyte];
+  columns: [ColumnData];
+}
+
+table KeyValueEncoded {
+  value: [ubyte];
+}
+
+table RowUpdateEncoded {
+  value: [ubyte];
+}
+
+table KeyValueBatchEntries {
+  entries: [KeyValueEncoded];
+}
+
+table RowUpdateEntries {
+  entries: [RowUpdateEncoded];
+}
+
+// container - mutually exclusive
+union LogOperationData {
+  KeyValueBatchEntries,
+  RowUpdateEntries,
+}
+
+table LogRecord {
+  lsn: uint64;
+  hlc: uint64;
+  crc32_checksum: uint32;
+
+  operation_type: LogOperationType;
+  txn_state: TransactionState;
+  entry_type: LogEntryType;
+
+  txn_id: [ubyte];
+  prev_txn_wal_index: [ubyte]; // index of the previous entry in the same transaction
+  payload: LogOperationData;
+}
+
+root_type LogRecord;
