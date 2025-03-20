@@ -5,32 +5,14 @@ import (
 	flatbuffers "github.com/google/flatbuffers/go"
 )
 
-type ColumnData struct {
-	Name  string
-	Value []byte
-}
-
 type KeyValueEntry struct {
 	Key   []byte
 	Value []byte
 }
 
-type RowUpdateEntry struct {
+type RowEntry struct {
 	Key     []byte
-	Columns []ColumnData
-}
-
-type LogOperationData struct {
-	KeyValueBatchEntries *KeyValueBatchEntries
-	RowUpdateEntries     *RowUpdateEntries
-}
-
-type KeyValueBatchEntries struct {
-	Entries []KeyValueEntry
-}
-
-type RowUpdateEntries struct {
-	Entries []RowUpdateEntry
+	Columns map[string][]byte
 }
 
 type LogRecord struct {
@@ -42,11 +24,11 @@ type LogRecord struct {
 	EntryType       logrecord.LogEntryType
 	TxnID           []byte
 	PrevTxnWalIndex []byte
-	Payload         LogOperationData
+	Entries         [][]byte
 }
 
 // FBEncode encodes the provided record into flat-buffer format.
-func (r *LogRecord) FBEncode() []byte {
-	builder := flatbuffers.NewBuilder(1024)
+func (r *LogRecord) FBEncode(sizeHint int) []byte {
+	builder := flatbuffers.NewBuilder(sizeHint)
 	return serializeLogRecord(r, builder)
 }

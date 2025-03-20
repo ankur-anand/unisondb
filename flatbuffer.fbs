@@ -39,18 +39,8 @@ table RowUpdateEntry {
   columns: [ColumnData];
 }
 
-table KeyValueBatchEntries {
-  entries: [KeyValueEntry];
-}
-
-table RowUpdateEntries {
-  entries: [RowUpdateEntry];
-}
-
-// container - mutually exclusive
-union LogOperationData {
-  KeyValueBatchEntries,
-  RowUpdateEntries,
+table EncodedEntry {
+  entry: [ubyte];
 }
 
 table LogRecord {
@@ -64,7 +54,7 @@ table LogRecord {
 
   txn_id: [ubyte];
   prev_txn_wal_index: [ubyte]; // index of the previous entry in the same transaction
-  payload: LogOperationData;
+  entries: [EncodedEntry];
 }
 
 root_type LogRecord;

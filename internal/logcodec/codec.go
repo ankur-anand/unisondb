@@ -25,17 +25,7 @@ func serializeLogRecord(record *LogRecord, builder *flatbuffers.Builder) []byte 
 		prevTxnWalIndexOffset = builder.CreateByteVector(record.PrevTxnWalIndex)
 	}
 
-	var payloadType byte
-	var payloadOffset flatbuffers.UOffsetT
-
-	if record.Payload.KeyValueBatchEntries != nil {
-		payloadType = byte(logrecord.LogOperationDataKeyValueBatchEntries)
-
-		payloadOffset = serializeKeyValueEntries(record, builder)
-	} else if record.Payload.RowUpdateEntries != nil {
-		payloadType = byte(logrecord.LogOperationDataRowUpdateEntries)
-		payloadOffset = serializeRowEntries(record, builder)
-	}
+	payloadOffset := serializeEntries(record, builder)
 
 	logrecord.LogRecordStart(builder)
 	logrecord.LogRecordAddLsn(builder, record.LSN)
@@ -54,8 +44,7 @@ func serializeLogRecord(record *LogRecord, builder *flatbuffers.Builder) []byte 
 	}
 
 	if payloadOffset != 0 {
-		logrecord.LogRecordAddPayloadType(builder, logrecord.LogOperationData(payloadType))
-		logrecord.LogRecordAddPayload(builder, payloadOffset)
+		logrecord.LogRecordAddEntries(builder, payloadOffset)
 	}
 
 	logRecordOffset := logrecord.LogRecordEnd(builder)
@@ -64,210 +53,49 @@ func serializeLogRecord(record *LogRecord, builder *flatbuffers.Builder) []byte 
 	return builder.FinishedBytes()
 }
 
-func serializeKeyValueEntries(record *LogRecord, builder *flatbuffers.Builder) flatbuffers.UOffsetT {
-	entries := record.Payload.KeyValueBatchEntries.Entries
+func serializeEntries(log *LogRecord, builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 
-	kvEntryOffsets := make([]flatbuffers.UOffsetT, len(entries))
-
-	for i := 0; i < len(entries); i++ {
-		keyOffset := builder.CreateByteVector(entries[i].Key)
-		valueOffset := builder.CreateByteVector(entries[i].Value)
-
-		logrecord.KeyValueEntryStart(builder)
-		logrecord.KeyValueEntryAddKey(builder, keyOffset)
-		logrecord.KeyValueEntryAddValue(builder, valueOffset)
-		kvEntryOffsets[i] = logrecord.KeyValueEntryEnd(builder)
+	kvOffsets := make([]flatbuffers.UOffsetT, len(log.Entries))
+	for i, kv := range log.Entries {
+		dataOffset := builder.CreateByteVector(kv)
+		logrecord.EncodedEntryStart(builder)
+		logrecord.EncodedEntryAddEntry(builder, dataOffset)
+		kvOffsets[i] = logrecord.EncodedEntryEnd(builder)
 	}
 
-	logrecord.KeyValueBatchEntriesStartEntriesVector(builder, len(entries))
-
-	// vector are build in reverse way as builder starts writing data at the end of a buffer
-	// stack-like structure.
-	for i := len(entries) - 1; i >= 0; i-- {
-		builder.PrependUOffsetT(kvEntryOffsets[i])
+	logrecord.LogRecordStartEntriesVector(builder, len(kvOffsets))
+	for i := len(kvOffsets) - 1; i >= 0; i-- {
+		builder.PrependUOffsetT(kvOffsets[i])
 	}
-	entriesVector := builder.EndVector(len(entries))
-
-	logrecord.KeyValueBatchEntriesStart(builder)
-	logrecord.KeyValueBatchEntriesAddEntries(builder, entriesVector)
-	return logrecord.KeyValueBatchEntriesEnd(builder)
+	return builder.EndVector(len(kvOffsets))
 }
 
-func serializeRowEntries(record *LogRecord, builder *flatbuffers.Builder) flatbuffers.UOffsetT {
-	entries := record.Payload.RowUpdateEntries.Entries
-
-	rowEntryOffsets := make([]flatbuffers.UOffsetT, len(entries))
-
-	for i := 0; i < len(entries); i++ {
-		keyOffset := builder.CreateByteVector(entries[i].Key)
-		columnDataOffsets := make([]flatbuffers.UOffsetT, len(entries[i].Columns))
-
-		for j := 0; j < len(entries[i].Columns); j++ {
-			nameOffset := builder.CreateString(entries[i].Columns[j].Name)
-			valueOffset := builder.CreateByteVector(entries[i].Columns[j].Value)
-
-			logrecord.ColumnDataStart(builder)
-			logrecord.ColumnDataAddName(builder, nameOffset)
-			logrecord.ColumnDataAddValue(builder, valueOffset)
-			columnDataOffsets[j] = logrecord.ColumnDataEnd(builder)
-		}
-
-		logrecord.RowUpdateEntryStartColumnsVector(builder, len(entries[i].Columns))
-		for j := len(entries[i].Columns) - 1; j >= 0; j-- {
-			builder.PrependUOffsetT(columnDataOffsets[j])
-		}
-		columnsVector := builder.EndVector(len(entries[i].Columns))
-
-		logrecord.RowUpdateEntryStart(builder)
-		logrecord.RowUpdateEntryAddKey(builder, keyOffset)
-		logrecord.RowUpdateEntryAddColumns(builder, columnsVector)
-		rowEntryOffsets[i] = logrecord.RowUpdateEntryEnd(builder)
-	}
-
-	logrecord.RowUpdateEntriesStartEntriesVector(builder, len(entries))
-	for i := len(entries) - 1; i >= 0; i-- {
-		builder.PrependUOffsetT(rowEntryOffsets[i])
-	}
-	entriesVector := builder.EndVector(len(entries))
-
-	logrecord.RowUpdateEntriesStart(builder)
-	logrecord.RowUpdateEntriesAddEntries(builder, entriesVector)
-	return logrecord.RowUpdateEntriesEnd(builder)
-}
-
-// DeserializeLogRecord decodes a binary FlatBuffer into a LogRecord.
-func DeserializeLogRecord(buf []byte) *LogRecord {
-	record := &LogRecord{}
-
-	fbRecord := logrecord.GetRootAsLogRecord(buf, 0)
-	deserializeScalarIntoLogRecord(record, fbRecord)
-
-	payloadType := fbRecord.PayloadType()
-
-	// https://flatbuffers.dev/tutorial/#union-access
-	// union only stores a FlatBuffer table
-	switch payloadType {
-	case logrecord.LogOperationDataKeyValueBatchEntries:
-
-		deserializeKeyValueEntriesIntoLogRecord(record, fbRecord)
-
-	case logrecord.LogOperationDataRowUpdateEntries:
-
-		deserializeRowEntriesIntoRecords(record, fbRecord)
-	}
-	return record
+func DeserializeLogRecord(data []byte) *LogRecord {
+	return DeserializeFBRootLogRecord(logrecord.GetRootAsLogRecord(data, 0))
 }
 
 // DeserializeFBRootLogRecord converts the FlatBuffer WAL Log Record to Go Struct LogRecord.
 func DeserializeFBRootLogRecord(fbRecord *logrecord.LogRecord) *LogRecord {
-	record := &LogRecord{}
-	deserializeScalarIntoLogRecord(record, fbRecord)
 
-	payloadType := fbRecord.PayloadType()
-
-	// https://flatbuffers.dev/tutorial/#union-access
-	// union only stores a FlatBuffer table
-	switch payloadType {
-	case logrecord.LogOperationDataKeyValueBatchEntries:
-
-		deserializeKeyValueEntriesIntoLogRecord(record, fbRecord)
-
-	case logrecord.LogOperationDataRowUpdateEntries:
-
-		deserializeRowEntriesIntoRecords(record, fbRecord)
+	entriesLen := fbRecord.EntriesLength()
+	var entries [][]byte
+	for i := 0; i < entriesLen; i++ {
+		entry := new(logrecord.EncodedEntry)
+		fbRecord.Entries(entry, i)
+		entries = append(entries, entry.EntryBytes())
 	}
+
+	record := &LogRecord{
+		LSN:             fbRecord.Lsn(),
+		HLC:             fbRecord.Hlc(),
+		CRC32Checksum:   fbRecord.Crc32Checksum(),
+		OperationType:   fbRecord.OperationType(),
+		TxnState:        fbRecord.TxnState(),
+		EntryType:       fbRecord.EntryType(),
+		TxnID:           fbRecord.TxnIdBytes(),
+		PrevTxnWalIndex: fbRecord.PrevTxnWalIndexBytes(),
+		Entries:         entries,
+	}
+
 	return record
-}
-
-func deserializeScalarIntoLogRecord(record *LogRecord, fbRecord *logrecord.LogRecord) {
-	record.LSN = fbRecord.Lsn()
-	record.HLC = fbRecord.Hlc()
-	record.CRC32Checksum = fbRecord.Crc32Checksum()
-	record.OperationType = fbRecord.OperationType()
-	record.TxnState = fbRecord.TxnState()
-	record.EntryType = fbRecord.EntryType()
-
-	if txnID := fbRecord.TxnIdBytes(); txnID != nil {
-		record.TxnID = make([]byte, len(txnID))
-		copy(record.TxnID, txnID)
-	}
-
-	if prevTxnWalIndex := fbRecord.PrevTxnWalIndexBytes(); prevTxnWalIndex != nil {
-		record.PrevTxnWalIndex = make([]byte, len(prevTxnWalIndex))
-		copy(record.PrevTxnWalIndex, prevTxnWalIndex)
-	}
-}
-
-func deserializeKeyValueEntriesIntoLogRecord(record *LogRecord, fbRecord *logrecord.LogRecord) {
-	union := new(flatbuffers.Table)
-	if fbRecord.Payload(union) {
-		kvEntries := logrecord.KeyValueBatchEntries{}
-		kvEntries.Init(union.Bytes, union.Pos)
-
-		record.Payload.KeyValueBatchEntries = &KeyValueBatchEntries{}
-		entriesLen := kvEntries.EntriesLength()
-		record.Payload.KeyValueBatchEntries.Entries = make([]KeyValueEntry, entriesLen)
-
-		for i := 0; i < entriesLen; i++ {
-			entry := new(logrecord.KeyValueEntry)
-			if kvEntries.Entries(entry, i) {
-				key := entry.KeyBytes()
-				value := entry.ValueBytes()
-				// don't reference flat-buffer memory.
-				keyCopy := make([]byte, len(key))
-				copy(keyCopy, key)
-
-				valueCopy := make([]byte, len(value))
-				copy(valueCopy, value)
-
-				record.Payload.KeyValueBatchEntries.Entries[i] = KeyValueEntry{
-					Key:   keyCopy,
-					Value: valueCopy,
-				}
-			}
-		}
-	}
-}
-
-func deserializeRowEntriesIntoRecords(record *LogRecord, fbRecord *logrecord.LogRecord) {
-	union := new(flatbuffers.Table)
-	if fbRecord.Payload(union) {
-		rowEntries := &logrecord.RowUpdateEntries{}
-		rowEntries.Init(union.Bytes, union.Pos)
-
-		record.Payload.RowUpdateEntries = &RowUpdateEntries{}
-		entriesLen := rowEntries.EntriesLength()
-		record.Payload.RowUpdateEntries.Entries = make([]RowUpdateEntry, entriesLen)
-
-		for i := 0; i < entriesLen; i++ {
-			entry := new(logrecord.RowUpdateEntry)
-			if rowEntries.Entries(entry, i) {
-				rowKey := entry.KeyBytes()
-
-				// Get columns
-				columnsLen := entry.ColumnsLength()
-				columns := make([]ColumnData, columnsLen)
-
-				for j := 0; j < columnsLen; j++ {
-					var col logrecord.ColumnData
-					if entry.Columns(&col, j) {
-						name := string(col.Name())
-						value := col.ValueBytes()
-						ValueCopy := make([]byte, len(value))
-						copy(ValueCopy, value)
-
-						columns[j] = ColumnData{
-							Name:  name,
-							Value: ValueCopy,
-						}
-					}
-				}
-
-				record.Payload.RowUpdateEntries.Entries[i] = RowUpdateEntry{
-					Key:     rowKey,
-					Columns: columns,
-				}
-			}
-		}
-	}
 }

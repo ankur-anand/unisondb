@@ -181,29 +181,28 @@ func (rcv *LogRecord) MutatePrevTxnWalIndex(j int, n byte) bool {
 	return false
 }
 
-func (rcv *LogRecord) PayloadType() LogOperationData {
+func (rcv *LogRecord) Entries(obj *EncodedEntry, j int) bool {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(20))
 	if o != 0 {
-		return LogOperationData(rcv._tab.GetByte(o + rcv._tab.Pos))
-	}
-	return 0
-}
-
-func (rcv *LogRecord) MutatePayloadType(n LogOperationData) bool {
-	return rcv._tab.MutateByteSlot(20, byte(n))
-}
-
-func (rcv *LogRecord) Payload(obj *flatbuffers.Table) bool {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(22))
-	if o != 0 {
-		rcv._tab.Union(obj, o)
+		x := rcv._tab.Vector(o)
+		x += flatbuffers.UOffsetT(j) * 4
+		x = rcv._tab.Indirect(x)
+		obj.Init(rcv._tab.Bytes, x)
 		return true
 	}
 	return false
 }
 
+func (rcv *LogRecord) EntriesLength() int {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(20))
+	if o != 0 {
+		return rcv._tab.VectorLen(o)
+	}
+	return 0
+}
+
 func LogRecordStart(builder *flatbuffers.Builder) {
-	builder.StartObject(10)
+	builder.StartObject(9)
 }
 func LogRecordAddLsn(builder *flatbuffers.Builder, lsn uint64) {
 	builder.PrependUint64Slot(0, lsn, 0)
@@ -235,11 +234,11 @@ func LogRecordAddPrevTxnWalIndex(builder *flatbuffers.Builder, prevTxnWalIndex f
 func LogRecordStartPrevTxnWalIndexVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)
 }
-func LogRecordAddPayloadType(builder *flatbuffers.Builder, payloadType LogOperationData) {
-	builder.PrependByteSlot(8, byte(payloadType), 0)
+func LogRecordAddEntries(builder *flatbuffers.Builder, entries flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(8, flatbuffers.UOffsetT(entries), 0)
 }
-func LogRecordAddPayload(builder *flatbuffers.Builder, payload flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(9, flatbuffers.UOffsetT(payload), 0)
+func LogRecordStartEntriesVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+	return builder.StartVector(4, numElems, 4)
 }
 func LogRecordEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {
 	return builder.EndObject()
