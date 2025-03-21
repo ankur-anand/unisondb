@@ -3,7 +3,6 @@ package kvdrivers
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"runtime"
 	"time"
@@ -308,7 +307,7 @@ func (lq *LMDBTxnQueue) BatchDeleteRows(rowKeys [][]byte) error {
 			}
 
 			if err != nil {
-				if errors.Is(err, lmdb.NotFound) {
+				if lmdb.IsNotFound(err) {
 					return nil
 				}
 				return err

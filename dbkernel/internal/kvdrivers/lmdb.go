@@ -332,7 +332,7 @@ func (l *LmdbEmbed) DeleteEntireRows(rowKeys [][]byte) (int, error) {
 			}
 
 			if err != nil {
-				if errors.Is(err, lmdb.NotFound) {
+				if lmdb.IsNotFound(err) {
 					return nil
 				}
 				return err
@@ -579,7 +579,7 @@ func (l *LmdbEmbed) GetRowColumns(rowKey []byte, filter func(columnKey []byte) b
 		case rowColumnValue:
 			err := l.getColumns(txn, rowKey, filter, entries)
 			if err != nil {
-				if errors.Is(err, lmdb.NotFound) {
+				if lmdb.IsNotFound(err) {
 					return nil
 				}
 				return err
