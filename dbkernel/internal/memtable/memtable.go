@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
@@ -20,7 +20,7 @@ import (
 var (
 	ErrArenaSizeWillExceed = errors.New("arena capacity will exceed the limit")
 
-	dbBatchSize = 32
+	dbBatchSize = 16
 )
 
 // Add a margin to avoid boundary issues, arena uses the same pool for itself.
@@ -38,19 +38,21 @@ type MemTable struct {
 
 	capacity      int64
 	opCount       int
+	offsetCount   int
 	bytesStored   int
 	newTxnBatcher func(maxBatchSize int) internal.TxnBatcher
 	wIO           *wal.WalIO
 	namespace     string
+
+	chunkedFlushed int
 }
 
 // NewMemTable returns an initialized mem-table.
-func NewMemTable(capacity int64, db internal.BTreeStore, wIO *wal.WalIO, namespace string,
+func NewMemTable(capacity int64, wIO *wal.WalIO, namespace string,
 	newTxnBatcher func(maxBatchSize int) internal.TxnBatcher) *MemTable {
 	return &MemTable{
 		skipList:      skl.NewSkiplist(capacity),
 		capacity:      capacity,
-		db:            db,
 		wIO:           wIO,
 		namespace:     namespace,
 		newTxnBatcher: newTxnBatcher,
@@ -68,7 +70,7 @@ func (table *MemTable) canPut(key []byte, val y.ValueStruct) bool {
 // Put the Key and its Value at the given offset in the mem-table.
 // for rowKey Put
 // It uses MVCC as there can be multiple update ops for different columns for the same Row.
-func (table *MemTable) Put(key []byte, val y.ValueStruct, pos *wal.Offset) error {
+func (table *MemTable) Put(key []byte, val y.ValueStruct) error {
 	if !table.canPut(key, val) {
 		return ErrArenaSizeWillExceed
 	}
@@ -80,14 +82,26 @@ func (table *MemTable) Put(key []byte, val y.ValueStruct, pos *wal.Offset) error
 		putKey = y.KeyWithTs(key, uint64(time.Now().UnixNano()))
 	}
 
-	table.skipList.Put(putKey, val)
-	if table.firstOffset == nil {
-		table.firstOffset = pos
-	}
-	table.lastOffset = pos
 	table.opCount++
+	table.skipList.Put(putKey, val)
 	table.bytesStored = table.bytesStored + len(key) + len(val.Value)
 	return nil
+}
+
+func (table *MemTable) SetOffset(offset *wal.Offset) {
+	table.offsetCount++
+	table.lastOffset = offset
+	if table.firstOffset != nil {
+		table.firstOffset = offset
+	}
+}
+
+func (table *MemTable) GetLastOffset() *wal.Offset {
+	return table.lastOffset
+}
+
+func (table *MemTable) GetFirstOffset() *wal.Offset {
+	return table.firstOffset
 }
 
 func (table *MemTable) Get(key []byte) y.ValueStruct {
@@ -123,30 +137,47 @@ func (table *MemTable) Flush(ctx context.Context) (int, error) {
 		_ = it.Close()
 	}(it)
 
+	var err error
 	txn := table.newTxnBatcher(dbBatchSize)
-	count := 0
+
+	fmt.Println("flsuing", table.offsetCount, table.opCount)
 
 	for it.SeekToFirst(); it.Valid(); it.Next() {
+
 		if ctx.Err() != nil {
-			return count, ctx.Err()
-		}
-		count++
-
-		if err := table.processEntry(it.Key(), it.Value(), flushMan); err != nil {
-			return count, err
+			err = ctx.Err()
+			break
 		}
 
+		if err = table.processEntry(it.Key(), it.Value(), txn); err != nil {
+			slog.Error("[unisondb.memtable] error flushing and processing entry", "key", it.Key(), "err", err)
+			break
+		}
 	}
 
-	return count + flushMan.txnRecordCount, flushMan.processBatch(table.db)
+	if err != nil {
+		slog.Error("[unisondb.memtable] error flushing and processing entry", "err", err)
+		return 0, err
+	}
+
+	err = txn.Commit()
+	if err != nil {
+		slog.Error("[unisondb.memtable] error flushing and processing entry", "err", err)
+		return 0, err
+	}
+
+	fmt.Println(table.offsetCount, "here at last")
+	return table.offsetCount + table.chunkedFlushed, err
 }
 
 func (table *MemTable) processEntry(key []byte, entry y.ValueStruct, txn internal.TxnBatcher) error {
 	parsedKey := y.ParseKey(key)
-
+	fmt.Println("parsedKey",
+		logrecord.EnumNamesLogOperationType[logrecord.LogOperationType(entry.Meta)],
+	)
 	switch entry.Meta {
-	case byte(logrecord.LogOperationTypeDelete):
-		if entry.UserMeta != byte(logrecord.LogEntryTypeRow) {
+	case internal.LogOperationDelete:
+		if entry.UserMeta != internal.EntryTypeRow {
 			return txn.BatchDelete([][]byte{parsedKey})
 		}
 
@@ -154,34 +185,43 @@ func (table *MemTable) processEntry(key []byte, entry y.ValueStruct, txn interna
 		return txn.BatchDeleteRows([][]byte{parsedKey})
 	}
 
-	record, err := internal.GetWalRecord(entry, table.wIO)
-	if err != nil {
-		return err
-	}
-
-	if record.TxnState() == logrecord.TransactionStateCommit && record.EntryType() == logrecord.LogEntryTypeChunked {
-		n, err := table.flushChunkedTxnCommit(record, txn)
+	// if Version Type is of TxnStateCommit.
+	// We need to get the WAL Record and commit the entire WAL operation that is part of this TXN.
+	// We directly store all the key and value even for Txn type that is not of Type Chunked.
+	if entry.UserMeta == internal.EntryTypeChunked {
+		record, err := internal.GetWalRecord(entry, table.wIO)
 		if err != nil {
 			return err
 		}
-		flushMan.incrementCount(n + 1)
-		return nil
-	}
 
-	// column operations
-	if record.EntryType() == logrecord.LogEntryTypeRow {
-		dr := logcodec.DeserializeFBRootLogRecord(record)
-		switch record.OperationType() {
-		case logrecord.LogOperationTypeInsert:
-			return txn.BatchPutRowColumns(internal.ConvertRowFromLogOperationData(&dr.Payload))
-		case logrecord.LogOperationTypeDelete:
-			return txn.BatchDeleteRowColumns(internal.ConvertRowFromLogOperationData(&dr.Payload))
+		if record.TxnState() == logrecord.TransactionStateCommit && record.EntryType() == logrecord.LogEntryTypeChunked {
+			n, err := table.flushChunkedTxnCommit(record, txn)
+			if err != nil {
+				return err
+			}
+			table.chunkedFlushed = table.chunkedFlushed + n + 1
+			return nil
 		}
-		return nil
 	}
 
-	flushMan.kvWriteBuffer.add(record.KeyBytes(), record.ValueBytes())
-	return nil
+	// Do the Row Processing.
+	if entry.UserMeta == internal.EntryTypeRow {
+		re := logcodec.DeserializeRowUpdateEntry(entry.Value)
+		var columnUpdates []map[string][]byte
+		columnUpdates = append(columnUpdates, re.Columns)
+
+		switch entry.Meta {
+		case internal.LogOperationDelete:
+			fmt.Println("Deleting row now", string(parsedKey))
+			return txn.BatchDeleteRowColumns([][]byte{parsedKey}, columnUpdates)
+		case internal.LogOperationInsert:
+			fmt.Println("Inserting row now", string(parsedKey))
+			return txn.BatchPutRowColumns([][]byte{parsedKey}, columnUpdates)
+		}
+	}
+
+	// else it's Key Value.
+	return txn.BatchPut([][]byte{parsedKey}, [][]byte{entry.Value})
 }
 
 // flushChunkedTxnCommit returns the number of batch record that was inserted.
