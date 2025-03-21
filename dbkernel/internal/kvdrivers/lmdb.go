@@ -599,6 +599,7 @@ func (l *LmdbEmbed) getColumns(txn *lmdb.Txn,
 	rowKey []byte,
 	filter ColumnPredicate, entries map[string][]byte) error {
 	c, err := txn.OpenCursor(l.db)
+
 	if err != nil {
 		return err
 	}
@@ -609,10 +610,18 @@ func (l *LmdbEmbed) getColumns(txn *lmdb.Txn,
 	// Position at first key greater than or equal to specified key.
 	var k []byte
 	_, _, err = c.Get(rowKey, nil, lmdb.SetRange)
+
 	var value []byte
 
 	for err == nil {
 		k, value, err = c.Get(nil, nil, lmdb.Next)
+		if lmdb.IsNotFound(err) {
+			// at the boundary condition, this will give
+			// MDB_NOTFOUND
+			// which will get returned if not returned from here.
+			return nil
+		}
+
 		if k != nil && !bytes.HasPrefix(k, rowKey) {
 			break // Stop if key is outside the prefix range
 		}
@@ -625,6 +634,7 @@ func (l *LmdbEmbed) getColumns(txn *lmdb.Txn,
 			}
 		}
 	}
+
 	return err
 }
 
