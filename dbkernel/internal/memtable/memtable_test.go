@@ -401,7 +401,6 @@ func TestRow_KeysPut_Delete_GetRows_Flush(t *testing.T) {
 		assert.Equal(t, v, buildColumns, "unexpected column values")
 	}
 
-	fmt.Println(mmTable.offsetCount, "test")
 	count, err := mmTable.Flush(t.Context())
 	assert.NoError(t, err, "failed to processBatch")
 	assert.Equal(t, count, 50, "expected records to be flushed")
@@ -432,14 +431,53 @@ func TestRow_KeysPut_Delete_GetRows_Flush(t *testing.T) {
 	assert.Equal(t, len(buildColumns), len(columnMap)-len(deleteEntries), "unexpected number of column values")
 	assert.NotContains(t, buildColumns, deleteEntries, "unexpected column values")
 
-	db.FSync()
 	value, err := db.GetRowColumns([]byte(randomRow), nil)
-	assert.NoError(t, err)
-	fmt.Println(len(value), len(columnMap))
-	//for k, v := range value {
-	//	fmt.Println(string(k), string(v))
-	//}
+	assert.NoError(t, err, len(value))
 	assert.Equal(t, len(value), len(columnMap)-len(deleteEntries), "unexpected number of column values")
+
+	vs = y.ValueStruct{Meta: internal.LogOperationDeleteRowByKey, UserMeta: internal.EntryTypeRow}
+	err = mmTable.Put([]byte(randomRow), vs)
+	assert.NoError(t, err)
+	mmTable.SetOffset(nil)
+	count, err = mmTable.Flush(t.Context())
+	assert.NoError(t, err, "failed to processBatch")
+	assert.Equal(t, count, 52, "expected records to be flushed")
+	_, err = db.GetRowColumns([]byte(randomRow), nil)
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+
+	values := mmTable.GetRowYValue([]byte(randomRow))
+	buildColumns = make(map[string][]byte)
+	BuildColumnMap(buildColumns, values)
+	assert.Empty(t, buildColumns, "deleted row should be empty")
+
+	addEntries := make(map[string][]byte, 0)
+	for i := 0; i < 2; i++ {
+		key := gofakeit.RandomMapKey(columnMap).(string)
+		addEntries[key] = []byte(gofakeit.LetterN(10))
+	}
+
+	// just a new entry
+	addEntries[gofakeit.Name()] = []byte(gofakeit.LetterN(10))
+	encoded = logcodec.SerializeRowUpdateEntry([]byte(randomRow), addEntries)
+
+	vs = y.ValueStruct{Value: encoded, Meta: internal.LogOperationInsert, UserMeta: internal.EntryTypeRow}
+	err = mmTable.Put([]byte(randomRow), vs)
+	assert.NoError(t, err)
+	mmTable.SetOffset(nil)
+
+	count, err = mmTable.Flush(t.Context())
+	assert.NoError(t, err, "failed to processBatch")
+	assert.Equal(t, count, 53, "expected records to be flushed")
+
+	values = mmTable.GetRowYValue([]byte(randomRow))
+	buildColumns = make(map[string][]byte)
+	BuildColumnMap(buildColumns, values)
+	assert.Equal(t, buildColumns, addEntries, "new added entry should be added")
+
+	value, err = db.GetRowColumns([]byte(randomRow), nil)
+	assert.NoError(t, err, "get should not fail")
+	assert.Equal(t, len(value), len(addEntries), "unexpected number of column values")
+	assert.Equal(t, value, addEntries, "new added entry should be added")
 }
 
 func generateNChunkFBRecord(t *testing.T, n uint64) (string, []logcodec.LogRecord, uint32) {

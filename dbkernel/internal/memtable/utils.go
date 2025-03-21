@@ -10,6 +10,14 @@ import (
 // it modifies the provided columnEntries with the entries fetched from mem table.
 func BuildColumnMap(columnEntries map[string][]byte, vs []y.ValueStruct) {
 	for _, v := range vs {
+		if v.Meta == internal.LogOperationDeleteRowByKey {
+			// reset all key
+			for k := range columnEntries {
+				delete(columnEntries, k)
+			}
+			// inbetween ops
+			continue
+		}
 		re := extractColumns(v.Value)
 		switch v.Meta {
 		case internal.LogOperationInsert:

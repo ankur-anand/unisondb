@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"slices"
 	"time"
@@ -140,18 +139,38 @@ func (table *MemTable) Flush(ctx context.Context) (int, error) {
 	var err error
 	txn := table.newTxnBatcher(dbBatchSize)
 
-	fmt.Println("flsuing", table.offsetCount, table.opCount)
+	mvccRows := make(map[string]struct{})
 
 	for it.SeekToFirst(); it.Valid(); it.Next() {
-
 		if ctx.Err() != nil {
 			err = ctx.Err()
 			break
 		}
 
-		if err = table.processEntry(it.Key(), it.Value(), txn); err != nil {
-			slog.Error("[unisondb.memtable] error flushing and processing entry", "key", it.Key(), "err", err)
+		parsedKey := y.ParseKey(it.Key())
+
+		// rowEntry are saved as MVCC, So the newest value will get applied first.
+		// skipping to apply it as MVCC row.
+		// For Regular Key Value, Skip List is in place update.
+		if it.Value().UserMeta == internal.EntryTypeRow {
+			mvccRows[string(parsedKey)] = struct{}{}
+			continue
+		}
+
+		if err = table.processEntry(parsedKey, it.Value(), txn); err != nil {
+			slog.Error("[unisondb.memtable] error flushing and processing entry", "key", string(parsedKey), "err", err)
 			break
+		}
+	}
+
+	for mvccRow := range mvccRows {
+		entries := table.GetRowYValue([]byte(mvccRow))
+
+		for _, entry := range entries {
+			if err = table.processEntry([]byte(mvccRow), entry, txn); err != nil {
+				slog.Error("[unisondb.memtable] error flushing and processing entry", "key", mvccRow, "err", err)
+				break
+			}
 		}
 	}
 
@@ -166,23 +185,18 @@ func (table *MemTable) Flush(ctx context.Context) (int, error) {
 		return 0, err
 	}
 
-	fmt.Println(table.offsetCount, "here at last")
 	return table.offsetCount + table.chunkedFlushed, err
 }
 
 func (table *MemTable) processEntry(key []byte, entry y.ValueStruct, txn internal.TxnBatcher) error {
-	parsedKey := y.ParseKey(key)
-	fmt.Println("parsedKey",
-		logrecord.EnumNamesLogOperationType[logrecord.LogOperationType(entry.Meta)],
-	)
 	switch entry.Meta {
 	case internal.LogOperationDelete:
 		if entry.UserMeta != internal.EntryTypeRow {
-			return txn.BatchDelete([][]byte{parsedKey})
+			return txn.BatchDelete([][]byte{key})
 		}
 
 	case byte(logrecord.LogOperationTypeDeleteRowByKey):
-		return txn.BatchDeleteRows([][]byte{parsedKey})
+		return txn.BatchDeleteRows([][]byte{key})
 	}
 
 	// if Version Type is of TxnStateCommit.
@@ -212,16 +226,14 @@ func (table *MemTable) processEntry(key []byte, entry y.ValueStruct, txn interna
 
 		switch entry.Meta {
 		case internal.LogOperationDelete:
-			fmt.Println("Deleting row now", string(parsedKey))
-			return txn.BatchDeleteRowColumns([][]byte{parsedKey}, columnUpdates)
+			return txn.BatchDeleteRowColumns([][]byte{key}, columnUpdates)
 		case internal.LogOperationInsert:
-			fmt.Println("Inserting row now", string(parsedKey))
-			return txn.BatchPutRowColumns([][]byte{parsedKey}, columnUpdates)
+			return txn.BatchPutRowColumns([][]byte{key}, columnUpdates)
 		}
 	}
 
 	// else it's Key Value.
-	return txn.BatchPut([][]byte{parsedKey}, [][]byte{entry.Value})
+	return txn.BatchPut([][]byte{key}, [][]byte{entry.Value})
 }
 
 // flushChunkedTxnCommit returns the number of batch record that was inserted.
