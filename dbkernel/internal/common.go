@@ -59,10 +59,10 @@ type BTreeStore interface {
 }
 
 var (
-	// DirectValuePrefix Marks values stored directly in memory.
-	DirectValuePrefix  byte = 254
-	WalReferencePrefix byte = 255 // Marks values stored as a reference in WAL
-	LogOperationDelete      = byte(logrecord.LogOperationTypeDelete)
-	LogOperationInsert      = byte(logrecord.LogOperationTypeInsert)
-	EntryTypeRow            = byte(logrecord.LogEntryTypeRow)
+	LogOperationDelete         = byte(logrecord.LogOperationTypeDelete)
+	LogOperationInsert         = byte(logrecord.LogOperationTypeInsert)
+	LogOperationDeleteRowByKey = byte(logrecord.LogOperationTypeDeleteRowByKey)
+	EntryTypeRow               = byte(logrecord.LogEntryTypeRow)
+	EntryTypeKV                = byte(logrecord.LogEntryTypeKV)
+	EntryTypeChunked           = byte(logrecord.LogEntryTypeChunked)
 )
