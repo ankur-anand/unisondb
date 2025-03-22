@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	wal2 "github.com/ankur-anand/unisondb/dbkernel/internal/wal"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/etc"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func setupWalTest(t *testing.T) *wal2.WalIO {
+func setupWalTest(t *testing.T) *wal.WalIO {
 	dir := t.TempDir()
 
 	inm := metrics.NewInmemSink(1*time.Millisecond, time.Minute)
@@ -29,7 +29,7 @@ func setupWalTest(t *testing.T) *wal2.WalIO {
 		panic(err)
 	}
 
-	walInstance, err := wal2.NewWalIO(dir, "test_namespace", wal2.NewDefaultConfig(), m)
+	walInstance, err := wal.NewWalIO(dir, "test_namespace", wal.NewDefaultConfig(), m)
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
@@ -100,7 +100,7 @@ func TestWalIO_Suite(t *testing.T) {
 	})
 
 	t.Run("concurrent_read_write", func(t *testing.T) {
-		var offsets []*wal2.Offset
+		var offsets []*wal.Offset
 		var offsetMu sync.Mutex
 
 		numWriters := 4
@@ -152,14 +152,16 @@ func TestWalIO_Suite(t *testing.T) {
 	t.Run("get_transaction_records", func(t *testing.T) {
 		var keys []string
 		var values []string
-		var firstOffset *wal2.Offset
+		var firstOffset *wal.Offset
 		for i := 0; i < 10; i++ {
 			key := gofakeit.Name()
 			data := gofakeit.LetterN(10)
 			keys = append(keys, key)
 			values = append(values, data)
-			var prevOffset *wal2.Offset
+			var prevOffset *wal.Offset
 			var err error
+
+			encodedKV := logcodec.SerializeKVEntry([]byte(key), []byte(data))
 
 			record := &logcodec.LogRecord{
 				LSN:             123456789,
@@ -169,19 +171,10 @@ func TestWalIO_Suite(t *testing.T) {
 				EntryType:       logrecord.LogEntryTypeKV,
 				TxnID:           []byte("transaction-001"),
 				PrevTxnWalIndex: nil,
-				Payload: logcodec.LogOperationData{
-					KeyValueBatchEntries: &logcodec.KeyValueBatchEntries{
-						Entries: []logcodec.KeyValueEntry{
-							{
-								Key:   []byte(key),
-								Value: []byte(data),
-							},
-						},
-					},
-				},
+				Entries:         [][]byte{encodedKV},
 			}
 
-			fbRecord := record.FBEncode()
+			fbRecord := record.FBEncode(len(encodedKV))
 			prevOffset, err = walInstance.Append(fbRecord)
 			assert.NoError(t, err)
 			assert.NotNil(t, prevOffset)
@@ -201,8 +194,9 @@ func TestWalIO_Suite(t *testing.T) {
 				"expected value type didn't match")
 
 			deserialized := logcodec.DeserializeFBRootLogRecord(record)
-			assert.Equal(t, string(deserialized.Payload.KeyValueBatchEntries.Entries[0].Key), keys[i], "expected key didn't match")
-			assert.Equal(t, string(deserialized.Payload.KeyValueBatchEntries.Entries[0].Value), values[i], "expected value didn't match")
+			kvEntry := logcodec.DeserializeKVEntry(deserialized.Entries[0])
+			assert.Equal(t, string(kvEntry.Key), keys[i], "expected key didn't match")
+			assert.Equal(t, string(kvEntry.Value), values[i], "expected value didn't match")
 		}
 	})
 
@@ -216,6 +210,8 @@ func TestWalIO_Suite(t *testing.T) {
 		key := gofakeit.Name()
 		data := gofakeit.LetterN(10)
 
+		encodedKV := logcodec.SerializeKVEntry([]byte(key), []byte(data))
+
 		record := &logcodec.LogRecord{
 			LSN:             123456789,
 			HLC:             987654321,
@@ -224,19 +220,10 @@ func TestWalIO_Suite(t *testing.T) {
 			EntryType:       logrecord.LogEntryTypeKV,
 			TxnID:           []byte("transaction-001"),
 			PrevTxnWalIndex: nil,
-			Payload: logcodec.LogOperationData{
-				KeyValueBatchEntries: &logcodec.KeyValueBatchEntries{
-					Entries: []logcodec.KeyValueEntry{
-						{
-							Key:   []byte(key),
-							Value: []byte(data),
-						},
-					},
-				},
-			},
+			Entries:         [][]byte{encodedKV},
 		}
 
-		fbRecord := record.FBEncode()
+		fbRecord := record.FBEncode(len(encodedKV))
 
 		offset, err := walInstance.Append(fbRecord)
 		assert.NoError(t, err)
@@ -246,7 +233,8 @@ func TestWalIO_Suite(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Len(t, records, 1, "should return only 1 transaction record")
 		deserialized := logcodec.DeserializeFBRootLogRecord(records[0])
-		assert.Equal(t, key, string(deserialized.Payload.KeyValueBatchEntries.Entries[0].Key), "key should match")
-		assert.Equal(t, data, string(deserialized.Payload.KeyValueBatchEntries.Entries[0].Value), "value should match")
+		kvEntry := logcodec.DeserializeKVEntry(deserialized.Entries[0])
+		assert.Equal(t, key, string(kvEntry.Key), "key should match")
+		assert.Equal(t, data, string(kvEntry.Value), "value should match")
 	})
 }
