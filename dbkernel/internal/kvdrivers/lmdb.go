@@ -648,18 +648,13 @@ func (l *LmdbEmbed) Snapshot(w io.Writer) error {
 	defer bw.Flush()
 
 	return l.env.View(func(txn *lmdb.Txn) error {
-		stat, err := l.env.Stat()
-		if err != nil {
-			return fmt.Errorf("failed to get database stats: %w", err)
-		}
-
+		
 		cursor, err := txn.OpenCursor(l.db)
 		if err != nil {
 			return fmt.Errorf("failed to open cursor: %w", err)
 		}
 		defer cursor.Close()
 
-		buffer := make([]byte, stat.PSize)
 		var bytesWritten int
 
 		// Iterate through all pages
@@ -671,15 +666,24 @@ func (l *LmdbEmbed) Snapshot(w io.Writer) error {
 			if err != nil {
 				return fmt.Errorf("cursor iteration failed: %w", err)
 			}
+			keyLen := len(key)
+			valLen := len(val)
+			entrySize := 4 + keyLen + 4 + valLen
 
-			binary.LittleEndian.PutUint32(buffer[0:4], uint32(len(key)))
+			buffer := make([]byte, entrySize)
+
+			offset := 0
+			binary.LittleEndian.PutUint32(buffer[offset:], uint32(keyLen))
+			offset += 4
 			bytesWritten = 4
-			copy(buffer[bytesWritten:], key)
+			copy(buffer[offset:], key)
+			offset += keyLen
 			bytesWritten += len(key)
 
-			binary.LittleEndian.PutUint32(buffer[bytesWritten:bytesWritten+4], uint32(len(val)))
+			binary.LittleEndian.PutUint32(buffer[offset:], uint32(valLen))
+			offset += 4
 			bytesWritten += 4
-			copy(buffer[bytesWritten:], val)
+			copy(buffer[offset:], val)
 			bytesWritten += len(val)
 
 			if _, err := bw.Write(buffer[:bytesWritten]); err != nil {
