@@ -5,14 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"log/slog"
 	"time"
 
+	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
-	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
+	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/hashicorp/go-metrics"
@@ -102,12 +102,12 @@ func (e *Engine) CurrentOffset() *Offset {
 }
 
 // GetWalCheckPoint returns the last checkpoint metadata saved in the database.
-func (e *Engine) GetWalCheckPoint() (*Metadata, error) {
-	data, err := e.dataStore.RetrieveMetadata(sysKeyWalCheckPoint)
+func (e *Engine) GetWalCheckPoint() (*internal.Metadata, error) {
+	data, err := e.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
 	if err != nil && !errors.Is(err, kvdrivers.ErrKeyNotFound) {
 		return nil, err
 	}
-	metadata := UnmarshalMetadata(data)
+	metadata := internal.UnmarshalMetadata(data)
 	return &metadata, nil
 }
 
@@ -202,49 +202,47 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		if !e.bloom.Test(key) {
 			return y.ValueStruct{}, ErrKeyNotFound
 		}
-		it := e.activeMemTable.get(key)
-		if it.Meta == byte(walrecord.LogOperationNoop) {
+		yValue := e.activeMemTable.Get(key)
+		if yValue.Meta == byte(logrecord.LogOperationTypeNoOperation) {
 			// first latest value
 			for i := len(e.sealedMemTables) - 1; i >= 0; i-- {
-				if val := e.sealedMemTables[i].get(key); val.Meta != byte(walrecord.LogOperationNoop) {
+				if val := e.sealedMemTables[i].Get(key); val.Meta != byte(logrecord.LogOperationTypeNoOperation) {
 					return val, nil
 				}
 			}
 		}
-		return it, nil
+		return yValue, nil
 	}
 
-	it, err := checkFunc()
+	yValue, err := checkFunc()
 	if err != nil {
 		return nil, err
 	}
 
 	// if the mem table doesn't have this key associated action or log.
 	// directly go to the boltdb to fetch the same.
-	if it.Meta == byte(walrecord.LogOperationNoop) {
+	if yValue.Meta == byte(logrecord.LogOperationTypeNoOperation) {
 		return e.dataStore.Get(key)
 	}
 
 	// key deleted
-	if it.Meta == byte(walrecord.LogOperationDelete) {
+	if yValue.Meta == byte(logrecord.LogOperationTypeDelete) {
 		return nil,
 			ErrKeyNotFound
 	}
 
-	record, err := getWalRecord(it, e.walIO)
-	if err != nil {
-		return nil, err
+	if yValue.UserMeta == internal.EntryTypeChunked {
+		fmt.Println(yValue.Value, "get")
+		record, err := internal.GetWalRecord(yValue, e.walIO)
+		if err != nil {
+			return nil, err
+		}
+		return e.reconstructChunkedValue(record)
 	}
 
-	if record.EntryType() == walrecord.EntryTypeChunked {
-		return e.reconstructBatchValue(record)
-	}
+	kv := logcodec.DeserializeKVEntry(yValue.Value)
 
-	if crc32.ChecksumIEEE(record.ValueBytes()) != record.Crc32Checksum() {
-		return nil, ErrRecordCorrupted
-	}
-
-	return record.ValueBytes(), nil
+	return kv.Value, nil
 }
 
 // SetColumnsInRow inserts or updates the provided column entries.
@@ -318,7 +316,7 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 		if !e.bloom.Test(key) {
 			return nil, ErrKeyNotFound
 		}
-		first := e.activeMemTable.getRowYValue(key)
+		first := e.activeMemTable.GetRowYValue(key)
 		if len(first) != 0 && first[len(first)-1].Meta == byte(logrecord.LogOperationTypeDeleteRowByKey) {
 			return nil, ErrKeyNotFound
 		}
@@ -326,7 +324,7 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 		// and build the column value.
 		var vs []y.ValueStruct
 		for _, sm := range e.sealedMemTables {
-			v := sm.getRowYValue(key)
+			v := sm.GetRowYValue(key)
 			if len(v) != 0 {
 				vs = append(vs, v...)
 			}
@@ -356,10 +354,7 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 		return nil, err
 	}
 
-	err = buildColumnMap(columnsValue, vs, e.walIO)
-	if err != nil {
-		return nil, err
-	}
+	buildColumnMap(columnsValue, vs)
 
 	for columnKey := range columnsValue {
 		if predicate != nil && !predicate(columnKey) {
@@ -370,32 +365,25 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 	return columnsValue, nil
 }
 
-func (e *Engine) reconstructBatchValue(record *walrecord.WalRecord) ([]byte, error) {
+func (e *Engine) reconstructChunkedValue(record *logrecord.LogRecord) ([]byte, error) {
 	records, err := e.walIO.GetTransactionRecords(wal.DecodeOffset(record.PrevTxnWalIndexBytes()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconstruct batch value: %w", err)
 	}
-	checksum := unmarshalChecksum(record.ValueBytes())
 
 	// remove the begins part from the
 	preparedRecords := records[1:]
 
-	var estimatedSize int
-	for _, rec := range preparedRecords {
-		estimatedSize += len(rec.ValueBytes())
-	}
-
+	estimatedSize := len(preparedRecords) * (1 << 20)
 	fullValue := bytes.NewBuffer(make([]byte, 0, estimatedSize))
 	for _, record := range preparedRecords {
-		fullValue.Write(record.ValueBytes())
+		r := logcodec.DeserializeFBRootLogRecord(record)
+		kv := logcodec.DeserializeKVEntry(r.Entries[0])
+		fullValue.Write(kv.Value)
 	}
 
 	value := fullValue.Bytes()
-
-	if crc32.ChecksumIEEE(value) != checksum {
-		return nil, ErrRecordCorrupted
-	}
-
+	
 	return value, nil
 }
 

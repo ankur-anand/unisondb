@@ -3,11 +3,13 @@ package dbkernel
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"hash/crc32"
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
-	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
+	"github.com/ankur-anand/unisondb/internal/logcodec"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/hashicorp/go-metrics"
 	"github.com/segmentio/ksuid"
@@ -35,9 +37,9 @@ type txMemTableEntry struct {
 // Txn ensures atomicity at WAL. Writes/Deletes/Chunks wouldn't be visible
 // that are part of the batch until commited.
 type Txn struct {
-	err     error
-	engine  *Engine
-	lastPos *wal.Offset
+	err        error
+	engine     *Engine
+	prevOffset *wal.Offset
 	// dataStore all the memTableEntries that can be stored on memTable after the commit has been called.
 	memTableEntries []txMemTableEntry
 	rowKey          []byte
@@ -45,17 +47,17 @@ type Txn struct {
 	startTime       time.Time
 	valuesCount     int
 	checksum        uint32 // Rolling checksum
-	txnOperation    walrecord.LogOperation
-	txnEntryType    walrecord.EntryType
+	txnOperation    logrecord.LogOperationType
+	txnEntryType    logrecord.LogEntryType
 }
 
 // NewTxn returns a new initialized batch Txn.
-func (e *Engine) NewTxn(txnType walrecord.LogOperation, valueType walrecord.EntryType) (*Txn, error) {
-	if txnType == walrecord.LogOperationNoop {
+func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.LogEntryType) (*Txn, error) {
+	if txnType == logrecord.LogOperationTypeNoOperation {
 		return nil, ErrUnsupportedTxnType
 	}
 
-	if txnType == walrecord.LogOperationDelete && valueType == walrecord.EntryTypeChunked {
+	if txnType == logrecord.LogOperationTypeDelete && valueType == logrecord.LogEntryTypeChunked {
 		return nil, ErrUnsupportedTxnType
 	}
 
@@ -68,23 +70,16 @@ func (e *Engine) NewTxn(txnType walrecord.LogOperation, valueType walrecord.Entr
 	defer e.mu.Unlock()
 	// start the batch marker in wal
 	index := e.writeSeenCounter.Add(1)
-	record := walrecord.Record{
-		Index:         index,
-		Hlc:           HLCNow(index),
-		Key:           []byte("batch_tx_begin"),
-		Value:         nil,
-		LogOperation:  walrecord.LogOperationTxnMarker,
-		TxnID:         uuid,
-		TxnStatus:     walrecord.TxnStatusBegin,
-		EntryType:     valueType,
-		PrevTxnOffset: nil,
+	record := logcodec.LogRecord{
+		LSN:             index,
+		HLC:             HLCNow(index),
+		TxnID:           uuid,
+		EntryType:       valueType,
+		TxnState:        logrecord.TransactionStateBegin,
+		PrevTxnWalIndex: nil,
 	}
 
-	encoded, err := record.FBEncode()
-	if err != nil {
-		return nil, err
-	}
-
+	encoded := record.FBEncode(512)
 	offset, err := e.walIO.Append(encoded)
 	if err != nil {
 		return nil, err
@@ -93,7 +88,7 @@ func (e *Engine) NewTxn(txnType walrecord.LogOperation, valueType walrecord.Entr
 	metrics.IncrCounterWithLabels(mTxnKeyBeginTotal, 1, e.metricsLabel)
 	return &Txn{
 		txnID:           uuid,
-		lastPos:         offset,
+		prevOffset:      offset,
 		err:             err,
 		engine:          e,
 		checksum:        0,
@@ -111,43 +106,39 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 		return t.err
 	}
 
-	if t.txnEntryType == walrecord.EntryTypeRow {
+	if t.txnEntryType == logrecord.LogEntryTypeRow {
 		return ErrUnsupportedTxnType
 	}
 
-	if t.txnOperation == walrecord.LogOperationInsert && t.txnEntryType != walrecord.EntryTypeKV && t.rowKey == nil {
+	if t.txnOperation == logrecord.LogOperationTypeInsert && t.txnEntryType != logrecord.LogEntryTypeKV && t.rowKey == nil {
 		t.rowKey = key
 	}
 
-	if t.txnOperation == walrecord.LogOperationInsert && t.txnEntryType != walrecord.EntryTypeKV && !bytes.Equal(t.rowKey, key) {
+	if t.txnOperation == logrecord.LogOperationTypeInsert && t.txnEntryType != logrecord.LogEntryTypeKV && !bytes.Equal(t.rowKey, key) {
 		t.err = ErrKeyChangedForChunkedType
 		return t.err
 	}
+
+	kvEncoded := logcodec.SerializeKVEntry(key, value)
+	checksum := crc32.ChecksumIEEE(kvEncoded)
 
 	t.engine.mu.Lock()
 	defer t.engine.mu.Unlock()
 	index := t.engine.writeSeenCounter.Add(1)
 
-	record := &walrecord.Record{
-		Index:         index,
-		Hlc:           HLCNow(index),
-		Key:           key,
-		Value:         value,
-		LogOperation:  t.txnOperation,
-		TxnID:         t.txnID,
-		TxnStatus:     walrecord.TxnStatusPrepare,
-		EntryType:     t.txnEntryType,
-		PrevTxnOffset: t.lastPos,
+	record := logcodec.LogRecord{
+		LSN:             index,
+		HLC:             HLCNow(index),
+		CRC32Checksum:   checksum,
+		OperationType:   t.txnOperation,
+		TxnState:        logrecord.TransactionStatePrepare,
+		EntryType:       t.txnEntryType,
+		TxnID:           t.txnID,
+		PrevTxnWalIndex: t.prevOffset.Encode(),
+		Entries:         [][]byte{kvEncoded},
 	}
 
-	// Encode and compress WAL record
-	encoded, err := record.FBEncode()
-
-	if err != nil {
-		t.err = err
-		return err
-	}
-
+	encoded := record.FBEncode(len(kvEncoded) + 128)
 	// Write to WAL
 	offset, err := t.engine.walIO.Append(encoded)
 
@@ -156,17 +147,12 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 		return err
 	}
 
-	t.lastPos = offset
+	t.prevOffset = offset
 
 	// for chunked type we just dataStore the last offset.
-	if t.txnEntryType != walrecord.EntryTypeChunked {
-		var memValue y.ValueStruct
-		if int64(len(value)) <= t.engine.config.ValueThreshold {
-			memValue = getValueStruct(byte(t.txnOperation), true, encoded)
-		} else {
-			memValue = getValueStruct(byte(t.txnOperation), false, offset.Encode())
-		}
+	if t.txnEntryType != logrecord.LogEntryTypeChunked {
 
+		memValue := getValueStruct(byte(t.txnOperation), byte(t.txnEntryType), kvEncoded)
 		t.memTableEntries = append(t.memTableEntries, txMemTableEntry{
 			key:    key,
 			offset: offset,
@@ -174,7 +160,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 		})
 	}
 
-	t.checksum = crc32.Update(t.checksum, crc32.IEEETable, value)
+	t.checksum = crc32.Update(t.checksum, crc32.IEEETable, kvEncoded)
 	t.valuesCount++
 	return nil
 }
@@ -187,7 +173,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 	if t.err != nil {
 		return t.err
 	}
-	if t.txnEntryType != walrecord.EntryTypeRow {
+	if t.txnEntryType != logrecord.LogEntryTypeRow {
 		return ErrUnsupportedTxnType
 	}
 
@@ -195,30 +181,26 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 		return ErrEmptyColumns
 	}
 
+	rce := logcodec.SerializeRowUpdateEntry(rowKey, columnEntries)
+	checksum := crc32.ChecksumIEEE(rce)
+
 	t.engine.mu.Lock()
 	defer t.engine.mu.Unlock()
 	index := t.engine.writeSeenCounter.Add(1)
 
-	record := &walrecord.Record{
-		Index:         index,
-		Hlc:           HLCNow(index),
-		Key:           rowKey,
-		Value:         nil,
-		LogOperation:  t.txnOperation,
-		TxnID:         t.txnID,
-		TxnStatus:     walrecord.TxnStatusPrepare,
-		EntryType:     t.txnEntryType,
-		PrevTxnOffset: t.lastPos,
-		ColumnEntries: columnEntries,
+	record := logcodec.LogRecord{
+		LSN:             index,
+		HLC:             HLCNow(index),
+		CRC32Checksum:   checksum,
+		OperationType:   t.txnOperation,
+		TxnState:        logrecord.TransactionStatePrepare,
+		EntryType:       t.txnEntryType,
+		TxnID:           t.txnID,
+		PrevTxnWalIndex: t.prevOffset.Encode(),
+		Entries:         [][]byte{rce},
 	}
 
-	// Encode and compress WAL record
-	encoded, err := record.FBEncode()
-
-	if err != nil {
-		t.err = err
-		return err
-	}
+	encoded := record.FBEncode(len(rce) + 128)
 
 	// Write to WAL
 	offset, err := t.engine.walIO.Append(encoded)
@@ -228,16 +210,15 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 		return err
 	}
 
-	t.lastPos = offset
+	t.prevOffset = offset
 
-	var memValue y.ValueStruct
-	if int64(len(encoded)) <= t.engine.config.ValueThreshold {
-		memValue = getValueStruct(byte(t.txnOperation), true, encoded)
-	} else {
-		memValue = getValueStruct(byte(t.txnOperation), false, offset.Encode())
-	}
+	memValue := getValueStruct(byte(t.txnOperation), byte(t.txnEntryType), rce)
+	t.memTableEntries = append(t.memTableEntries, txMemTableEntry{
+		key:    rowKey,
+		offset: offset,
+		value:  memValue,
+	})
 
-	memValue.UserMeta = entryTypeRow
 	t.memTableEntries = append(t.memTableEntries, txMemTableEntry{
 		key:    rowKey,
 		offset: offset,
@@ -255,28 +236,25 @@ func (t *Txn) Commit() error {
 		return t.err
 	}
 
+	kv := logcodec.SerializeKVEntry(t.rowKey, nil)
 	t.engine.mu.Lock()
 	defer t.engine.mu.Unlock()
 	index := t.engine.writeSeenCounter.Add(1)
-	record := &walrecord.Record{
-		Index:         index,
-		Hlc:           HLCNow(index),
-		Key:           t.rowKey,
-		Value:         marshalChecksum(t.checksum),
-		LogOperation:  t.txnOperation,
-		TxnID:         t.txnID,
-		TxnStatus:     walrecord.TxnStatusCommit,
-		EntryType:     t.txnEntryType,
-		PrevTxnOffset: t.lastPos,
+
+	record := logcodec.LogRecord{
+		LSN:             index,
+		HLC:             HLCNow(index),
+		CRC32Checksum:   t.checksum,
+		OperationType:   t.txnOperation,
+		TxnState:        logrecord.TransactionStateCommit,
+		EntryType:       t.txnEntryType,
+		TxnID:           t.txnID,
+		PrevTxnWalIndex: t.prevOffset.Encode(),
+		Entries:         [][]byte{kv},
 	}
 
-	// Encode and compress WAL record
-	encoded, err := record.FBEncode()
-
-	if err != nil {
-		t.err = err
-		return err
-	}
+	// Encode WAL record
+	encoded := record.FBEncode(len(kv) + 128)
 
 	// Write to WAL
 	offset, err := t.engine.walIO.Append(encoded)
@@ -292,14 +270,14 @@ func (t *Txn) Commit() error {
 	}()
 
 	// flush all the writes on mem-table
-	t.lastPos = offset
+	t.prevOffset = offset
 
 	var mErr error
 	switch t.txnEntryType {
-	case walrecord.EntryTypeKV, walrecord.EntryTypeRow:
+	case logrecord.LogEntryTypeKV, logrecord.LogEntryTypeRow:
 		mErr = t.memWriteFull()
-	case walrecord.EntryTypeChunked:
-		mErr = t.memWriteChunk(encoded)
+	case logrecord.LogEntryTypeChunked:
+		mErr = t.memWriteChunk(offset.Encode())
 	}
 
 	if mErr != nil {
@@ -312,23 +290,26 @@ func (t *Txn) Commit() error {
 }
 
 func (t *Txn) memWriteChunk(encoded []byte) error {
-	memValue := getValueStruct(byte(walrecord.LogOperationInsert), true, encoded)
-	err := t.engine.memTableWrite(t.rowKey, memValue, t.lastPos)
+	fmt.Println("memWriteChunk", encoded)
+	memValue := getValueStruct(byte(logrecord.LogOperationTypeInsert), byte(logrecord.LogEntryTypeChunked), encoded)
+	err := t.engine.memTableWrite(t.rowKey, memValue)
 	if err != nil {
 		t.err = err
 		return err
 	}
 
+	t.engine.writeOffset(t.prevOffset)
 	return nil
 }
 
 func (t *Txn) memWriteFull() error {
 	for _, memValue := range t.memTableEntries {
-		err := t.engine.memTableWrite(memValue.key, memValue.value, memValue.offset)
+		err := t.engine.memTableWrite(memValue.key, memValue.value)
 		if err != nil {
 			t.err = err
 			return err
 		}
+		t.engine.writeOffset(memValue.offset)
 	}
 
 	return nil

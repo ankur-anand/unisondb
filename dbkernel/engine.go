@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"log"
 	"log/slog"
 	"os"
@@ -14,8 +15,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	kvdrivers2 "github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
+	"github.com/ankur-anand/unisondb/dbkernel/internal"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/memtable"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/recovery"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
@@ -57,7 +60,7 @@ type Engine struct {
 	opsFlushedCounter atomic.Uint64
 	currentOffset     atomic.Pointer[wal.Offset]
 	namespace         string
-	dataStore         BTreeStore
+	dataStore         internal.BTreeStore
 	walIO             *wal.WalIO
 	config            *EngineConfig
 	metricsLabel      []metrics.Label
@@ -71,13 +74,13 @@ type Engine struct {
 	fsyncReqSignal    chan struct{}
 
 	recoveredEntriesCount int
-	startMetadata         Metadata
+	startMetadata         internal.Metadata
 	shutdown              atomic.Bool
 
 	// uses a cond broadcast for notification.
 	notifierMu    sync.RWMutex
 	notifier      *sync.Cond
-	newTxnBatcher func(maxBatchSize int) TxnBatcher
+	newTxnBatcher func(maxBatchSize int) internal.TxnBatcher
 
 	// used only during testing
 	callback func()
@@ -154,20 +157,26 @@ func (e *Engine) initStorage(dataDir, namespace string, conf *EngineConfig) erro
 	}
 	e.walIO = walIO
 
-	var bTreeStore BTreeStore
+	var bTreeStore internal.BTreeStore
 	switch conf.DBEngine {
 	case BoltDBEngine:
-		db, err := kvdrivers2.NewBoltdb(dbFile, conf.BtreeConfig)
+		db, err := kvdrivers.NewBoltdb(dbFile, conf.BtreeConfig)
 		if err != nil {
 			return err
 		}
 		bTreeStore = db
+		e.newTxnBatcher = func(maxBatchSize int) internal.TxnBatcher {
+			return db.NewTxnQueue(maxBatchSize)
+		}
 	case LMDBEngine:
-		db, err := kvdrivers2.NewLmdb(dbFile, conf.BtreeConfig)
+		db, err := kvdrivers.NewLmdb(dbFile, conf.BtreeConfig)
 		if err != nil {
 			return err
 		}
 		bTreeStore = db
+		e.newTxnBatcher = func(maxBatchSize int) internal.TxnBatcher {
+			return db.NewTxnQueue(maxBatchSize)
+		}
 	default:
 		return fmt.Errorf("unsupported database engine %s", conf.DBEngine)
 	}
@@ -179,7 +188,7 @@ func (e *Engine) initStorage(dataDir, namespace string, conf *EngineConfig) erro
 		return errors.New("arena capacity too small min capacity 2 KB")
 	}
 
-	mTable := memtable.NewMemTable(conf.ArenaSize, bTreeStore, walIO, namespace)
+	mTable := memtable.NewMemTable(conf.ArenaSize, walIO, namespace, e.newTxnBatcher)
 	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001) // 1M keys, 0.01% false positives
 	e.bloom = bloomFilter
 	e.activeMemTable = mTable
@@ -200,15 +209,15 @@ func tryFileLock(fileLock *flock.Flock) error {
 
 // loadMetaValues loads meta value that the engine stores.
 func (e *Engine) loadMetaValues() error {
-	data, err := e.dataStore.RetrieveMetadata(sysKeyWalCheckPoint)
-	if err != nil && !errors.Is(err, kvdrivers2.ErrKeyNotFound) {
+	data, err := e.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
+	if err != nil && !errors.Is(err, kvdrivers.ErrKeyNotFound) {
 		return err
 	}
 	// there is no value even for bloom filter.
-	if errors.Is(err, kvdrivers2.ErrKeyNotFound) {
+	if errors.Is(err, kvdrivers.ErrKeyNotFound) {
 		return nil
 	}
-	metadata := UnmarshalMetadata(data)
+	metadata := internal.UnmarshalMetadata(data)
 	e.startMetadata = metadata
 
 	// dataStore the global counter
@@ -225,7 +234,7 @@ func (e *Engine) loadMetaValues() error {
 }
 
 func (e *Engine) loadBloomFilter() error {
-	result, err := e.dataStore.RetrieveMetadata(sysKeyBloomFilter)
+	result, err := e.dataStore.RetrieveMetadata(internal.SysKeyBloomFilter)
 
 	if len(result) != 0 {
 		// Deserialize Bloom Filter
@@ -241,39 +250,39 @@ func (e *Engine) loadBloomFilter() error {
 
 // recoverWAL recovers the wal if any pending writes are still not visible.
 func (e *Engine) recoverWAL() error {
-	recovery := &walRecovery{
-		store: e.dataStore,
-		walIO: e.walIO,
-		bloom: e.bloom,
+	checkpoint, err := e.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
+	if err != nil && !errors.Is(err, kvdrivers.ErrKeyNotFound) {
+		return fmt.Errorf("recover WAL failed %w", err)
 	}
 
+	walRecovery := recovery.NewWalRecovery(e.dataStore, e.walIO, e.bloom)
 	startTime := time.Now()
-	if err := recovery.recoverWAL(); err != nil {
+	if err := walRecovery.Recover(checkpoint); err != nil {
 		return err
 	}
 
 	slog.Info("[unisondb.dbkernal] wal recovered",
-		"recovered_count", recovery.recoveredCount,
+		"recovered_count", walRecovery.RecoveredCount(),
 		"namespace", e.namespace,
 		"btree_engine", e.config.DBEngine,
 		"durations", humanizeDuration(time.Since(startTime)),
 	)
-	metrics.IncrCounterWithLabels(mKeyWalRecoveryRecordTotal, float32(recovery.recoveredCount), e.metricsLabel)
+	metrics.IncrCounterWithLabels(mKeyWalRecoveryRecordTotal, float32(walRecovery.RecoveredCount()), e.metricsLabel)
 	metrics.MeasureSinceWithLabels(mKeyWalRecoveryDuration, startTime, e.metricsLabel)
 
-	e.writeSeenCounter.Add(uint64(recovery.recoveredCount))
-	e.recoveredEntriesCount = recovery.recoveredCount
-	e.opsFlushedCounter.Add(uint64(recovery.recoveredCount))
-	e.currentOffset.Store(recovery.lastRecoveredPos)
+	e.writeSeenCounter.Add(uint64(walRecovery.RecoveredCount()))
+	e.recoveredEntriesCount = walRecovery.RecoveredCount()
+	e.opsFlushedCounter.Add(uint64(walRecovery.RecoveredCount()))
+	e.currentOffset.Store(walRecovery.LastRecoveredOffset())
 
-	if recovery.recoveredCount > 0 {
+	if walRecovery.RecoveredCount() > 0 {
 		// once recovered update the metadata table again.
 		e.pendingMetadata.queueMetadata(&flushedMetadata{
-			metadata: &Metadata{
-				RecordProcessed: uint64(recovery.recoveredCount),
-				Pos:             recovery.lastRecoveredPos,
+			metadata: &internal.Metadata{
+				RecordProcessed: uint64(walRecovery.RecoveredCount()),
+				Pos:             walRecovery.LastRecoveredOffset(),
 			},
-			recordProcessed: recovery.recoveredCount,
+			recordProcessed: walRecovery.RecoveredCount(),
 		})
 
 		select {
@@ -301,13 +310,22 @@ func (e *Engine) recoverWAL() error {
 //
 // 5. Store the current Chunk Position in the variable.
 func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.LogOperationType) error {
-	kvEntries := make([]logcodec.KeyValueEntry, 0, len(keys))
 
-	for i, entry := range keys {
-		kv := logcodec.KeyValueEntry{
-			Key:   entry,
-			Value: values[i],
+	kvEntries := make([][]byte, 0, len(keys))
+
+	hintSize := 512
+	checksum := uint32(0)
+	for i, key := range keys {
+		var kv []byte
+		switch op {
+		case logrecord.LogOperationTypeDelete:
+			kv = logcodec.SerializeKVEntry(key, nil)
+		default:
+			kv = logcodec.SerializeKVEntry(key, values[i])
 		}
+
+		hintSize += len(kv)
+		crc32.Update(checksum, crc32.IEEETable, kv)
 		kvEntries = append(kvEntries, kv)
 	}
 
@@ -322,12 +340,10 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 		OperationType: op,
 		TxnState:      logrecord.TransactionStateNone,
 		EntryType:     logrecord.LogEntryTypeKV,
-		Payload: logcodec.LogOperationData{
-			KeyValueBatchEntries: &logcodec.KeyValueBatchEntries{Entries: kvEntries},
-		},
+		Entries:       kvEntries,
 	}
 
-	encoded := record.FBEncode()
+	encoded := record.FBEncode(hintSize)
 
 	// Write to WAL
 	offset, err := e.walIO.Append(encoded)
@@ -335,38 +351,39 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 		return err
 	}
 
-	for _, entry := range kvEntries {
-		var memValue y.ValueStruct
-		if int64(len(encoded)) <= e.config.ValueThreshold {
-			memValue = getValueStruct(byte(op), true, encoded)
-		} else {
-			memValue = getValueStruct(byte(op), false, offset.Encode())
-		}
+	// store the entire value as single
 
-		err = e.memTableWrite(entry.Key, memValue, offset)
+	for i, entry := range kvEntries {
+		memValue := getValueStruct(byte(op), internal.EntryTypeKV, entry)
 
+		err = e.memTableWrite(keys[i], memValue)
 		if err != nil {
 			return err
 		}
 	}
 
+	e.writeOffset(offset)
 	return nil
 }
 
 // persistRowColumnAction writes the columnEntries for the given rowKey in the wal and mem-table.
 func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [][]byte, columnsEntries []map[string][]byte) error {
-	rowEntries := make([]logcodec.RowUpdateEntry, 0, len(rowKeys))
+	rowEntries := make([][]byte, 0, len(rowKeys))
 
+	hintSize := 512
+	checksum := uint32(0)
 	for i, entry := range rowKeys {
-		column := columnsEntries[i]
-		columnEntries := make([]logcodec.ColumnData, 0, len(column))
-		for cName, cValue := range column {
-			columnEntries = append(columnEntries, logcodec.ColumnData{
-				Name:  cName,
-				Value: cValue,
-			})
+		var re []byte
+		switch op {
+		case logrecord.LogOperationTypeDeleteRowByKey:
+			re = logcodec.SerializeRowUpdateEntry(entry, nil)
+		default:
+			re = logcodec.SerializeRowUpdateEntry(entry, columnsEntries[i])
 		}
-		rowEntries = append(rowEntries, logcodec.RowUpdateEntry{Key: entry, Columns: columnEntries})
+
+		hintSize += len(re)
+		crc32.Update(checksum, crc32.IEEETable, re)
+		rowEntries = append(rowEntries, re)
 	}
 
 	e.mu.Lock()
@@ -379,14 +396,13 @@ func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [
 		LSN:           index,
 		HLC:           hlc,
 		OperationType: op,
+		CRC32Checksum: checksum,
 		TxnState:      logrecord.TransactionStateNone,
 		EntryType:     logrecord.LogEntryTypeRow,
-		Payload: logcodec.LogOperationData{
-			RowUpdateEntries: &logcodec.RowUpdateEntries{Entries: rowEntries},
-		},
+		Entries:       rowEntries,
 	}
 
-	encoded := record.FBEncode()
+	encoded := record.FBEncode(hintSize)
 
 	// Write to WAL
 	offset, err := e.walIO.Append(encoded)
@@ -394,41 +410,40 @@ func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [
 		return err
 	}
 
-	for _, entry := range rowEntries {
-		var memValue y.ValueStruct
-		if int64(len(encoded)) <= e.config.ValueThreshold {
-			memValue = getValueStruct(byte(op), true, encoded)
-		} else {
-			memValue = getValueStruct(byte(op), false, offset.Encode())
-		}
-		memValue.UserMeta = entryTypeRow
-		err = e.memTableWrite(entry.Key, memValue, offset)
-
+	for i, entry := range rowEntries {
+		memValue := getValueStruct(byte(op), internal.EntryTypeRow, entry)
+		err = e.memTableWrite(rowKeys[i], memValue)
 		if err != nil {
 			return err
 		}
 	}
 
+	e.writeOffset(offset)
 	return nil
 }
 
-// memTableWrite will write the provided key and value to the memTable.
-func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, offset *wal.Offset) error {
-	defer func() {
+func (e *Engine) writeOffset(offset *wal.Offset) {
+	if offset != nil {
+		e.activeMemTable.SetOffset(offset)
 		// Signal all waiting routines that a new append has happened
 		// Atomically update lastChunkPosition
 		e.currentOffset.Store(offset)
 		e.notifierMu.Lock()
 		e.notifier.Broadcast()
 		e.notifierMu.Unlock()
-	}()
+	}
+}
+
+// memTableWrite will write the provided key and value to the memTable.
+func (e *Engine) memTableWrite(key []byte, v y.ValueStruct) error {
+
 	var err error
-	err = e.activeMemTable.put(key, v, offset)
+	err = e.activeMemTable.Put(key, v)
 	if err != nil {
 		if errors.Is(err, memtable.ErrArenaSizeWillExceed) {
 			metrics.IncrCounterWithLabels(mKeyMemTableRotationTotal, 1, e.metricsLabel)
 			e.rotateMemTable()
-			err = e.activeMemTable.put(key, v, offset)
+			err = e.activeMemTable.Put(key, v)
 			// :(
 			if err != nil {
 				return err
@@ -449,7 +464,7 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct, offset *wal.Offset) 
 func (e *Engine) rotateMemTableNoFlush() {
 	// put the old table in the queue
 	oldTable := e.activeMemTable
-	e.activeMemTable = memtable.newMemTable(e.config.ArenaSize, e.dataStore, e.walIO, e.namespace)
+	e.activeMemTable = memtable.NewMemTable(e.config.ArenaSize, e.walIO, e.namespace, e.newTxnBatcher)
 	e.sealedMemTables = append(e.sealedMemTables, oldTable)
 	e.callback()
 }
@@ -457,7 +472,7 @@ func (e *Engine) rotateMemTableNoFlush() {
 func (e *Engine) rotateMemTable() {
 	// put the old table in the queue
 	oldTable := e.activeMemTable
-	e.activeMemTable = memtable.newMemTable(e.config.ArenaSize, e.dataStore, e.walIO, e.namespace)
+	e.activeMemTable = memtable.NewMemTable(e.config.ArenaSize, e.walIO, e.namespace, e.newTxnBatcher)
 	e.sealedMemTables = append(e.sealedMemTables, oldTable)
 	select {
 	case e.flushReqSignal <- struct{}{}:
@@ -476,7 +491,7 @@ func (e *Engine) saveBloomFilter() error {
 		return err
 	}
 
-	return e.dataStore.StoreMetadata(sysKeyBloomFilter, buf.Bytes())
+	return e.dataStore.StoreMetadata(internal.SysKeyBloomFilter, buf.Bytes())
 }
 
 // asyncMemTableFlusher flushes the sealed mem table.
@@ -510,27 +525,27 @@ func (e *Engine) asyncMemTableFlusher(ctx context.Context) {
 
 // handleFlush flushes the sealed mem-table to btree store.
 func (e *Engine) handleFlush(ctx context.Context) {
-	var mt *memtable.memTable
+	var mt *memtable.MemTable
 	e.mu.Lock()
 	metrics.SetGaugeWithLabels(mKeySealedMemTableTotal, float32(len(e.sealedMemTables)), e.metricsLabel)
 	if len(e.sealedMemTables) > 0 {
 		mt = e.sealedMemTables[0]
 	}
 	e.mu.Unlock()
-	if mt != nil && !mt.skipList.Empty() {
+	if mt != nil && !mt.IsEmpty() {
 		startTime := time.Now()
-		recordProcessed, err := mt.flush(ctx)
+		recordProcessed, err := mt.Flush(ctx)
 		if err != nil {
 			log.Fatal("Failed to flushMemTable MemTable:", "namespace", e.namespace, "err", err)
 		}
 
 		fm := &flushedMetadata{
-			metadata: &Metadata{
+			metadata: &internal.Metadata{
 				RecordProcessed: e.opsFlushedCounter.Add(uint64(recordProcessed)),
-				Pos:             mt.lastOffset,
+				Pos:             mt.GetLastOffset(),
 			},
 			recordProcessed: recordProcessed,
-			bytesFlushed:    uint64(mt.bytesStored),
+			bytesFlushed:    uint64(mt.GetBytesStored()),
 		}
 		e.pendingMetadata.queueMetadata(fm)
 		e.mu.Lock()
@@ -545,17 +560,17 @@ func (e *Engine) handleFlush(ctx context.Context) {
 		select {
 		case e.fsyncReqSignal <- struct{}{}:
 		default:
-			slog.Debug("fsync queue signal channel full")
+			slog.Info("fsync queue signal channel full")
 		}
 
-		slog.Debug("[kvalchemy.dbengine] Flushed MemTable",
+		slog.Info("[kvalchemy.dbengine] Flushed MemTable",
 			"ops_flushed", recordProcessed, "namespace", e.namespace,
-			"duration", humanizeDuration(time.Since(startTime)), "bytes_flushed", humanize.Bytes(uint64(mt.bytesStored)))
+			"duration", humanizeDuration(time.Since(startTime)), "bytes_flushed", humanize.Bytes(uint64(mt.GetBytesStored())))
 	}
 }
 
 type flushedMetadata struct {
-	metadata        *Metadata
+	metadata        *internal.Metadata
 	recordProcessed int
 	bytesFlushed    uint64
 }
@@ -595,7 +610,8 @@ func (e *Engine) asyncFSync() {
 			metrics.IncrCounterWithLabels(mKeyPendingFsyncTotal, float32(n), e.metricsLabel)
 			startTime := time.Now()
 			metrics.IncrCounterWithLabels(mKeyFSyncTotal, 1, e.metricsLabel)
-			err := SaveMetadata(e.dataStore, fm.metadata.Pos, fm.metadata.RecordProcessed)
+			fmt.Println("saving metadata", fm.metadata.Pos, fm.metadata.RecordProcessed)
+			err := internal.SaveMetadata(e.dataStore, fm.metadata.Pos, fm.metadata.RecordProcessed)
 			if err != nil {
 				log.Fatal("[kvalchemy.dbengine] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
 			}
@@ -633,7 +649,7 @@ func (e *Engine) close(ctx context.Context) error {
 	var errs strings.Builder
 
 	// wait for background routine to close.
-	if !waitWithTimeout(e.wg, 10*time.Second) {
+	if !waitWithCancel(e.wg, ctx) {
 		errs.WriteString("[kvalchemy.dbengine]: WAL check operation timed out")
 		errs.WriteString("|")
 		slog.Error("Timeout reached! Some goroutines are still running")
@@ -655,6 +671,7 @@ func (e *Engine) close(ctx context.Context) error {
 		slog.Error("[kvalchemy.dbengine]: wal close error", "error", err)
 	}
 
+	fmt.Println("flushing fsync")
 	err = e.dataStore.FSync()
 	if err != nil {
 		errs.WriteString(err.Error())
@@ -662,6 +679,7 @@ func (e *Engine) close(ctx context.Context) error {
 		slog.Error("[kvalchemy.dbengine]: Btree Fsync error", "error", err)
 	}
 
+	fmt.Println("closing datastore")
 	err = e.dataStore.Close()
 	if err != nil {
 		errs.WriteString(err.Error())
@@ -670,6 +688,7 @@ func (e *Engine) close(ctx context.Context) error {
 	}
 
 	// release the lock file.
+	fmt.Println("release the lock file.")
 	if err := e.fileLock.Unlock(); err != nil {
 		errs.WriteString(err.Error())
 		errs.WriteString("|")
@@ -681,7 +700,7 @@ func (e *Engine) close(ctx context.Context) error {
 	return nil
 }
 
-func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+func waitWithCancel(wg *sync.WaitGroup, ctx context.Context) bool {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -691,7 +710,7 @@ func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
 	select {
 	case <-done:
 		return true
-	case <-time.After(timeout):
+	case <-ctx.Done():
 		return false
 	}
 }

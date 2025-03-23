@@ -58,6 +58,10 @@ func NewMemTable(capacity int64, wIO *wal.WalIO, namespace string,
 	}
 }
 
+func (table *MemTable) IsEmpty() bool {
+	return table.skipList.Empty()
+}
+
 // skip list arena has a fixed capacity, if adding the given key-value pair would exceed its capacity
 // the skip list panic. verify before to avoid the panic.
 func (table *MemTable) canPut(key []byte, val y.ValueStruct) bool {
@@ -93,6 +97,10 @@ func (table *MemTable) SetOffset(offset *wal.Offset) {
 	if table.firstOffset != nil {
 		table.firstOffset = offset
 	}
+}
+
+func (table *MemTable) GetBytesStored() int {
+	return table.bytesStored
 }
 
 func (table *MemTable) GetLastOffset() *wal.Offset {
