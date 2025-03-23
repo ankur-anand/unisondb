@@ -35,16 +35,3 @@ func (m *Metadata) MarshalBinary() []byte {
 	copy(result[8:], encodedPos)
 	return result
 }
-
-// UnmarshalMetadata decodes a Metadata struct from a byte slice.
-func UnmarshalMetadata(data []byte) Metadata {
-	index := binary.LittleEndian.Uint64(data[:8])
-
-	// Decode ChunkPosition from the remaining bytes
-	pos := wal.DecodeOffset(data[8:])
-
-	return Metadata{
-		RecordProcessed: index,
-		Pos:             pos,
-	}
-}
