@@ -30,6 +30,18 @@ func NewWalRecovery(store internal.BTreeStore, walIO *wal.WalIO, bloom *bloom.Bl
 	}
 }
 
+func (w *WalRecovery) RecoveredCount() int {
+	return w.w.recoveredCount
+}
+
+func (w *WalRecovery) LastRecoveredOffset() *wal.Offset {
+	if w.w.lastRecoveredPos == nil {
+		return nil
+	}
+	off := *w.w.lastRecoveredPos
+	return &off
+}
+
 // Recover restores WAL entries starting from the provided checkpoint.
 func (w *WalRecovery) Recover(checkPoint []byte) error {
 	return w.w.recoverWAL(checkPoint)

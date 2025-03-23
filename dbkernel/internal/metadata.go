@@ -1,9 +1,14 @@
-package dbkernel
+package internal
 
 import (
 	"encoding/binary"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
+)
+
+var (
+	SysKeyWalCheckPoint = []byte("sys.kv.unisondb.key.wal.checkpoint")
+	SysKeyBloomFilter   = []byte("sys.kv.unisondb.key.bloom-filter")
 )
 
 // Metadata represents a checkpoint in the Write-Ahead Log (WAL).
@@ -22,7 +27,7 @@ func SaveMetadata(db BTreeStore, pos *wal.Offset, index uint64) error {
 	}
 	value := metaData.MarshalBinary()
 
-	return db.StoreMetadata(sysKeyWalCheckPoint, value)
+	return db.StoreMetadata(SysKeyWalCheckPoint, value)
 }
 
 // MarshalBinary encodes a Metadata struct to a byte slice.
@@ -34,4 +39,17 @@ func (m *Metadata) MarshalBinary() []byte {
 
 	copy(result[8:], encodedPos)
 	return result
+}
+
+// UnmarshalMetadata decodes a Metadata struct from a byte slice.
+func UnmarshalMetadata(data []byte) Metadata {
+	index := binary.LittleEndian.Uint64(data[:8])
+
+	// Decode ChunkPosition from the remaining bytes
+	pos := wal.DecodeOffset(data[8:])
+
+	return Metadata{
+		RecordProcessed: index,
+		Pos:             pos,
+	}
 }

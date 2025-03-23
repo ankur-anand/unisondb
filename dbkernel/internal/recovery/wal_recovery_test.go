@@ -21,7 +21,7 @@ var (
 	testNamespace = "test_namespace"
 )
 
-func TestWalRecoveryForKV(t *testing.T) {
+func TestWalRecoveryForKV_Row(t *testing.T) {
 	tdir := t.TempDir()
 	walDir := filepath.Join(tdir, "wal_test")
 	err := os.MkdirAll(walDir, 0777)
@@ -414,6 +414,202 @@ func TestWalRecoveryForKV(t *testing.T) {
 		}
 	})
 
+	var insertedRows map[string]map[string][]byte
+
+	t.Run("row_insert", func(t *testing.T) {
+		recordCount = 50
+		rowRecords, rowKV := generateNRowColumnFBRecord(uint64(recordCount))
+		insertedRows = rowKV
+
+		var lastOffset *wal.Offset
+		for _, record := range rowRecords {
+			offset, err := walInstance.Append(record)
+			assert.NoError(t, err)
+			lastOffset = offset
+		}
+		recoveryInstance := &walRecovery{
+			store: db,
+			walIO: walInstance,
+			bloom: bloomFilter,
+		}
+
+		err = recoveryInstance.recoverWAL(checkpoint)
+		assert.NoError(t, err, "failed to recover wal")
+		assert.Equal(t, *recoveryInstance.lastRecoveredPos, *lastOffset)
+		assert.Equal(t, 63, recoveryInstance.recoveredCount, "total record recovered failed")
+
+		for rKey, rValue := range insertedRows {
+			columns, err := db.GetRowColumns([]byte(rKey), nil)
+			assert.NoError(t, err, "failed to read row columns")
+			assert.Equal(t, len(rValue), len(columns))
+			assert.Equal(t, rValue, columns)
+		}
+	})
+
+	t.Run("delete_row_by_key", func(t *testing.T) {
+		randomRow := gofakeit.RandomMapKey(insertedRows).(string)
+		delete(insertedRows, randomRow)
+
+		encoded := logcodec.SerializeKVEntry([]byte(randomRow), nil)
+		record := logcodec.LogRecord{
+			LSN:           0,
+			HLC:           0,
+			OperationType: logrecord.LogOperationTypeDeleteRowByKey,
+			TxnState:      logrecord.TransactionStateNone,
+			EntryType:     logrecord.LogEntryTypeRow,
+			Entries:       [][]byte{encoded},
+		}
+
+		lastOffset, err := walInstance.Append(record.FBEncode(1024))
+		assert.NoError(t, err)
+		recoveryInstance := &walRecovery{
+			store: db,
+			walIO: walInstance,
+			bloom: bloomFilter,
+		}
+
+		err = recoveryInstance.recoverWAL(checkpoint)
+		assert.NoError(t, err, "failed to recover wal")
+		assert.Equal(t, *recoveryInstance.lastRecoveredPos, *lastOffset)
+		assert.Equal(t, 64, recoveryInstance.recoveredCount, "total record recovered failed")
+
+		columns, err := db.GetRowColumns([]byte(randomRow), nil)
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+		assert.Empty(t, columns)
+	})
+
+	t.Run("delete_columns_in_row", func(t *testing.T) {
+		randomRow := gofakeit.RandomMapKey(insertedRows).(string)
+		deletedColumns := make(map[string]struct{})
+		var encoded [][]byte
+		for i := 0; i < 5; i++ {
+			randomColumnName := gofakeit.RandomMapKey(insertedRows[randomRow]).(string)
+			deletedColumns[randomColumnName] = struct{}{}
+			columnToDelete := map[string][]byte{
+				randomColumnName: nil,
+			}
+			encoded = append(encoded, logcodec.SerializeRowUpdateEntry([]byte(randomRow), columnToDelete))
+		}
+
+		record := logcodec.LogRecord{
+			LSN:           0,
+			HLC:           0,
+			OperationType: logrecord.LogOperationTypeDelete,
+			TxnState:      logrecord.TransactionStateNone,
+			EntryType:     logrecord.LogEntryTypeRow,
+			Entries:       encoded,
+		}
+
+		lastOffset, err := walInstance.Append(record.FBEncode(1024))
+		assert.NoError(t, err)
+		recoveryInstance := &walRecovery{
+			store: db,
+			walIO: walInstance,
+			bloom: bloomFilter,
+		}
+
+		err = recoveryInstance.recoverWAL(checkpoint)
+		assert.NoError(t, err, "failed to recover wal")
+		assert.Equal(t, *recoveryInstance.lastRecoveredPos, *lastOffset)
+		assert.Equal(t, 65, recoveryInstance.recoveredCount, "total record recovered failed")
+
+		columns, err := db.GetRowColumns([]byte(randomRow), nil)
+		assert.NoError(t, err, "failed to read row columns")
+		assert.NotContains(t, columns, deletedColumns)
+		metaData := internal.Metadata{
+			RecordProcessed: uint64(totalRecordCount),
+			Pos:             lastOffset,
+		}
+		checkpoint = metaData.MarshalBinary()
+	})
+
+	var cleanupLogRecords []logcodec.LogRecord
+	var cleanupKVEntries map[string]map[string][]byte
+	t.Run("row_txn_insert", func(t *testing.T) {
+		recordCount = 10
+		logRecords, kvDB := generateNRowColumnFBRecordTxn(10)
+		cleanupKVEntries = kvDB
+		cleanupLogRecords = logRecords
+
+		var lastOffset *wal.Offset
+		for _, record := range logRecords {
+			if lastOffset != nil {
+				record.PrevTxnWalIndex = lastOffset.Encode()
+			}
+
+			offset, err := walInstance.Append(record.FBEncode(1024))
+			assert.NoError(t, err)
+			lastOffset = offset
+		}
+
+		lastRecord := logcodec.LogRecord{
+			LSN:             0,
+			HLC:             0,
+			OperationType:   logrecord.LogOperationTypeInsert,
+			TxnState:        logrecord.TransactionStateCommit,
+			EntryType:       logrecord.LogEntryTypeRow,
+			PrevTxnWalIndex: lastOffset.Encode(),
+		}
+
+		lastOffset, err = walInstance.Append(lastRecord.FBEncode(1024))
+
+		recoveryInstance := &walRecovery{
+			store: db,
+			walIO: walInstance,
+			bloom: bloomFilter,
+		}
+
+		err = recoveryInstance.recoverWAL(checkpoint)
+		assert.NoError(t, err, "failed to recover wal")
+		assert.Equal(t, *recoveryInstance.lastRecoveredPos, *lastOffset)
+		assert.Equal(t, 11, recoveryInstance.recoveredCount, "total record recovered failed")
+		for rKey, rValue := range kvDB {
+			columns, err := db.GetRowColumns([]byte(rKey), nil)
+			assert.NoError(t, err, "failed to read row columns")
+			assert.Equal(t, len(rValue), len(columns))
+			assert.Equal(t, rValue, columns)
+		}
+	})
+
+	t.Run("row_txn_delete", func(t *testing.T) {
+
+		var lastOffset *wal.Offset
+		for _, record := range cleanupLogRecords {
+			if lastOffset != nil {
+				record.PrevTxnWalIndex = lastOffset.Encode()
+			}
+
+			record.OperationType = logrecord.LogOperationTypeDelete
+
+			offset, err := walInstance.Append(record.FBEncode(1024))
+			assert.NoError(t, err)
+			lastOffset = offset
+		}
+
+		lastRecord := logcodec.LogRecord{
+			LSN:             0,
+			HLC:             0,
+			OperationType:   logrecord.LogOperationTypeDelete,
+			TxnState:        logrecord.TransactionStateCommit,
+			EntryType:       logrecord.LogEntryTypeRow,
+			PrevTxnWalIndex: lastOffset.Encode(),
+		}
+
+		lastOffset, err = walInstance.Append(lastRecord.FBEncode(1024))
+
+		recoveryInstance := NewWalRecovery(db, walInstance, bloomFilter)
+
+		err = recoveryInstance.Recover(checkpoint)
+		assert.NoError(t, err, "failed to recover wal")
+		assert.Equal(t, *recoveryInstance.LastRecoveredOffset(), *lastOffset)
+		assert.Equal(t, 22, recoveryInstance.RecoveredCount(), "total record recovered failed")
+		for rKey := range cleanupKVEntries {
+			columns, err := db.GetRowColumns([]byte(rKey), nil)
+			assert.NoError(t, err, "failed to read row columns")
+			assert.Len(t, columns, 0)
+		}
+	})
+
 	t.Run("btree_store_validator", func(t *testing.T) {
 		for k := range allCommitedKeys {
 			value, err := db.Get([]byte(k))
@@ -431,6 +627,23 @@ func TestWalRecoveryForKV(t *testing.T) {
 			value, err := db.Get([]byte(key))
 			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value, "deleted key value should be nil %s", key)
+		}
+	})
+
+	t.Run("bloom_filter_validator", func(t *testing.T) {
+		for k := range allCommitedKeys {
+			ok := bloomFilter.Test([]byte(k))
+			assert.True(t, ok)
+		}
+
+		for k := range insertedRows {
+			ok := bloomFilter.Test([]byte(k))
+			assert.True(t, ok)
+		}
+
+		for k := range cleanupKVEntries {
+			ok := bloomFilter.Test([]byte(k))
+			assert.True(t, ok)
 		}
 	})
 
@@ -553,4 +766,100 @@ func generateNKeyValueFBRecord(n uint64) ([][]byte, map[string][]byte) {
 	}
 
 	return records, kv
+}
+
+func generateNRowColumnFBRecord(n uint64) ([][]byte, map[string]map[string][]byte) {
+	rowsEntries := make(map[string]map[string][]byte)
+	var rowsEncoded [][]byte
+
+	for i := uint64(0); i < n; i++ {
+		rowKey := gofakeit.UUID()
+
+		if rowsEntries[rowKey] == nil {
+			rowsEntries[rowKey] = make(map[string][]byte)
+		}
+
+		var encodedVals [][]byte
+		// for each row Key generate 5 ops
+		for j := 0; j < 5; j++ {
+			entries := make(map[string][]byte)
+			for k := 0; k < 10; k++ {
+				key := gofakeit.UUID()
+				val := gofakeit.LetterN(uint(i + 1))
+				rowsEntries[rowKey][key] = []byte(val)
+				entries[key] = []byte(val)
+			}
+			enc := logcodec.SerializeRowUpdateEntry([]byte(rowKey), entries)
+			encodedVals = append(encodedVals, enc)
+		}
+		record := logcodec.LogRecord{
+			LSN:             i,
+			HLC:             i,
+			OperationType:   logrecord.LogOperationTypeInsert,
+			TxnState:        logrecord.TransactionStateNone,
+			EntryType:       logrecord.LogEntryTypeRow,
+			Entries:         encodedVals,
+			PrevTxnWalIndex: nil,
+			TxnID:           []byte(gofakeit.UUID()),
+		}
+
+		enc := record.FBEncode(1024)
+		rowsEncoded = append(rowsEncoded, enc)
+	}
+
+	return rowsEncoded, rowsEntries
+}
+
+func generateNRowColumnFBRecordTxn(n uint64) ([]logcodec.LogRecord, map[string]map[string][]byte) {
+	rowsEntries := make(map[string]map[string][]byte)
+	var rowsEncoded []logcodec.LogRecord
+
+	record := logcodec.LogRecord{
+		LSN:             0,
+		HLC:             0,
+		CRC32Checksum:   0,
+		OperationType:   logrecord.LogOperationTypeTxnMarker,
+		TxnState:        logrecord.TransactionStateBegin,
+		EntryType:       logrecord.LogEntryTypeRow,
+		Entries:         nil,
+		PrevTxnWalIndex: nil,
+		TxnID:           []byte(gofakeit.UUID()),
+	}
+
+	rowsEncoded = append(rowsEncoded, record)
+	for i := uint64(1); i < n; i++ {
+		rowKey := gofakeit.UUID()
+
+		if rowsEntries[rowKey] == nil {
+			rowsEntries[rowKey] = make(map[string][]byte)
+		}
+
+		var encodedVals [][]byte
+		// for each row Key generate 5 ops
+		for j := 0; j < 5; j++ {
+			entries := make(map[string][]byte)
+			for k := 0; k < 10; k++ {
+				key := gofakeit.UUID()
+				val := gofakeit.LetterN(uint(i + 1))
+				rowsEntries[rowKey][key] = []byte(val)
+				entries[key] = []byte(val)
+			}
+			enc := logcodec.SerializeRowUpdateEntry([]byte(rowKey), entries)
+			encodedVals = append(encodedVals, enc)
+		}
+		record := logcodec.LogRecord{
+			LSN:             i,
+			HLC:             i,
+			OperationType:   logrecord.LogOperationTypeInsert,
+			TxnState:        logrecord.TransactionStatePrepare,
+			EntryType:       logrecord.LogEntryTypeRow,
+			Entries:         encodedVals,
+			PrevTxnWalIndex: nil,
+			TxnID:           []byte(gofakeit.UUID()),
+		}
+
+		rowsEncoded = append(rowsEncoded, record)
+	}
+
+	return rowsEncoded, rowsEntries
 }
