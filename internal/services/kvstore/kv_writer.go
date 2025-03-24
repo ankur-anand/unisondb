@@ -7,9 +7,9 @@ import (
 	"time"
 
 	storage "github.com/ankur-anand/unisondb/dbkernel"
-	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/ankur-anand/unisondb/internal/middleware"
 	"github.com/ankur-anand/unisondb/internal/services"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	v2 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
 	"google.golang.org/grpc"
 )
@@ -130,7 +130,7 @@ func (k *KVWriterService) PutStreamChunksForKey(g grpc.ClientStreamingServer[v2.
 func (k *KVWriterService) handleStartMarker(engine *storage.Engine,
 	g grpc.ClientStreamingServer[v2.PutStreamChunksForKeyRequest, v2.PutStreamChunksForKeyResponse],
 	req *v2.PutStreamChunksForKeyRequest_StartMarker) (*storage.Txn, error) {
-	batch, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.EntryTypeChunked)
+	batch, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +158,7 @@ func (k *KVWriterService) handleCommitMarker(txn *storage.Txn,
 	}
 
 	checksum := req.CommitMarker.GetFinalCrc32Checksum()
-	if txn.Checksum() != checksum {
+	if txn.ChunkedValueChecksum() != checksum {
 		return services.ErrPutChunkCheckSumMismatch
 	}
 

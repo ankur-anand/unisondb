@@ -9,7 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbkernel/internal"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
@@ -31,11 +32,9 @@ func TestStorageEngine_Suite(t *testing.T) {
 	engine, err := NewStorageEngine(dir, namespace, config)
 	engine.callback = callback
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	assert.NoError(t, err, "NewStorageEngine should not error")
 	t.Cleanup(func() {
-		err := engine.close(ctx)
+		err := engine.close(context.Background())
 		assert.NoError(t, err, "storage engine close should not error")
 	})
 
@@ -45,13 +44,13 @@ func TestStorageEngine_Suite(t *testing.T) {
 			key := gofakeit.UUID()
 			value := gofakeit.LetterN(100)
 			insertedKV[key] = value
-			err := engine.persistKeyValue([]byte(key), []byte(value), walrecord.LogOperationInsert)
+			err := engine.persistKeyValue([][]byte{[]byte(key)}, [][]byte{[]byte(value)}, logrecord.LogOperationTypeInsert)
 			assert.NoError(t, err, "persistKeyValue should not error")
 		}
 	})
 
 	t.Run("handle_mem_table_flush_no_sealed_table", func(t *testing.T) {
-		engine.handleFlush(ctx)
+		engine.handleFlush(t.Context())
 		select {
 		case <-callbackSignal:
 			t.Errorf("should not have received callback signal")
@@ -72,7 +71,7 @@ func TestStorageEngine_Suite(t *testing.T) {
 		assert.Equal(t, uint64(100), engine.opsFlushedCounter.Load(), "expected opsFlushed counter to be 100")
 		assert.Equal(t, uint64(100), engine.writeSeenCounter.Load(), "expected writeSeenCounter counter to be 100")
 
-		result, err := engine.dataStore.RetrieveMetadata(sysKeyBloomFilter)
+		result, err := engine.dataStore.RetrieveMetadata(internal.SysKeyBloomFilter)
 		assert.NoError(t, err, "RetrieveMetadata should not error for bloom filter after flush")
 		// Deserialize Bloom Filter
 		buf := bytes.NewReader(result)
@@ -86,9 +85,9 @@ func TestStorageEngine_Suite(t *testing.T) {
 			assert.True(t, engine.bloom.Test([]byte(k)))
 		}
 
-		result, err = engine.dataStore.RetrieveMetadata(sysKeyWalCheckPoint)
+		result, err = engine.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
 		assert.NoError(t, err, "RetrieveMetadata should not error")
-		metadata := UnmarshalMetadata(result)
+		metadata := internal.UnmarshalMetadata(result)
 		assert.Equal(t, uint64(100), metadata.RecordProcessed, "metadata.RecordProcessed should be 100")
 		assert.Equal(t, *metadata.Pos, *engine.currentOffset.Load(), "metadata.offset should be equal to current offset")
 	})
@@ -98,7 +97,7 @@ func TestStorageEngine_Suite(t *testing.T) {
 			key := gofakeit.UUID()
 			value := gofakeit.LetterN(1024)
 			insertedKV[key] = value
-			err := engine.persistKeyValue([]byte(key), []byte(value), walrecord.LogOperationInsert)
+			err := engine.persistKeyValue([][]byte{[]byte(key)}, [][]byte{[]byte(value)}, logrecord.LogOperationTypeInsert)
 			assert.NoError(t, err, "persistKeyValue should not error")
 		}
 
@@ -114,9 +113,9 @@ func TestStorageEngine_Suite(t *testing.T) {
 			assert.True(t, engine.bloom.Test([]byte(k)))
 		}
 
-		result, err := engine.dataStore.RetrieveMetadata(sysKeyWalCheckPoint)
+		result, err := engine.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
 		assert.NoError(t, err, "RetrieveMetadata should not error")
-		metadata := UnmarshalMetadata(result)
+		metadata := internal.UnmarshalMetadata(result)
 		assert.Equal(t, engine.opsFlushedCounter.Load(), metadata.RecordProcessed, "flushed counter should match")
 
 	})
@@ -128,7 +127,6 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 
 	config := NewDefaultEngineConfig()
 	config.ArenaSize = 200 * 1024
-	config.ValueThreshold = 50
 	config.DBEngine = BoltDBEngine
 	config.BtreeConfig.Namespace = namespace
 
@@ -146,7 +144,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	batchKey := []byte(gofakeit.UUID())
 
 	// open a batch writer:
-	batch, err := engine.NewTxn(walrecord.LogOperationInsert, walrecord.EntryTypeChunked)
+	batch, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
 	assert.NoError(t, err, "NewBatch operation should succeed")
 	assert.NotNil(t, batch, "NewBatch operation should succeed")
 
@@ -183,8 +181,19 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 		t.Errorf("Timed out waiting for flush")
 	}
 
+	for i := 0; i < 1; i++ {
+		key := []byte(fmt.Sprintf("%s%d", keyPrefix, i))
+		valueRec, err := engine.Get(key)
+		assert.NoError(t, err, "Get operation should not fail")
+		assert.Equal(t, valueRec, value, "failed here as well")
+
+	}
 	f, err := os.CreateTemp("", "backup.bolt")
 	assert.NoError(t, err)
+	// flush everything so no race with db View and
+	// OpsFlushed and pause flush.
+	engine.fSyncStore()
+	engine.pauseFlush()
 	_, err = engine.BtreeSnapshot(f)
 	assert.NoError(t, err)
 	err = f.Close()
@@ -197,6 +206,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	assert.NoError(t, err)
 	defer db.Close()
 	keysCount := 0
+
 	db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte(namespace))
 		assert.NotNil(t, bucket)
@@ -206,7 +216,9 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 		})
 		return nil
 	})
-	err = engine.Close(context.Background())
+	assert.Equal(t, uint64(keysCount), engine.OpsFlushedCount())
+	assert.Equal(t, uint64(5001), engine.OpsReceivedCount())
+	err = engine.Close(t.Context())
 	assert.NoError(t, err, "Failed to close engine")
 
 	engine, err = NewStorageEngine(baseDir, namespace, config)
@@ -216,7 +228,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	assert.Equal(t, 4000, keysCount+engine.RecoveredWALCount())
 
 	defer func() {
-		err := engine.Close(context.Background())
+		err := engine.Close(t.Context())
 		assert.NoError(t, err, "Failed to close engine")
 	}()
 
@@ -227,6 +239,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 		assert.NoError(t, err, "Get operation should succeed")
 		assert.NotNil(t, retrievedValue, "Retrieved value should not be nil")
 		assert.Equal(t, len(retrievedValue), valueSize, "Value length mismatch")
+		assert.Equal(t, value, retrievedValue, "Retrieved value should match")
 	}
 
 	// 4000 ops, for keys, > As Batch is not Commited, (1 batch start + (not 1 batch commit.) not included)
@@ -245,8 +258,6 @@ func TestEngine_RecoveredWalShouldNotRecoverAgain(t *testing.T) {
 	config.ArenaSize = 1 << 30
 	engine, err := NewStorageEngine(dir, namespace, config)
 	assert.NoError(t, err, "NewStorage should not error")
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	insertedKV := make(map[string]string)
 	t.Run("persist_key_value", func(t *testing.T) {
@@ -254,13 +265,13 @@ func TestEngine_RecoveredWalShouldNotRecoverAgain(t *testing.T) {
 			key := gofakeit.UUID()
 			value := gofakeit.LetterN(100)
 			insertedKV[key] = value
-			err := engine.persistKeyValue([]byte(key), []byte(value), walrecord.LogOperationInsert)
+			err := engine.persistKeyValue([][]byte{[]byte(key)}, [][]byte{[]byte(value)}, logrecord.LogOperationTypeInsert)
 			assert.NoError(t, err, "persistKeyValue should not error")
 		}
 	})
 
 	t.Run("engine_close", func(t *testing.T) {
-		err := engine.close(ctx)
+		err := engine.close(t.Context())
 		assert.NoError(t, err, "storage engine close should not error")
 	})
 
@@ -268,7 +279,7 @@ func TestEngine_RecoveredWalShouldNotRecoverAgain(t *testing.T) {
 		engine, err = NewStorageEngine(dir, namespace, config)
 		assert.NoError(t, err, "NewStorageEngine should not error")
 		assert.Equal(t, 100, engine.RecoveredWALCount(), "recovered wal count should match")
-		err := engine.close(ctx)
+		err := engine.close(t.Context())
 		assert.NoError(t, err, "storage engine close should not error")
 	})
 
@@ -276,7 +287,7 @@ func TestEngine_RecoveredWalShouldNotRecoverAgain(t *testing.T) {
 		engine, err = NewStorageEngine(dir, namespace, config)
 		assert.NoError(t, err, "NewStorageEngine should not error")
 		assert.Equal(t, 0, engine.RecoveredWALCount(), "recovered wal count should match")
-		err := engine.close(ctx)
+		err := engine.close(t.Context())
 		assert.NoError(t, err, "storage engine close should not error")
 	})
 }
@@ -297,7 +308,7 @@ func TestEngine_GetRowColumns_WithMemTableRotateNoFlush(t *testing.T) {
 	assert.NoError(t, err, "NewStorageEngine should not error")
 	engine.callback = callback
 	t.Cleanup(func() {
-		err := engine.close(t.Context())
+		err := engine.close(context.Background())
 		assert.NoError(t, err, "storage engine close should not error")
 	})
 
@@ -426,7 +437,7 @@ func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
 	assert.NoError(t, err, "NewStorageEngine should not error")
 	engine.callback = callback
 	t.Cleanup(func() {
-		err := engine.close(t.Context())
+		err := engine.close(context.Background())
 		assert.NoError(t, err, "storage engine close should not error")
 	})
 
@@ -501,7 +512,6 @@ func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
 		assert.NotContains(t, rowEntry, deleteEntries, "unexpected column values")
 	})
 
-	fmt.Println("entries", len(deleteEntries), "entries", len(rowsEntries))
 	t.Run("handle_mem_table_flush", func(t *testing.T) {
 		engine.rotateMemTable()
 		select {

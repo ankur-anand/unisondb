@@ -12,7 +12,8 @@ import (
 
 	"github.com/anishathalye/porcupine"
 	"github.com/ankur-anand/unisondb/dbkernel"
-	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
+	"github.com/ankur-anand/unisondb/internal/logcodec"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,7 +30,7 @@ func TestStorageEngine(t *testing.T) {
 	assert.NoError(t, err, "Failed to initialize storage engine")
 	assert.NotNil(t, engine, "Engine should not be nil")
 
-	assert.NoError(t, engine.Close(context.Background()), "Failed to close engine")
+	assert.NoError(t, engine.Close(t.Context()), "Failed to close engine")
 }
 
 func TestPutGet_Delete(t *testing.T) {
@@ -127,7 +128,7 @@ func TestSnapshot(t *testing.T) {
 	err = engine.Put(key, value)
 	assert.NoError(t, err)
 
-	err = engine.Close(context.Background())
+	err = engine.Close(t.Context())
 	assert.NoError(t, err, "Failed to close engine")
 
 	engine, err = dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
@@ -137,7 +138,7 @@ func TestSnapshot(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, value, retrievedValue, "data should be recoverable")
 	assert.Equal(t, uint64(1), engine.OpsReceivedCount())
-	assert.NoError(t, engine.Close(context.Background()))
+	assert.NoError(t, engine.Close(t.Context()))
 }
 
 func TestNoMultiple_ProcessNot_Allowed(t *testing.T) {
@@ -174,13 +175,12 @@ func TestEngine_WaitForAppend(t *testing.T) {
 	key := []byte("test-key")
 	value := []byte("test-value")
 
-	ctx := context.Background()
 	timeout := 100 * time.Millisecond
 
-	err = engine.WaitForAppend(ctx, timeout, nil)
+	err = engine.WaitForAppend(t.Context(), timeout, nil)
 	assert.ErrorIs(t, err, dbkernel.ErrWaitTimeoutExceeded, "no put op has been called should timeout")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	go func() {
@@ -197,7 +197,7 @@ func TestEngine_WaitForAppend(t *testing.T) {
 
 	cancelErr := make(chan error)
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		go func() {
 			time.Sleep(10 * time.Millisecond)
 			cancel()
@@ -215,7 +215,7 @@ func TestEngine_WaitForAppend(t *testing.T) {
 	err = engine.Put(key, value)
 	assert.NoError(t, err, "Put operation should succeed")
 
-	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel = context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 	err = engine.WaitForAppend(ctx, timeout, lastOffset)
 	assert.NoError(t, err, "WaitForAppend should return without error after Put")
@@ -235,7 +235,6 @@ func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
 		}
 	})
 
-	ctx := context.Background()
 	key := []byte("test-key")
 	value := []byte("test-value")
 
@@ -249,7 +248,7 @@ func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			readyWg.Done()
-			err := engine.WaitForAppend(ctx, 10*time.Second, nil)
+			err := engine.WaitForAppend(t.Context(), 10*time.Second, nil)
 			assert.NoError(t, err, "WaitForAppend should return without timeout after Put")
 		}()
 	}
@@ -281,7 +280,7 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 
 	eof := make(chan struct{})
 	read := func(reader *dbkernel.Reader) {
-		err := engine.WaitForAppend(context.Background(), 1*time.Minute, nil)
+		err := engine.WaitForAppend(t.Context(), 1*time.Minute, nil)
 		assert.NoError(t, err, "WaitForAppend should return without timeout after Put")
 		for {
 			value, _, err := reader.Next()
@@ -292,8 +291,10 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 				}
 				assert.NoError(t, err, "Reader should only return EOF Error")
 			}
-			record := walrecord.GetRootAsWalRecord(value, 0)
-			assert.Equal(t, putKV[string(record.KeyBytes())], record.ValueBytes(), "decompressed value should be equal to put value")
+			record := logrecord.GetRootAsLogRecord(value, 0)
+			decoded := logcodec.DeserializeFBRootLogRecord(record)
+			kv := logcodec.DeserializeKVEntry(decoded.Entries[0])
+			assert.Equal(t, putKV[string(kv.Key)], kv.Value, "decompressed value should be equal to put value")
 		}
 	}
 
@@ -353,7 +354,7 @@ func TestEngineLinearizability(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		err := engine.Close(t.Context())
+		err := engine.Close(context.Background())
 		require.NoError(t, err)
 	})
 
@@ -486,7 +487,7 @@ func TestEngine_RowOperations(t *testing.T) {
 	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
-		err := engine.Close(t.Context())
+		err := engine.Close(context.Background())
 		if err != nil {
 			t.Errorf("Failed to close engine: %v", err)
 		}

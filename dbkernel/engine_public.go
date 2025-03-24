@@ -5,14 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"log/slog"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel/kvdrivers"
-	"github.com/ankur-anand/unisondb/dbkernel/wal"
-	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbkernel/internal"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
+	"github.com/ankur-anand/unisondb/internal/logcodec"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/hashicorp/go-metrics"
 )
@@ -69,7 +70,7 @@ func (cw *countingWriter) Write(p []byte) (int, error) {
 
 // BtreeSnapshot returns the snapshot of the current btree store.
 func (e *Engine) BtreeSnapshot(w io.Writer) (int64, error) {
-	slog.Info("[kvalchemy.dbengine] BTree snapshot received")
+	slog.Info("[unisondb.dbkernal] BTree snapshot received")
 	startTime := time.Now()
 	cw := &countingWriter{w: w}
 	metrics.IncrCounterWithLabels(mKeySnapshotTotal, 1, e.metricsLabel)
@@ -80,7 +81,7 @@ func (e *Engine) BtreeSnapshot(w io.Writer) (int64, error) {
 
 	err := e.dataStore.Snapshot(cw)
 	if err != nil {
-		slog.Error("[kvalchemy.dbengine] BTree snapshot error", "error", err)
+		slog.Error("[unisondb.dbkernal] BTree snapshot error", "error", err)
 	}
 	return cw.count, err
 }
@@ -101,12 +102,12 @@ func (e *Engine) CurrentOffset() *Offset {
 }
 
 // GetWalCheckPoint returns the last checkpoint metadata saved in the database.
-func (e *Engine) GetWalCheckPoint() (*Metadata, error) {
-	data, err := e.dataStore.RetrieveMetadata(sysKeyWalCheckPoint)
+func (e *Engine) GetWalCheckPoint() (*internal.Metadata, error) {
+	data, err := e.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
 	if err != nil && !errors.Is(err, kvdrivers.ErrKeyNotFound) {
 		return nil, err
 	}
-	metadata := UnmarshalMetadata(data)
+	metadata := internal.UnmarshalMetadata(data)
 	return &metadata, nil
 }
 
@@ -121,7 +122,7 @@ func (e *Engine) Put(key, value []byte) error {
 		metrics.MeasureSinceWithLabels(mKeyPutDuration, startTime, e.metricsLabel)
 	}()
 
-	return e.persistKeyValue(key, value, walrecord.LogOperationInsert)
+	return e.persistKeyValue([][]byte{key}, [][]byte{value}, logrecord.LogOperationTypeInsert)
 }
 
 // Delete removes a key and its value pair from WAL and MemTable.
@@ -136,7 +137,7 @@ func (e *Engine) Delete(key []byte) error {
 		metrics.MeasureSinceWithLabels(mKeyDeleteDuration, startTime, e.metricsLabel)
 	}()
 
-	return e.persistKeyValue(key, nil, walrecord.LogOperationDelete)
+	return e.persistKeyValue([][]byte{key}, nil, logrecord.LogOperationTypeDelete)
 }
 
 // WaitForAppend blocks until a put/delete operation occurs or timeout happens or context cancelled is done.
@@ -201,49 +202,44 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		if !e.bloom.Test(key) {
 			return y.ValueStruct{}, ErrKeyNotFound
 		}
-		it := e.activeMemTable.get(key)
-		if it.Meta == byte(walrecord.LogOperationNoop) {
+		yValue := e.activeMemTable.Get(key)
+		if yValue.Meta == byte(logrecord.LogOperationTypeNoOperation) {
 			// first latest value
 			for i := len(e.sealedMemTables) - 1; i >= 0; i-- {
-				if val := e.sealedMemTables[i].get(key); val.Meta != byte(walrecord.LogOperationNoop) {
+				if val := e.sealedMemTables[i].Get(key); val.Meta != byte(logrecord.LogOperationTypeNoOperation) {
 					return val, nil
 				}
 			}
 		}
-		return it, nil
+		return yValue, nil
 	}
 
-	it, err := checkFunc()
+	yValue, err := checkFunc()
 	if err != nil {
 		return nil, err
 	}
 
 	// if the mem table doesn't have this key associated action or log.
 	// directly go to the boltdb to fetch the same.
-	if it.Meta == byte(walrecord.LogOperationNoop) {
+	if yValue.Meta == byte(logrecord.LogOperationTypeNoOperation) {
 		return e.dataStore.Get(key)
 	}
 
 	// key deleted
-	if it.Meta == byte(walrecord.LogOperationDelete) {
+	if yValue.Meta == byte(logrecord.LogOperationTypeDelete) {
 		return nil,
 			ErrKeyNotFound
 	}
 
-	record, err := getWalRecord(it, e.walIO)
-	if err != nil {
-		return nil, err
+	if yValue.UserMeta == internal.EntryTypeChunked {
+		record, err := internal.GetWalRecord(yValue, e.walIO)
+		if err != nil {
+			return nil, err
+		}
+		return e.reconstructChunkedValue(record)
 	}
 
-	if record.EntryType() == walrecord.EntryTypeChunked {
-		return e.reconstructBatchValue(record)
-	}
-
-	if crc32.ChecksumIEEE(record.ValueBytes()) != record.Crc32Checksum() {
-		return nil, ErrRecordCorrupted
-	}
-
-	return record.ValueBytes(), nil
+	return yValue.Value, nil
 }
 
 // SetColumnsInRow inserts or updates the provided column entries.
@@ -261,7 +257,9 @@ func (e *Engine) SetColumnsInRow(rowKey string, columnEntries map[string][]byte)
 		metrics.MeasureSinceWithLabels(mKeyRowSetDuration, startTime, e.metricsLabel)
 	}()
 
-	return e.persistRowColumnAction(walrecord.LogOperationInsert, []byte(rowKey), columnEntries)
+	columnsEntries := make([]map[string][]byte, 0, 1)
+	columnsEntries = append(columnsEntries, columnEntries)
+	return e.persistRowColumnAction(logrecord.LogOperationTypeInsert, [][]byte{[]byte(rowKey)}, columnsEntries)
 }
 
 // DeleteColumnsFromRow removes the specified columns from the given row key.
@@ -274,8 +272,9 @@ func (e *Engine) DeleteColumnsFromRow(rowKey string, columnEntries map[string][]
 	defer func() {
 		metrics.MeasureSinceWithLabels(mKeyRowDeleteDuration, startTime, e.metricsLabel)
 	}()
-
-	return e.persistRowColumnAction(walrecord.LogOperationDelete, []byte(rowKey), columnEntries)
+	columnsEntries := make([]map[string][]byte, 0, 1)
+	columnsEntries = append(columnsEntries, columnEntries)
+	return e.persistRowColumnAction(logrecord.LogOperationTypeDelete, [][]byte{[]byte(rowKey)}, columnsEntries)
 }
 
 // DeleteRow removes an entire row and all its associated column entries.
@@ -289,7 +288,7 @@ func (e *Engine) DeleteRow(rowKey string) error {
 		metrics.MeasureSinceWithLabels(mKeyRowDeleteDuration, startTime, e.metricsLabel)
 	}()
 
-	return e.persistRowColumnAction(walrecord.LogOperationDeleteRow, []byte(rowKey), nil)
+	return e.persistRowColumnAction(logrecord.LogOperationTypeDeleteRowByKey, [][]byte{[]byte(rowKey)}, nil)
 }
 
 // GetRowColumns returns all the column value associated with the row. It's filters columns if predicate
@@ -314,15 +313,15 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 		if !e.bloom.Test(key) {
 			return nil, ErrKeyNotFound
 		}
-		first := e.activeMemTable.getRowYValue(key)
-		if len(first) != 0 && first[len(first)-1].Meta == byte(walrecord.LogOperationDeleteRow) {
+		first := e.activeMemTable.GetRowYValue(key)
+		if len(first) != 0 && first[len(first)-1].Meta == byte(logrecord.LogOperationTypeDeleteRowByKey) {
 			return nil, ErrKeyNotFound
 		}
 		// get the columns value from the old sealed table to new mem table.
 		// and build the column value.
 		var vs []y.ValueStruct
 		for _, sm := range e.sealedMemTables {
-			v := sm.getRowYValue(key)
+			v := sm.GetRowYValue(key)
 			if len(v) != 0 {
 				vs = append(vs, v...)
 			}
@@ -352,10 +351,7 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 		return nil, err
 	}
 
-	err = buildColumnMap(columnsValue, vs, e.walIO)
-	if err != nil {
-		return nil, err
-	}
+	buildColumnMap(columnsValue, vs)
 
 	for columnKey := range columnsValue {
 		if predicate != nil && !predicate(columnKey) {
@@ -366,31 +362,24 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 	return columnsValue, nil
 }
 
-func (e *Engine) reconstructBatchValue(record *walrecord.WalRecord) ([]byte, error) {
+func (e *Engine) reconstructChunkedValue(record *logrecord.LogRecord) ([]byte, error) {
 	records, err := e.walIO.GetTransactionRecords(wal.DecodeOffset(record.PrevTxnWalIndexBytes()))
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconstruct batch value: %w", err)
 	}
-	checksum := unmarshalChecksum(record.ValueBytes())
 
 	// remove the begins part from the
 	preparedRecords := records[1:]
 
-	var estimatedSize int
-	for _, rec := range preparedRecords {
-		estimatedSize += len(rec.ValueBytes())
-	}
-
+	estimatedSize := len(preparedRecords) * (1 << 20)
 	fullValue := bytes.NewBuffer(make([]byte, 0, estimatedSize))
 	for _, record := range preparedRecords {
-		fullValue.Write(record.ValueBytes())
+		r := logcodec.DeserializeFBRootLogRecord(record)
+		kv := logcodec.DeserializeKVEntry(r.Entries[0])
+		fullValue.Write(kv.Value)
 	}
 
 	value := fullValue.Bytes()
-
-	if crc32.ChecksumIEEE(value) != checksum {
-		return nil, ErrRecordCorrupted
-	}
 
 	return value, nil
 }
@@ -400,7 +389,7 @@ func (e *Engine) Close(ctx context.Context) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	slog.Info("[kvalchemy.dbengine]: Closing Down", "namespace", e.namespace,
+	slog.Info("[unisondb.dbkernel]: Closing Down", "namespace", e.namespace,
 		"ops_received", e.writeSeenCounter.Load(),
 		"ops_flushed", e.opsFlushedCounter.Load())
 

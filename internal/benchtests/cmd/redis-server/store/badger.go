@@ -7,7 +7,7 @@ import (
 
 	"github.com/ankur-anand/kvalchemy/dbkernel"
 	"github.com/ankur-anand/kvalchemy/dbkernel/compress"
-	"github.com/ankur-anand/kvalchemy/dbkernel/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/wal/walrecord"
 	"github.com/dgraph-io/badger/v4"
 )
 

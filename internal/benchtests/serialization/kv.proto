@@ -1,55 +1,61 @@
 syntax = "proto3";
 
-package seria;
-option go_package = "github.com/ankur-anand/kvalchemy/internal/benchtests/serialization";
+package serialization;
+option go_package = "github.com/ankur-anand/unisondb/internal/benchtests/serialization";
 
-// TxnStatus enum
-enum TxnStatus {
-  TXN_NONE = 0;
-  BEGIN = 1;
-  PREPARE = 2;
-  COMMIT = 3;
+enum TransactionStatePb {
+  TRANSACTION_STATE_PB_NONE = 0;
+  TRANSACTION_STATE_PB_BEGIN = 1;
+  TRANSACTION_STATE_PB_PREPARE = 2;
+  TRANSACTION_STATE_PB_COMMIT = 3;
 }
 
-// LogOperation enum
-enum LogOperation {
-  NOOP = 0;
-  INSERT = 1;
-  DELETE = 2;
-  TXN_MARKER = 3;
+enum LogOperationTypePb {
+  LOG_OPERATION_TYPE_PB_NO_OPERATION = 0;
+  LOG_OPERATION_TYPE_PB_INSERT = 1;
+  LOG_OPERATION_TYPE_PB_DELETE = 2;
+  LOG_OPERATION_TYPE_PB_TXN_MARKER = 3;
+  LOG_OPERATION_TYPE_PB_DELETE_ROW_BY_KEY = 4;
 }
 
-// ValueType enum
-enum ValueType {
-  FULL = 0;      // Not a chunked value
-  CHUNKED = 1;
-  COLUMN = 2;
+enum LogEntryTypePb {
+  LOG_ENTRY_TYPE_PB_KV = 0;
+  LOG_ENTRY_TYPE_PB_CHUNKED = 1;
+  LOG_ENTRY_TYPE_PB_ROW = 2;
 }
 
-// Column Entry: Supports multiple column updates per WAL record
-message ColumnEntry {
-  string column_name = 1;
-  bytes column_value = 2;
-  uint32 crc32_checksum = 3;
+message ColumnDataPb {
+  string name = 1;
+  bytes value = 2;
 }
 
-// WalRecord is the main record structure for the Write-Ahead Log
-message WalRecord {
-  // Scalar fields
-  uint64 index = 1;
+message RowUpdateEntryPb {
+  bytes key = 1;
+  repeated ColumnDataPb columns = 2;
+}
+
+message RowUpdateEncodedPb {
+  bytes value = 1;
+}
+
+message RowUpdateEntriesPb {
+  repeated RowUpdateEncodedPb entries = 1;
+}
+
+message LogOperationDataPb {
+  oneof payload {
+    RowUpdateEntriesPb row_update_entries = 1;
+  }
+}
+
+message LogRecordPb {
+  uint64 lsn = 1;
   uint64 hlc = 2;
   uint32 crc32_checksum = 3;
-
-  // Enum fields
-  LogOperation operation = 4;
-  TxnStatus txn_status = 5;
-  ValueType value_type = 6;
-
-  // Variable-sized fields
+  LogOperationTypePb operation_type = 4;
+  TransactionStatePb txn_state = 5;
+  LogEntryTypePb entry_type = 6;
   bytes txn_id = 7;
-  bytes prev_txn_wal_index = 8;  // index of the previous entry in the same transaction
-
-  bytes key = 9;  // required in flatbuffers but proto3 doesn't have required fields
-  bytes value = 10;
-  repeated ColumnEntry columns = 11;
+  bytes prev_txn_wal_index = 8;
+  LogOperationDataPb payload = 9;
 }
