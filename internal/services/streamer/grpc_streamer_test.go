@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
-	"github.com/ankur-anand/unisondb/dbkernel/wal/walrecord"
 	"github.com/ankur-anand/unisondb/internal/middleware"
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	v2 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
@@ -272,9 +272,9 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 			valuesCount = +len(val.WalRecords)
 			for _, record := range val.WalRecords {
 				lastRecvIndex++
-				wr := walrecord.GetRootAsWalRecord(record.Record, 0)
+				wr := logrecord.GetRootAsLogRecord(record.Record, 0)
 				assert.NotNil(t, wr, "error converting to wal record")
-				assert.Equal(t, lastRecvIndex, wr.Index(), "last recv index does not match")
+				assert.Equal(t, lastRecvIndex, wr.Lsn(), "last recv index does not match")
 			}
 
 		}
