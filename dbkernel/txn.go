@@ -3,7 +3,6 @@ package dbkernel
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"hash/crc32"
 	"time"
 
@@ -151,8 +150,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 
 	// for chunked type we just dataStore the last offset.
 	if t.txnEntryType != logrecord.LogEntryTypeChunked {
-
-		memValue := getValueStruct(byte(t.txnOperation), byte(t.txnEntryType), kvEncoded)
+		memValue := getValueStruct(byte(t.txnOperation), byte(t.txnEntryType), value)
 		t.memTableEntries = append(t.memTableEntries, txMemTableEntry{
 			key:    key,
 			offset: offset,
@@ -290,7 +288,6 @@ func (t *Txn) Commit() error {
 }
 
 func (t *Txn) memWriteChunk(encoded []byte) error {
-	fmt.Println("memWriteChunk", encoded)
 	memValue := getValueStruct(byte(logrecord.LogOperationTypeInsert), byte(logrecord.LogEntryTypeChunked), encoded)
 	err := t.engine.memTableWrite(t.rowKey, memValue)
 	if err != nil {

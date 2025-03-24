@@ -40,7 +40,7 @@ func TestPutGet_Delete(t *testing.T) {
 	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
-		err := engine.Close(t.Context())
+		err := engine.Close(context.Background())
 		if err != nil {
 			t.Errorf("Failed to close engine: %v", err)
 		}
@@ -82,7 +82,7 @@ func TestConcurrentWrites(t *testing.T) {
 	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
-		err := engine.Close(t.Context())
+		err := engine.Close(context.Background())
 		if err != nil {
 			t.Errorf("Failed to close engine: %v", err)
 		}
@@ -148,7 +148,7 @@ func TestNoMultiple_ProcessNot_Allowed(t *testing.T) {
 	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
-		err := engine.Close(t.Context())
+		err := engine.Close(context.Background())
 		if err != nil {
 			t.Errorf("Failed to close engine: %v", err)
 		}
@@ -166,7 +166,7 @@ func TestEngine_WaitForAppend(t *testing.T) {
 	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
-		err := engine.Close(t.Context())
+		err := engine.Close(context.Background())
 		if err != nil {
 			t.Errorf("Failed to close engine: %v", err)
 		}
@@ -229,7 +229,7 @@ func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
 	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
-		err := engine.Close(t.Context())
+		err := engine.Close(context.Background())
 		if err != nil {
 			t.Errorf("Failed to close engine: %v", err)
 		}
@@ -266,7 +266,7 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
-		err := engine.Close(t.Context())
+		err := engine.Close(context.Background())
 		if err != nil {
 			t.Errorf("Failed to close engine: %v", err)
 		}
@@ -354,7 +354,7 @@ func TestEngineLinearizability(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		err := engine.Close(t.Context())
+		err := engine.Close(context.Background())
 		require.NoError(t, err)
 	})
 
@@ -487,7 +487,7 @@ func TestEngine_RowOperations(t *testing.T) {
 	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
-		err := engine.Close(t.Context())
+		err := engine.Close(context.Background())
 		if err != nil {
 			t.Errorf("Failed to close engine: %v", err)
 		}

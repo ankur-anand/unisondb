@@ -2,6 +2,7 @@ package dbkernel
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"hash/crc32"
 	"os"
@@ -33,7 +34,7 @@ func TestStorageEngine_Suite(t *testing.T) {
 
 	assert.NoError(t, err, "NewStorageEngine should not error")
 	t.Cleanup(func() {
-		err := engine.close(t.Context())
+		err := engine.close(context.Background())
 		assert.NoError(t, err, "storage engine close should not error")
 	})
 
@@ -180,6 +181,13 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 		t.Errorf("Timed out waiting for flush")
 	}
 
+	for i := 0; i < 1; i++ {
+		key := []byte(fmt.Sprintf("%s%d", keyPrefix, i))
+		valueRec, err := engine.Get(key)
+		assert.NoError(t, err, "Get operation should not fail")
+		assert.Equal(t, valueRec, value, "failed here as well")
+
+	}
 	f, err := os.CreateTemp("", "backup.bolt")
 	assert.NoError(t, err)
 	_, err = engine.BtreeSnapshot(f)
@@ -194,6 +202,11 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	assert.NoError(t, err)
 	defer db.Close()
 	keysCount := 0
+
+	// flush everything so no race with db View and
+	// OpsFlushed and pause flush.
+	engine.fSyncStore()
+	engine.pauseFlush()
 	db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte(namespace))
 		assert.NotNil(t, bucket)
@@ -205,15 +218,12 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	})
 	assert.Equal(t, uint64(keysCount), engine.OpsFlushedCount())
 	assert.Equal(t, uint64(5001), engine.OpsReceivedCount())
-	fmt.Println(keysCount, engine.OpsReceivedCount(), engine.OpsFlushedCount(), engine.CurrentOffset())
-	fmt.Println(engine.GetWalCheckPoint())
 	err = engine.Close(t.Context())
 	assert.NoError(t, err, "Failed to close engine")
 
 	engine, err = NewStorageEngine(baseDir, namespace, config)
 	assert.NoError(t, err)
 	assert.NotNil(t, engine)
-	fmt.Println(engine.RecoveredWALCount(), "recovered", keysCount)
 	// 4000 keys, total boltdb keys, batch is never commited.
 	assert.Equal(t, 4000, keysCount+engine.RecoveredWALCount())
 
@@ -228,7 +238,8 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 
 		assert.NoError(t, err, "Get operation should succeed")
 		assert.NotNil(t, retrievedValue, "Retrieved value should not be nil")
-		//assert.Equal(t, len(retrievedValue), valueSize, "Value length mismatch")
+		assert.Equal(t, len(retrievedValue), valueSize, "Value length mismatch")
+		assert.Equal(t, value, retrievedValue, "Retrieved value should match")
 	}
 
 	// 4000 ops, for keys, > As Batch is not Commited, (1 batch start + (not 1 batch commit.) not included)
@@ -297,7 +308,7 @@ func TestEngine_GetRowColumns_WithMemTableRotateNoFlush(t *testing.T) {
 	assert.NoError(t, err, "NewStorageEngine should not error")
 	engine.callback = callback
 	t.Cleanup(func() {
-		err := engine.close(t.Context())
+		err := engine.close(context.Background())
 		assert.NoError(t, err, "storage engine close should not error")
 	})
 
@@ -426,7 +437,7 @@ func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
 	assert.NoError(t, err, "NewStorageEngine should not error")
 	engine.callback = callback
 	t.Cleanup(func() {
-		err := engine.close(t.Context())
+		err := engine.close(context.Background())
 		assert.NoError(t, err, "storage engine close should not error")
 	})
 
@@ -501,7 +512,6 @@ func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
 		assert.NotContains(t, rowEntry, deleteEntries, "unexpected column values")
 	})
 
-	fmt.Println("entries", len(deleteEntries), "entries", len(rowsEntries))
 	t.Run("handle_mem_table_flush", func(t *testing.T) {
 		engine.rotateMemTable()
 		select {

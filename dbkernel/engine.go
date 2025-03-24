@@ -81,6 +81,7 @@ type Engine struct {
 	notifierMu    sync.RWMutex
 	notifier      *sync.Cond
 	newTxnBatcher func(maxBatchSize int) internal.TxnBatcher
+	flushPaused   atomic.Bool
 
 	// used only during testing
 	callback func()
@@ -157,6 +158,25 @@ func (e *Engine) initStorage(dataDir, namespace string, conf *EngineConfig) erro
 	}
 	e.walIO = walIO
 
+	err = e.initKVDriver(dbFile, conf)
+	if err != nil {
+		return err
+	}
+
+	// skip list itself needs few bytes for initialization
+	// and, we don't want to keep on trashing writing to btreeStore often.
+	if conf.ArenaSize < minArenaSize {
+		return errors.New("arena capacity too small min capacity 2 KB")
+	}
+
+	mTable := memtable.NewMemTable(conf.ArenaSize, walIO, namespace, e.newTxnBatcher)
+	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001) // 1M keys, 0.01% false positives
+	e.bloom = bloomFilter
+	e.activeMemTable = mTable
+	return nil
+}
+
+func (e *Engine) initKVDriver(dbFile string, conf *EngineConfig) error {
 	var bTreeStore internal.BTreeStore
 	switch conf.DBEngine {
 	case BoltDBEngine:
@@ -181,17 +201,6 @@ func (e *Engine) initStorage(dataDir, namespace string, conf *EngineConfig) erro
 		return fmt.Errorf("unsupported database engine %s", conf.DBEngine)
 	}
 	e.dataStore = bTreeStore
-
-	// skip list itself needs few bytes for initialization
-	// and, we don't want to keep on trashing writing to btreeStore often.
-	if conf.ArenaSize < minArenaSize {
-		return errors.New("arena capacity too small min capacity 2 KB")
-	}
-
-	mTable := memtable.NewMemTable(conf.ArenaSize, walIO, namespace, e.newTxnBatcher)
-	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001) // 1M keys, 0.01% false positives
-	e.bloom = bloomFilter
-	e.activeMemTable = mTable
 	return nil
 }
 
@@ -310,7 +319,6 @@ func (e *Engine) recoverWAL() error {
 //
 // 5. Store the current Chunk Position in the variable.
 func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.LogOperationType) error {
-
 	kvEntries := make([][]byte, 0, len(keys))
 
 	hintSize := 512
@@ -353,10 +361,13 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 
 	// store the entire value as single
 
-	for i, entry := range kvEntries {
-		memValue := getValueStruct(byte(op), internal.EntryTypeKV, entry)
-
-		err = e.memTableWrite(keys[i], memValue)
+	for i, key := range keys {
+		var value []byte
+		if op != logrecord.LogOperationTypeDelete {
+			value = values[i]
+		}
+		memValue := getValueStruct(byte(op), internal.EntryTypeKV, value)
+		err = e.memTableWrite(key, memValue)
 		if err != nil {
 			return err
 		}
@@ -436,7 +447,6 @@ func (e *Engine) writeOffset(offset *wal.Offset) {
 
 // memTableWrite will write the provided key and value to the memTable.
 func (e *Engine) memTableWrite(key []byte, v y.ValueStruct) error {
-
 	var err error
 	err = e.activeMemTable.Put(key, v)
 	if err != nil {
@@ -560,10 +570,10 @@ func (e *Engine) handleFlush(ctx context.Context) {
 		select {
 		case e.fsyncReqSignal <- struct{}{}:
 		default:
-			slog.Info("fsync queue signal channel full")
+			slog.Debug("fsync queue signal channel full")
 		}
 
-		slog.Info("[kvalchemy.dbengine] Flushed MemTable",
+		slog.Debug("[unisondb.dbkernel] Flushed MemTable",
 			"ops_flushed", recordProcessed, "namespace", e.namespace,
 			"duration", humanizeDuration(time.Since(startTime)), "bytes_flushed", humanize.Bytes(uint64(mt.GetBytesStored())))
 	}
@@ -597,48 +607,112 @@ func (p *pendingMetadata) dequeueMetadata() (*flushedMetadata, int) {
 	return m, len(p.pendingMetadataWrites)
 }
 
+func (p *pendingMetadata) dequeueAllMetadata() ([]*flushedMetadata, int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.pendingMetadataWrites) == 0 {
+		return nil, 0
+	}
+	old := p.pendingMetadataWrites
+	p.pendingMetadataWrites = make([]*flushedMetadata, 0)
+	return old, len(old)
+}
+
 // asyncFSync call the fsync of btree store once the mem table flushing completes.
 // it's made async so it doesn't block the main mem table and too many mem table doesn't
 // accumulate over the time in the memory, even if large values are stored inside the mem table,
 // configured via value threshold.
 func (e *Engine) asyncFSync() {
-	slog.Debug("[kvalchemy.dbengine]: FSync Metadata eventloop", "namespace", e.namespace)
+	slog.Debug("[unisondb.dbkernel]: FSync Metadata eventloop", "namespace", e.namespace)
 	for {
 		select {
-		case <-e.fsyncReqSignal:
-			fm, n := e.pendingMetadata.dequeueMetadata()
-			metrics.IncrCounterWithLabels(mKeyPendingFsyncTotal, float32(n), e.metricsLabel)
-			startTime := time.Now()
-			metrics.IncrCounterWithLabels(mKeyFSyncTotal, 1, e.metricsLabel)
-			fmt.Println("saving metadata", fm.metadata.Pos, fm.metadata.RecordProcessed)
-			err := internal.SaveMetadata(e.dataStore, fm.metadata.Pos, fm.metadata.RecordProcessed)
-			if err != nil {
-				log.Fatal("[kvalchemy.dbengine] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
-			}
-			err = e.saveBloomFilter()
-			if err != nil {
-				log.Fatal("[kvalchemy.dbengine] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
-			}
-			err = e.dataStore.FSync()
-			if err != nil {
-				metrics.IncrCounterWithLabels(mKeyFSyncErrorsTotal, 1, e.metricsLabel)
-				// There is no way to recover from the underlying Fsync Issue.
-				// https://archive.fosdem.org/2019/schedule/event/postgresql_fsync/
-				// How is it possible that PostgreSQL used fsync incorrectly for 20 years.
-				log.Fatalln(fmt.Errorf("[kvalchemy.dbengine]: FSync operation failed: %w", err))
-			}
-			metrics.MeasureSinceWithLabels(mKeyFSyncDurations, startTime, e.metricsLabel)
-
-			slog.Debug("[kvalchemy.dbengine]: Flushed mem table and created WAL checkpoint",
-				"ops_flushed", fm.recordProcessed, "namespace", e.namespace,
-				"duration", humanizeDuration(time.Since(startTime)), "bytes_flushed", humanize.Bytes(fm.bytesFlushed))
-			if e.callback != nil {
-				e.callback()
-			}
 		case <-e.ctx.Done():
 			return
+
+		case _, ok := <-e.fsyncReqSignal:
+			if !ok {
+				return
+			}
+			if e.ctx.Err() != nil {
+				return
+			}
+
+			maxCoalesce := 10
+			count := 0
+		COALESCE:
+			for {
+				if count > maxCoalesce {
+					break COALESCE
+				}
+				select {
+				case _, ok := <-e.flushReqSignal:
+					if !ok {
+						break COALESCE
+					}
+					// continue coalescing
+					count++
+					continue
+				default:
+					break COALESCE
+				}
+			}
+			e.fSyncStore()
 		}
 	}
+}
+
+func (e *Engine) fSyncStore() {
+	if e.flushPaused.Load() {
+		slog.Warn("[unisondb.dbkernel]: FSync Flush Paused")
+		return
+	}
+	// This queue will have data after the mem table have been flushed, so it's saved to
+	// assume all the entries until this point is already in persistent store.
+	// So we Can just save the last metadata and call the Flush as single ops.
+	all, n := e.pendingMetadata.dequeueAllMetadata()
+	if len(all) == 0 {
+		return
+	}
+	fm := all[len(all)-1]
+
+	metrics.IncrCounterWithLabels(mKeyPendingFsyncTotal, float32(n), e.metricsLabel)
+	startTime := time.Now()
+	metrics.IncrCounterWithLabels(mKeyFSyncTotal, 1, e.metricsLabel)
+	err := internal.SaveMetadata(e.dataStore, fm.metadata.Pos, fm.metadata.RecordProcessed)
+	if err != nil {
+		log.Fatal("[unisondb.dbkernel] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
+	}
+	err = e.saveBloomFilter()
+	if err != nil {
+		log.Fatal("[unisondb.dbkernel] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
+	}
+
+	err = e.dataStore.FSync()
+	if err != nil {
+		metrics.IncrCounterWithLabels(mKeyFSyncErrorsTotal, 1, e.metricsLabel)
+		// There is no way to recover from the underlying Fsync Issue.
+		// https://archive.fosdem.org/2019/schedule/event/postgresql_fsync/
+		// How is it possible that PostgreSQL used fsync incorrectly for 20 years.
+		log.Fatalln(fmt.Errorf("[unisondb.dbkernel]: FSync operation failed: %w", err))
+	}
+	metrics.MeasureSinceWithLabels(mKeyFSyncDurations, startTime, e.metricsLabel)
+
+	slog.Debug("[unisondb.dbkernel]: Flushed mem table and created WAL checkpoint",
+		"ops_flushed", fm.recordProcessed, "namespace", e.namespace,
+		"duration", humanizeDuration(time.Since(startTime)), "bytes_flushed", humanize.Bytes(fm.bytesFlushed))
+	if e.callback != nil {
+		go e.callback()
+	}
+}
+
+// pauseFlush helps in getting a consistent snapshot of the underlying kv drivers.
+// if paused, use resumeFlush to resume.
+func (e *Engine) pauseFlush() {
+	e.flushPaused.Store(true)
+}
+
+func (e *Engine) resumeFlush() {
+	e.flushPaused.Store(false)
 }
 
 func (e *Engine) close(ctx context.Context) error {
@@ -647,12 +721,11 @@ func (e *Engine) close(ctx context.Context) error {
 	e.cancel()
 
 	var errs strings.Builder
-
 	// wait for background routine to close.
 	if !waitWithCancel(e.wg, ctx) {
-		errs.WriteString("[kvalchemy.dbengine]: WAL check operation timed out")
+		errs.WriteString("[unisondb.dbkernel]: WAL check operation timed out")
 		errs.WriteString("|")
-		slog.Error("Timeout reached! Some goroutines are still running")
+		slog.Error("Ctx was cancelled! Some goroutines are still running")
 	}
 
 	close(e.fsyncReqSignal)
@@ -661,34 +734,33 @@ func (e *Engine) close(ctx context.Context) error {
 	if err != nil {
 		errs.WriteString(err.Error())
 		errs.WriteString("|")
-		slog.Error("[kvalchemy.dbengine]: wal Fsync error", "error", err)
+		slog.Error("[unisondb.dbkernel]: wal Fsync error", "error", err)
 	}
 
 	err = e.walIO.Close()
 	if err != nil {
 		errs.WriteString(err.Error())
 		errs.WriteString("|")
-		slog.Error("[kvalchemy.dbengine]: wal close error", "error", err)
+		slog.Error("[unisondb.dbkernel]: wal close error", "error", err)
 	}
 
-	fmt.Println("flushing fsync")
+	// save if any already flushed entry is still not saved.
+	e.fSyncStore()
 	err = e.dataStore.FSync()
 	if err != nil {
 		errs.WriteString(err.Error())
 		errs.WriteString("|")
-		slog.Error("[kvalchemy.dbengine]: Btree Fsync error", "error", err)
+		slog.Error("[unisondb.dbkernel]: Btree Fsync error", "error", err)
 	}
 
-	fmt.Println("closing datastore")
 	err = e.dataStore.Close()
 	if err != nil {
 		errs.WriteString(err.Error())
 		errs.WriteString("|")
-		slog.Error("[kvalchemy.dbengine]: Btree close error", "error", err)
+		slog.Error("[unisondb.dbkernel]: Btree close error", "error", err)
 	}
 
 	// release the lock file.
-	fmt.Println("release the lock file.")
 	if err := e.fileLock.Unlock(); err != nil {
 		errs.WriteString(err.Error())
 		errs.WriteString("|")

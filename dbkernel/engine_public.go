@@ -232,7 +232,6 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	}
 
 	if yValue.UserMeta == internal.EntryTypeChunked {
-		fmt.Println(yValue.Value, "get")
 		record, err := internal.GetWalRecord(yValue, e.walIO)
 		if err != nil {
 			return nil, err
@@ -240,9 +239,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return e.reconstructChunkedValue(record)
 	}
 
-	kv := logcodec.DeserializeKVEntry(yValue.Value)
-
-	return kv.Value, nil
+	return yValue.Value, nil
 }
 
 // SetColumnsInRow inserts or updates the provided column entries.
@@ -383,7 +380,7 @@ func (e *Engine) reconstructChunkedValue(record *logrecord.LogRecord) ([]byte, e
 	}
 
 	value := fullValue.Bytes()
-	
+
 	return value, nil
 }
 
@@ -392,7 +389,7 @@ func (e *Engine) Close(ctx context.Context) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	slog.Info("[kvalchemy.dbengine]: Closing Down", "namespace", e.namespace,
+	slog.Info("[unisondb.dbkernel]: Closing Down", "namespace", e.namespace,
 		"ops_received", e.writeSeenCounter.Load(),
 		"ops_flushed", e.opsFlushedCounter.Load())
 
