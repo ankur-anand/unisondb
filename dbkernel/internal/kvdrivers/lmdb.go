@@ -648,7 +648,6 @@ func (l *LmdbEmbed) Snapshot(w io.Writer) error {
 	defer bw.Flush()
 
 	return l.env.View(func(txn *lmdb.Txn) error {
-		
 		cursor, err := txn.OpenCursor(l.db)
 		if err != nil {
 			return fmt.Errorf("failed to open cursor: %w", err)
