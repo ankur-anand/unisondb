@@ -40,14 +40,15 @@ type Txn struct {
 	engine     *Engine
 	prevOffset *wal.Offset
 	// dataStore all the memTableEntries that can be stored on memTable after the commit has been called.
-	memTableEntries []txMemTableEntry
-	rowKey          []byte
-	txnID           []byte
-	startTime       time.Time
-	valuesCount     int
-	checksum        uint32 // Rolling checksum
-	txnOperation    logrecord.LogOperationType
-	txnEntryType    logrecord.LogEntryType
+	memTableEntries      []txMemTableEntry
+	rowKey               []byte
+	txnID                []byte
+	startTime            time.Time
+	valuesCount          int
+	checksum             uint32 // Rolling checksum
+	chunkedValueChecksum uint32
+	txnOperation         logrecord.LogOperationType
+	txnEntryType         logrecord.LogEntryType
 }
 
 // NewTxn returns a new initialized batch Txn.
@@ -120,7 +121,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 
 	kvEncoded := logcodec.SerializeKVEntry(key, value)
 	checksum := crc32.ChecksumIEEE(kvEncoded)
-
+	t.chunkedValueChecksum = crc32.Update(t.chunkedValueChecksum, crc32.IEEETable, value)
 	t.engine.mu.Lock()
 	defer t.engine.mu.Unlock()
 	index := t.engine.writeSeenCounter.Add(1)
@@ -318,4 +319,8 @@ func (t *Txn) TxnID() []byte {
 
 func (t *Txn) Checksum() uint32 {
 	return t.checksum
+}
+
+func (t *Txn) ChunkedValueChecksum() uint32 {
+	return t.chunkedValueChecksum
 }

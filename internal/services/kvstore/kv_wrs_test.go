@@ -62,7 +62,7 @@ func TestClient_PutKV_GetKV_DeleteKV(t *testing.T) {
 	}
 
 	dir := os.TempDir()
-	temp, err := os.MkdirTemp(dir, "kvalchemy")
+	temp, err := os.MkdirTemp(dir, "unisondb")
 	if err != nil {
 		panic(err)
 	}
@@ -212,7 +212,7 @@ func TestClient_PutStreamChunksForKey(t *testing.T) {
 	}
 
 	dir := os.TempDir()
-	temp, err := os.MkdirTemp(dir, "kvalchemy")
+	temp, err := os.MkdirTemp(dir, "unisondb")
 	if err != nil {
 		panic(err)
 	}

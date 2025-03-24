@@ -190,6 +190,10 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	}
 	f, err := os.CreateTemp("", "backup.bolt")
 	assert.NoError(t, err)
+	// flush everything so no race with db View and
+	// OpsFlushed and pause flush.
+	engine.fSyncStore()
+	engine.pauseFlush()
 	_, err = engine.BtreeSnapshot(f)
 	assert.NoError(t, err)
 	err = f.Close()
@@ -203,10 +207,6 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	defer db.Close()
 	keysCount := 0
 
-	// flush everything so no race with db View and
-	// OpsFlushed and pause flush.
-	engine.fSyncStore()
-	engine.pauseFlush()
 	db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte(namespace))
 		assert.NotNil(t, bucket)

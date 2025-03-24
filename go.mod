@@ -8,7 +8,7 @@ require (
 	github.com/ankur-anand/wal v0.0.4
 	github.com/bits-and-blooms/bloom/v3 v3.7.0
 	github.com/brianvoe/gofakeit/v7 v7.2.1
-	github.com/dgraph-io/badger/v4 v4.5.1
+	github.com/dgraph-io/badger/v4 v4.6.0
 	github.com/dustin/go-humanize v1.0.1
 	github.com/gofrs/flock v0.12.1
 	github.com/google/flatbuffers v25.2.10+incompatible
