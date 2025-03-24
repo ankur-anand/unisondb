@@ -25,5 +25,19 @@ jobs:
       - name: Run golangci-lint
         run: golangci-lint run ./...
 
+      - name: Run Go Vet
+        run: |
+          go vet ./...
+
+      - name: Run Go Fmt
+        run: |
+          files=$(go fmt ./...)
+          if [ -n "$files" ]; then
+            echo "Please run gofmt on these files ..."
+            echo "$files"
+            exit 1
+          fi
+
       - name: Run go test
-        run: go test -v -race -covermode atomic $(go list ./... | grep -v  proto)
+        run: go test -timeout 5m -count 1 -v -race -covermode atomic $(go list ./... | grep -v  proto)
+
