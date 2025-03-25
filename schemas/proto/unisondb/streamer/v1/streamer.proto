@@ -1,0 +1,38 @@
+syntax = "proto3";
+package unisondb.streamer.v1;
+
+option go_package = "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1";
+
+import "google/protobuf/timestamp.proto";
+
+// WalStreamerService streams Wal Records.
+service WalStreamerService {
+  /// Stream WAL Logs
+  rpc StreamWalRecords(StreamWalRecordsRequest) returns (stream StreamWalRecordsResponse);
+  rpc GetLatestOffset(GetLatestOffsetRequest) returns (GetLatestOffsetResponse);
+}
+
+message StreamWalRecordsRequest {
+  // Last applied WAL checkpoint offset.
+  optional bytes offset = 1;
+}
+
+message GetLatestOffsetRequest {}
+
+message GetLatestOffsetResponse {
+  bytes offset = 1;
+}
+
+// Server's Response Message (Streaming)
+message StreamWalRecordsResponse {
+  // A batch of WAL records
+  repeated WALRecord records = 1;
+  google.protobuf.Timestamp server_timestamp = 2;
+}
+
+// WAL Record Format
+message WALRecord {
+  bytes offset = 1;
+  bytes record = 2;
+  fixed32 crc32_checksum = 3;
+}

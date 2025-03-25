@@ -22,164 +22,6 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-type StreamWALRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Offset        []byte                 `protobuf:"bytes,1,opt,name=offset,proto3,oneof" json:"offset,omitempty"` // Last applied WAL checkpoint offset.
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StreamWALRequest) Reset() {
-	*x = StreamWALRequest{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[0]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StreamWALRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StreamWALRequest) ProtoMessage() {}
-
-func (x *StreamWALRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[0]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StreamWALRequest.ProtoReflect.Descriptor instead.
-func (*StreamWALRequest) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{0}
-}
-
-func (x *StreamWALRequest) GetOffset() []byte {
-	if x != nil {
-		return x.Offset
-	}
-	return nil
-}
-
-// Server's Response Message (Streaming)
-type StreamWALResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	WalRecords    []*WALRecord           `protobuf:"bytes,1,rep,name=wal_records,json=walRecords,proto3" json:"wal_records,omitempty"` // A batch of WAL records
-	SentAt        *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=sent_at,json=sentAt,proto3" json:"sent_at,omitempty"`             // Server timestamp when the batch was sent
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *StreamWALResponse) Reset() {
-	*x = StreamWALResponse{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *StreamWALResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*StreamWALResponse) ProtoMessage() {}
-
-func (x *StreamWALResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use StreamWALResponse.ProtoReflect.Descriptor instead.
-func (*StreamWALResponse) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *StreamWALResponse) GetWalRecords() []*WALRecord {
-	if x != nil {
-		return x.WalRecords
-	}
-	return nil
-}
-
-func (x *StreamWALResponse) GetSentAt() *timestamppb.Timestamp {
-	if x != nil {
-		return x.SentAt
-	}
-	return nil
-}
-
-// WAL Record Format
-type WALRecord struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Offset        []byte                 `protobuf:"bytes,1,opt,name=offset,proto3" json:"offset,omitempty"`
-	Record        []byte                 `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
-	Crc32Checksum uint32                 `protobuf:"fixed32,3,opt,name=crc32_checksum,json=crc32Checksum,proto3" json:"crc32_checksum,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *WALRecord) Reset() {
-	*x = WALRecord{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *WALRecord) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*WALRecord) ProtoMessage() {}
-
-func (x *WALRecord) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use WALRecord.ProtoReflect.Descriptor instead.
-func (*WALRecord) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *WALRecord) GetOffset() []byte {
-	if x != nil {
-		return x.Offset
-	}
-	return nil
-}
-
-func (x *WALRecord) GetRecord() []byte {
-	if x != nil {
-		return x.Record
-	}
-	return nil
-}
-
-func (x *WALRecord) GetCrc32Checksum() uint32 {
-	if x != nil {
-		return x.Crc32Checksum
-	}
-	return 0
-}
-
 type PutRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
@@ -192,7 +34,7 @@ type PutRequest struct {
 
 func (x *PutRequest) Reset() {
 	*x = PutRequest{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[3]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -204,7 +46,7 @@ func (x *PutRequest) String() string {
 func (*PutRequest) ProtoMessage() {}
 
 func (x *PutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[3]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -217,7 +59,7 @@ func (x *PutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutRequest.ProtoReflect.Descriptor instead.
 func (*PutRequest) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{3}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *PutRequest) GetKey() []byte {
@@ -257,7 +99,7 @@ type PutStreamRequest struct {
 
 func (x *PutStreamRequest) Reset() {
 	*x = PutStreamRequest{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[4]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -269,7 +111,7 @@ func (x *PutStreamRequest) String() string {
 func (*PutStreamRequest) ProtoMessage() {}
 
 func (x *PutStreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[4]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -282,7 +124,7 @@ func (x *PutStreamRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutStreamRequest.ProtoReflect.Descriptor instead.
 func (*PutStreamRequest) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{4}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *PutStreamRequest) GetKvPairs() []*PutRequest {
@@ -300,7 +142,7 @@ type PutResponse struct {
 
 func (x *PutResponse) Reset() {
 	*x = PutResponse{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[5]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -312,7 +154,7 @@ func (x *PutResponse) String() string {
 func (*PutResponse) ProtoMessage() {}
 
 func (x *PutResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[5]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -325,7 +167,7 @@ func (x *PutResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutResponse.ProtoReflect.Descriptor instead.
 func (*PutResponse) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{5}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{2}
 }
 
 type PutStreamResponse struct {
@@ -336,7 +178,7 @@ type PutStreamResponse struct {
 
 func (x *PutStreamResponse) Reset() {
 	*x = PutStreamResponse{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[6]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -348,7 +190,7 @@ func (x *PutStreamResponse) String() string {
 func (*PutStreamResponse) ProtoMessage() {}
 
 func (x *PutStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[6]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -361,7 +203,7 @@ func (x *PutStreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutStreamResponse.ProtoReflect.Descriptor instead.
 func (*PutStreamResponse) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{6}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{3}
 }
 
 type DeleteRequest struct {
@@ -373,7 +215,7 @@ type DeleteRequest struct {
 
 func (x *DeleteRequest) Reset() {
 	*x = DeleteRequest{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[7]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -385,7 +227,7 @@ func (x *DeleteRequest) String() string {
 func (*DeleteRequest) ProtoMessage() {}
 
 func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[7]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -398,7 +240,7 @@ func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRequest.ProtoReflect.Descriptor instead.
 func (*DeleteRequest) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{7}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DeleteRequest) GetKey() []byte {
@@ -416,7 +258,7 @@ type DeleteResponse struct {
 
 func (x *DeleteResponse) Reset() {
 	*x = DeleteResponse{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[8]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -428,7 +270,7 @@ func (x *DeleteResponse) String() string {
 func (*DeleteResponse) ProtoMessage() {}
 
 func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[8]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -441,7 +283,7 @@ func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteResponse.ProtoReflect.Descriptor instead.
 func (*DeleteResponse) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{8}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{5}
 }
 
 type DeleteStreamRequest struct {
@@ -453,7 +295,7 @@ type DeleteStreamRequest struct {
 
 func (x *DeleteStreamRequest) Reset() {
 	*x = DeleteStreamRequest{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[9]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -465,7 +307,7 @@ func (x *DeleteStreamRequest) String() string {
 func (*DeleteStreamRequest) ProtoMessage() {}
 
 func (x *DeleteStreamRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[9]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -478,7 +320,7 @@ func (x *DeleteStreamRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteStreamRequest.ProtoReflect.Descriptor instead.
 func (*DeleteStreamRequest) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{9}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *DeleteStreamRequest) GetDeletes() []*DeleteRequest {
@@ -496,7 +338,7 @@ type DeleteStreamResponse struct {
 
 func (x *DeleteStreamResponse) Reset() {
 	*x = DeleteStreamResponse{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[10]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -508,7 +350,7 @@ func (x *DeleteStreamResponse) String() string {
 func (*DeleteStreamResponse) ProtoMessage() {}
 
 func (x *DeleteStreamResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[10]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -521,7 +363,7 @@ func (x *DeleteStreamResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteStreamResponse.ProtoReflect.Descriptor instead.
 func (*DeleteStreamResponse) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{10}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{7}
 }
 
 type PutStreamChunksForKeyRequest struct {
@@ -538,7 +380,7 @@ type PutStreamChunksForKeyRequest struct {
 
 func (x *PutStreamChunksForKeyRequest) Reset() {
 	*x = PutStreamChunksForKeyRequest{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[11]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -550,7 +392,7 @@ func (x *PutStreamChunksForKeyRequest) String() string {
 func (*PutStreamChunksForKeyRequest) ProtoMessage() {}
 
 func (x *PutStreamChunksForKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[11]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -563,7 +405,7 @@ func (x *PutStreamChunksForKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutStreamChunksForKeyRequest.ProtoReflect.Descriptor instead.
 func (*PutStreamChunksForKeyRequest) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{11}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *PutStreamChunksForKeyRequest) GetRequestType() isPutStreamChunksForKeyRequest_RequestType {
@@ -631,7 +473,7 @@ type ChunkStartMarker struct {
 
 func (x *ChunkStartMarker) Reset() {
 	*x = ChunkStartMarker{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[12]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -643,7 +485,7 @@ func (x *ChunkStartMarker) String() string {
 func (*ChunkStartMarker) ProtoMessage() {}
 
 func (x *ChunkStartMarker) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[12]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -656,7 +498,7 @@ func (x *ChunkStartMarker) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChunkStartMarker.ProtoReflect.Descriptor instead.
 func (*ChunkStartMarker) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{12}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ChunkStartMarker) GetKey() []byte {
@@ -676,7 +518,7 @@ type ChunkPutValue struct {
 
 func (x *ChunkPutValue) Reset() {
 	*x = ChunkPutValue{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[13]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -688,7 +530,7 @@ func (x *ChunkPutValue) String() string {
 func (*ChunkPutValue) ProtoMessage() {}
 
 func (x *ChunkPutValue) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[13]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -701,7 +543,7 @@ func (x *ChunkPutValue) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChunkPutValue.ProtoReflect.Descriptor instead.
 func (*ChunkPutValue) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{13}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ChunkPutValue) GetValue() []byte {
@@ -727,7 +569,7 @@ type ChunkCommitMarker struct {
 
 func (x *ChunkCommitMarker) Reset() {
 	*x = ChunkCommitMarker{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[14]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -739,7 +581,7 @@ func (x *ChunkCommitMarker) String() string {
 func (*ChunkCommitMarker) ProtoMessage() {}
 
 func (x *ChunkCommitMarker) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[14]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -752,7 +594,7 @@ func (x *ChunkCommitMarker) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChunkCommitMarker.ProtoReflect.Descriptor instead.
 func (*ChunkCommitMarker) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{14}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ChunkCommitMarker) GetFinalCrc32Checksum() uint32 {
@@ -770,7 +612,7 @@ type PutStreamChunksForKeyResponse struct {
 
 func (x *PutStreamChunksForKeyResponse) Reset() {
 	*x = PutStreamChunksForKeyResponse{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[15]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -782,7 +624,7 @@ func (x *PutStreamChunksForKeyResponse) String() string {
 func (*PutStreamChunksForKeyResponse) ProtoMessage() {}
 
 func (x *PutStreamChunksForKeyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[15]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -795,7 +637,7 @@ func (x *PutStreamChunksForKeyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutStreamChunksForKeyResponse.ProtoReflect.Descriptor instead.
 func (*PutStreamChunksForKeyResponse) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{15}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{12}
 }
 
 type GetRequest struct {
@@ -807,7 +649,7 @@ type GetRequest struct {
 
 func (x *GetRequest) Reset() {
 	*x = GetRequest{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[16]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -819,7 +661,7 @@ func (x *GetRequest) String() string {
 func (*GetRequest) ProtoMessage() {}
 
 func (x *GetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[16]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -832,7 +674,7 @@ func (x *GetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRequest.ProtoReflect.Descriptor instead.
 func (*GetRequest) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{16}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetRequest) GetKey() []byte {
@@ -853,7 +695,7 @@ type GetResponse struct {
 
 func (x *GetResponse) Reset() {
 	*x = GetResponse{}
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[17]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -865,7 +707,7 @@ func (x *GetResponse) String() string {
 func (*GetResponse) ProtoMessage() {}
 
 func (x *GetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[17]
+	mi := &file_unisondb_replicator_v1_service_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -878,7 +720,7 @@ func (x *GetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetResponse.ProtoReflect.Descriptor instead.
 func (*GetResponse) Descriptor() ([]byte, []int) {
-	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{17}
+	return file_unisondb_replicator_v1_service_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *GetResponse) GetData() []byte {
@@ -911,25 +753,6 @@ var file_unisondb_replicator_v1_service_proto_rawDesc = string([]byte{
 	0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76, 0x31, 0x1a,
 	0x1f, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2f, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66,
 	0x2f, 0x74, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f,
-	0x22, 0x3a, 0x0a, 0x10, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x57, 0x41, 0x4c, 0x52, 0x65, 0x71,
-	0x75, 0x65, 0x73, 0x74, 0x12, 0x1b, 0x0a, 0x06, 0x6f, 0x66, 0x66, 0x73, 0x65, 0x74, 0x18, 0x01,
-	0x20, 0x01, 0x28, 0x0c, 0x48, 0x00, 0x52, 0x06, 0x6f, 0x66, 0x66, 0x73, 0x65, 0x74, 0x88, 0x01,
-	0x01, 0x42, 0x09, 0x0a, 0x07, 0x5f, 0x6f, 0x66, 0x66, 0x73, 0x65, 0x74, 0x22, 0x8d, 0x01, 0x0a,
-	0x11, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x57, 0x41, 0x4c, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
-	0x73, 0x65, 0x12, 0x43, 0x0a, 0x0b, 0x77, 0x61, 0x6c, 0x5f, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64,
-	0x73, 0x18, 0x01, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x22, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68,
-	0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76,
-	0x31, 0x2e, 0x57, 0x41, 0x4c, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x52, 0x0a, 0x77, 0x61, 0x6c,
-	0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x73, 0x12, 0x33, 0x0a, 0x07, 0x73, 0x65, 0x6e, 0x74, 0x5f,
-	0x61, 0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a, 0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c,
-	0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66, 0x2e, 0x54, 0x69, 0x6d, 0x65, 0x73,
-	0x74, 0x61, 0x6d, 0x70, 0x52, 0x06, 0x73, 0x65, 0x6e, 0x74, 0x41, 0x74, 0x22, 0x62, 0x0a, 0x09,
-	0x57, 0x41, 0x4c, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x12, 0x16, 0x0a, 0x06, 0x6f, 0x66, 0x66,
-	0x73, 0x65, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x06, 0x6f, 0x66, 0x66, 0x73, 0x65,
-	0x74, 0x12, 0x16, 0x0a, 0x06, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x18, 0x02, 0x20, 0x01, 0x28,
-	0x0c, 0x52, 0x06, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x12, 0x25, 0x0a, 0x0e, 0x63, 0x72, 0x63,
-	0x33, 0x32, 0x5f, 0x63, 0x68, 0x65, 0x63, 0x6b, 0x73, 0x75, 0x6d, 0x18, 0x03, 0x20, 0x01, 0x28,
-	0x07, 0x52, 0x0d, 0x63, 0x72, 0x63, 0x33, 0x32, 0x43, 0x68, 0x65, 0x63, 0x6b, 0x73, 0x75, 0x6d,
 	0x22, 0x95, 0x01, 0x0a, 0x0a, 0x50, 0x75, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x12,
 	0x10, 0x0a, 0x03, 0x6b, 0x65, 0x79, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x03, 0x6b, 0x65,
 	0x79, 0x12, 0x14, 0x0a, 0x05, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0c,
@@ -997,61 +820,53 @@ var file_unisondb_replicator_v1_service_proto_rawDesc = string([]byte{
 	0x6b, 0x65, 0x64, 0x12, 0x30, 0x0a, 0x14, 0x66, 0x69, 0x6e, 0x61, 0x6c, 0x5f, 0x63, 0x72, 0x63,
 	0x33, 0x32, 0x5f, 0x63, 0x68, 0x65, 0x63, 0x6b, 0x73, 0x75, 0x6d, 0x18, 0x03, 0x20, 0x01, 0x28,
 	0x07, 0x52, 0x12, 0x66, 0x69, 0x6e, 0x61, 0x6c, 0x43, 0x72, 0x63, 0x33, 0x32, 0x43, 0x68, 0x65,
-	0x63, 0x6b, 0x73, 0x75, 0x6d, 0x32, 0x7d, 0x0a, 0x15, 0x57, 0x41, 0x4c, 0x52, 0x65, 0x70, 0x6c,
-	0x69, 0x63, 0x61, 0x74, 0x69, 0x6f, 0x6e, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x64,
-	0x0a, 0x09, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x57, 0x41, 0x4c, 0x12, 0x29, 0x2e, 0x6b, 0x76,
-	0x61, 0x6c, 0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74,
-	0x6f, 0x72, 0x2e, 0x76, 0x31, 0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x57, 0x41, 0x4c, 0x52,
-	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x2a, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68, 0x65,
-	0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76, 0x31,
-	0x2e, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x57, 0x41, 0x4c, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
-	0x73, 0x65, 0x30, 0x01, 0x32, 0xa2, 0x04, 0x0a, 0x13, 0x4b, 0x56, 0x53, 0x74, 0x6f, 0x72, 0x65,
-	0x57, 0x72, 0x69, 0x74, 0x65, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x50, 0x0a, 0x03,
-	0x50, 0x75, 0x74, 0x12, 0x23, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e,
-	0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76, 0x31, 0x2e, 0x50, 0x75,
-	0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x24, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63,
-	0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e,
-	0x76, 0x31, 0x2e, 0x50, 0x75, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x64,
-	0x0a, 0x09, 0x50, 0x75, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x12, 0x29, 0x2e, 0x6b, 0x76,
-	0x61, 0x6c, 0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74,
-	0x6f, 0x72, 0x2e, 0x76, 0x31, 0x2e, 0x50, 0x75, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x52,
-	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x2a, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68, 0x65,
-	0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76, 0x31,
-	0x2e, 0x50, 0x75, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
-	0x73, 0x65, 0x28, 0x01, 0x12, 0x88, 0x01, 0x0a, 0x15, 0x50, 0x75, 0x74, 0x53, 0x74, 0x72, 0x65,
-	0x61, 0x6d, 0x43, 0x68, 0x75, 0x6e, 0x6b, 0x73, 0x46, 0x6f, 0x72, 0x4b, 0x65, 0x79, 0x12, 0x35,
-	0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69,
-	0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76, 0x31, 0x2e, 0x50, 0x75, 0x74, 0x53, 0x74, 0x72, 0x65,
-	0x61, 0x6d, 0x43, 0x68, 0x75, 0x6e, 0x6b, 0x73, 0x46, 0x6f, 0x72, 0x4b, 0x65, 0x79, 0x52, 0x65,
-	0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x36, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68, 0x65, 0x6d,
-	0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76, 0x31, 0x2e,
-	0x50, 0x75, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x43, 0x68, 0x75, 0x6e, 0x6b, 0x73, 0x46,
-	0x6f, 0x72, 0x4b, 0x65, 0x79, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x28, 0x01, 0x12,
-	0x59, 0x0a, 0x06, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x12, 0x26, 0x2e, 0x6b, 0x76, 0x61, 0x6c,
+	0x63, 0x6b, 0x73, 0x75, 0x6d, 0x32, 0xa2, 0x04, 0x0a, 0x13, 0x4b, 0x56, 0x53, 0x74, 0x6f, 0x72,
+	0x65, 0x57, 0x72, 0x69, 0x74, 0x65, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x50, 0x0a,
+	0x03, 0x50, 0x75, 0x74, 0x12, 0x23, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68, 0x65, 0x6d, 0x79,
+	0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76, 0x31, 0x2e, 0x50,
+	0x75, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x24, 0x2e, 0x6b, 0x76, 0x61, 0x6c,
 	0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72,
-	0x2e, 0x76, 0x31, 0x2e, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73,
-	0x74, 0x1a, 0x27, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65,
-	0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76, 0x31, 0x2e, 0x44, 0x65, 0x6c, 0x65,
-	0x74, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x6d, 0x0a, 0x0c, 0x44, 0x65,
-	0x6c, 0x65, 0x74, 0x65, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x12, 0x2c, 0x2e, 0x6b, 0x76, 0x61,
-	0x6c, 0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f,
-	0x72, 0x2e, 0x76, 0x31, 0x2e, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x53, 0x74, 0x72, 0x65, 0x61,
-	0x6d, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x2d, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63,
-	0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e,
-	0x76, 0x31, 0x2e, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x52,
-	0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x28, 0x01, 0x32, 0x68, 0x0a, 0x12, 0x4b, 0x56, 0x53,
-	0x74, 0x6f, 0x72, 0x65, 0x52, 0x65, 0x61, 0x64, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12,
-	0x52, 0x0a, 0x03, 0x47, 0x65, 0x74, 0x12, 0x23, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68, 0x65,
+	0x2e, 0x76, 0x31, 0x2e, 0x50, 0x75, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12,
+	0x64, 0x0a, 0x09, 0x50, 0x75, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x12, 0x29, 0x2e, 0x6b,
+	0x76, 0x61, 0x6c, 0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61,
+	0x74, 0x6f, 0x72, 0x2e, 0x76, 0x31, 0x2e, 0x50, 0x75, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d,
+	0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x2a, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68,
+	0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76,
+	0x31, 0x2e, 0x50, 0x75, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x52, 0x65, 0x73, 0x70, 0x6f,
+	0x6e, 0x73, 0x65, 0x28, 0x01, 0x12, 0x88, 0x01, 0x0a, 0x15, 0x50, 0x75, 0x74, 0x53, 0x74, 0x72,
+	0x65, 0x61, 0x6d, 0x43, 0x68, 0x75, 0x6e, 0x6b, 0x73, 0x46, 0x6f, 0x72, 0x4b, 0x65, 0x79, 0x12,
+	0x35, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c,
+	0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76, 0x31, 0x2e, 0x50, 0x75, 0x74, 0x53, 0x74, 0x72,
+	0x65, 0x61, 0x6d, 0x43, 0x68, 0x75, 0x6e, 0x6b, 0x73, 0x46, 0x6f, 0x72, 0x4b, 0x65, 0x79, 0x52,
+	0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x36, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68, 0x65,
 	0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76, 0x31,
-	0x2e, 0x47, 0x65, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x24, 0x2e, 0x6b, 0x76,
+	0x2e, 0x50, 0x75, 0x74, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x43, 0x68, 0x75, 0x6e, 0x6b, 0x73,
+	0x46, 0x6f, 0x72, 0x4b, 0x65, 0x79, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x28, 0x01,
+	0x12, 0x59, 0x0a, 0x06, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x12, 0x26, 0x2e, 0x6b, 0x76, 0x61,
+	0x6c, 0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f,
+	0x72, 0x2e, 0x76, 0x31, 0x2e, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x52, 0x65, 0x71, 0x75, 0x65,
+	0x73, 0x74, 0x1a, 0x27, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72,
+	0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76, 0x31, 0x2e, 0x44, 0x65, 0x6c,
+	0x65, 0x74, 0x65, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x12, 0x6d, 0x0a, 0x0c, 0x44,
+	0x65, 0x6c, 0x65, 0x74, 0x65, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x12, 0x2c, 0x2e, 0x6b, 0x76,
 	0x61, 0x6c, 0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74,
-	0x6f, 0x72, 0x2e, 0x76, 0x31, 0x2e, 0x47, 0x65, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73,
-	0x65, 0x30, 0x01, 0x42, 0x4d, 0x5a, 0x4b, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63, 0x6f,
-	0x6d, 0x2f, 0x61, 0x6e, 0x6b, 0x75, 0x72, 0x2d, 0x61, 0x6e, 0x61, 0x6e, 0x64, 0x2f, 0x75, 0x6e,
-	0x69, 0x73, 0x6f, 0x6e, 0x64, 0x62, 0x2f, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x73, 0x2f, 0x70,
-	0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x67, 0x65, 0x6e, 0x2f, 0x67, 0x6f, 0x2f, 0x75, 0x6e, 0x69, 0x73,
-	0x6f, 0x6e, 0x64, 0x62, 0x2f, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2f,
-	0x76, 0x31, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
+	0x6f, 0x72, 0x2e, 0x76, 0x31, 0x2e, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x53, 0x74, 0x72, 0x65,
+	0x61, 0x6d, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x2d, 0x2e, 0x6b, 0x76, 0x61, 0x6c,
+	0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72,
+	0x2e, 0x76, 0x31, 0x2e, 0x44, 0x65, 0x6c, 0x65, 0x74, 0x65, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d,
+	0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e, 0x73, 0x65, 0x28, 0x01, 0x32, 0x68, 0x0a, 0x12, 0x4b, 0x56,
+	0x53, 0x74, 0x6f, 0x72, 0x65, 0x52, 0x65, 0x61, 0x64, 0x53, 0x65, 0x72, 0x76, 0x69, 0x63, 0x65,
+	0x12, 0x52, 0x0a, 0x03, 0x47, 0x65, 0x74, 0x12, 0x23, 0x2e, 0x6b, 0x76, 0x61, 0x6c, 0x63, 0x68,
+	0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72, 0x2e, 0x76,
+	0x31, 0x2e, 0x47, 0x65, 0x74, 0x52, 0x65, 0x71, 0x75, 0x65, 0x73, 0x74, 0x1a, 0x24, 0x2e, 0x6b,
+	0x76, 0x61, 0x6c, 0x63, 0x68, 0x65, 0x6d, 0x79, 0x2e, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61,
+	0x74, 0x6f, 0x72, 0x2e, 0x76, 0x31, 0x2e, 0x47, 0x65, 0x74, 0x52, 0x65, 0x73, 0x70, 0x6f, 0x6e,
+	0x73, 0x65, 0x30, 0x01, 0x42, 0x4d, 0x5a, 0x4b, 0x67, 0x69, 0x74, 0x68, 0x75, 0x62, 0x2e, 0x63,
+	0x6f, 0x6d, 0x2f, 0x61, 0x6e, 0x6b, 0x75, 0x72, 0x2d, 0x61, 0x6e, 0x61, 0x6e, 0x64, 0x2f, 0x75,
+	0x6e, 0x69, 0x73, 0x6f, 0x6e, 0x64, 0x62, 0x2f, 0x73, 0x63, 0x68, 0x65, 0x6d, 0x61, 0x73, 0x2f,
+	0x70, 0x72, 0x6f, 0x74, 0x6f, 0x2f, 0x67, 0x65, 0x6e, 0x2f, 0x67, 0x6f, 0x2f, 0x75, 0x6e, 0x69,
+	0x73, 0x6f, 0x6e, 0x64, 0x62, 0x2f, 0x72, 0x65, 0x70, 0x6c, 0x69, 0x63, 0x61, 0x74, 0x6f, 0x72,
+	0x2f, 0x76, 0x31, 0x62, 0x06, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x33,
 })
 
 var (
@@ -1066,56 +881,49 @@ func file_unisondb_replicator_v1_service_proto_rawDescGZIP() []byte {
 	return file_unisondb_replicator_v1_service_proto_rawDescData
 }
 
-var file_unisondb_replicator_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_unisondb_replicator_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_unisondb_replicator_v1_service_proto_goTypes = []any{
-	(*StreamWALRequest)(nil),              // 0: kvalchemy.replicator.v1.StreamWALRequest
-	(*StreamWALResponse)(nil),             // 1: kvalchemy.replicator.v1.StreamWALResponse
-	(*WALRecord)(nil),                     // 2: kvalchemy.replicator.v1.WALRecord
-	(*PutRequest)(nil),                    // 3: kvalchemy.replicator.v1.PutRequest
-	(*PutStreamRequest)(nil),              // 4: kvalchemy.replicator.v1.PutStreamRequest
-	(*PutResponse)(nil),                   // 5: kvalchemy.replicator.v1.PutResponse
-	(*PutStreamResponse)(nil),             // 6: kvalchemy.replicator.v1.PutStreamResponse
-	(*DeleteRequest)(nil),                 // 7: kvalchemy.replicator.v1.DeleteRequest
-	(*DeleteResponse)(nil),                // 8: kvalchemy.replicator.v1.DeleteResponse
-	(*DeleteStreamRequest)(nil),           // 9: kvalchemy.replicator.v1.DeleteStreamRequest
-	(*DeleteStreamResponse)(nil),          // 10: kvalchemy.replicator.v1.DeleteStreamResponse
-	(*PutStreamChunksForKeyRequest)(nil),  // 11: kvalchemy.replicator.v1.PutStreamChunksForKeyRequest
-	(*ChunkStartMarker)(nil),              // 12: kvalchemy.replicator.v1.ChunkStartMarker
-	(*ChunkPutValue)(nil),                 // 13: kvalchemy.replicator.v1.ChunkPutValue
-	(*ChunkCommitMarker)(nil),             // 14: kvalchemy.replicator.v1.ChunkCommitMarker
-	(*PutStreamChunksForKeyResponse)(nil), // 15: kvalchemy.replicator.v1.PutStreamChunksForKeyResponse
-	(*GetRequest)(nil),                    // 16: kvalchemy.replicator.v1.GetRequest
-	(*GetResponse)(nil),                   // 17: kvalchemy.replicator.v1.GetResponse
-	(*timestamppb.Timestamp)(nil),         // 18: google.protobuf.Timestamp
+	(*PutRequest)(nil),                    // 0: kvalchemy.replicator.v1.PutRequest
+	(*PutStreamRequest)(nil),              // 1: kvalchemy.replicator.v1.PutStreamRequest
+	(*PutResponse)(nil),                   // 2: kvalchemy.replicator.v1.PutResponse
+	(*PutStreamResponse)(nil),             // 3: kvalchemy.replicator.v1.PutStreamResponse
+	(*DeleteRequest)(nil),                 // 4: kvalchemy.replicator.v1.DeleteRequest
+	(*DeleteResponse)(nil),                // 5: kvalchemy.replicator.v1.DeleteResponse
+	(*DeleteStreamRequest)(nil),           // 6: kvalchemy.replicator.v1.DeleteStreamRequest
+	(*DeleteStreamResponse)(nil),          // 7: kvalchemy.replicator.v1.DeleteStreamResponse
+	(*PutStreamChunksForKeyRequest)(nil),  // 8: kvalchemy.replicator.v1.PutStreamChunksForKeyRequest
+	(*ChunkStartMarker)(nil),              // 9: kvalchemy.replicator.v1.ChunkStartMarker
+	(*ChunkPutValue)(nil),                 // 10: kvalchemy.replicator.v1.ChunkPutValue
+	(*ChunkCommitMarker)(nil),             // 11: kvalchemy.replicator.v1.ChunkCommitMarker
+	(*PutStreamChunksForKeyResponse)(nil), // 12: kvalchemy.replicator.v1.PutStreamChunksForKeyResponse
+	(*GetRequest)(nil),                    // 13: kvalchemy.replicator.v1.GetRequest
+	(*GetResponse)(nil),                   // 14: kvalchemy.replicator.v1.GetResponse
+	(*timestamppb.Timestamp)(nil),         // 15: google.protobuf.Timestamp
 }
 var file_unisondb_replicator_v1_service_proto_depIdxs = []int32{
-	2,  // 0: kvalchemy.replicator.v1.StreamWALResponse.wal_records:type_name -> kvalchemy.replicator.v1.WALRecord
-	18, // 1: kvalchemy.replicator.v1.StreamWALResponse.sent_at:type_name -> google.protobuf.Timestamp
-	18, // 2: kvalchemy.replicator.v1.PutRequest.timestamp:type_name -> google.protobuf.Timestamp
-	3,  // 3: kvalchemy.replicator.v1.PutStreamRequest.kv_pairs:type_name -> kvalchemy.replicator.v1.PutRequest
-	7,  // 4: kvalchemy.replicator.v1.DeleteStreamRequest.deletes:type_name -> kvalchemy.replicator.v1.DeleteRequest
-	12, // 5: kvalchemy.replicator.v1.PutStreamChunksForKeyRequest.start_marker:type_name -> kvalchemy.replicator.v1.ChunkStartMarker
-	14, // 6: kvalchemy.replicator.v1.PutStreamChunksForKeyRequest.commit_marker:type_name -> kvalchemy.replicator.v1.ChunkCommitMarker
-	13, // 7: kvalchemy.replicator.v1.PutStreamChunksForKeyRequest.chunk:type_name -> kvalchemy.replicator.v1.ChunkPutValue
-	0,  // 8: kvalchemy.replicator.v1.WALReplicationService.StreamWAL:input_type -> kvalchemy.replicator.v1.StreamWALRequest
-	3,  // 9: kvalchemy.replicator.v1.KVStoreWriteService.Put:input_type -> kvalchemy.replicator.v1.PutRequest
-	4,  // 10: kvalchemy.replicator.v1.KVStoreWriteService.PutStream:input_type -> kvalchemy.replicator.v1.PutStreamRequest
-	11, // 11: kvalchemy.replicator.v1.KVStoreWriteService.PutStreamChunksForKey:input_type -> kvalchemy.replicator.v1.PutStreamChunksForKeyRequest
-	7,  // 12: kvalchemy.replicator.v1.KVStoreWriteService.Delete:input_type -> kvalchemy.replicator.v1.DeleteRequest
-	9,  // 13: kvalchemy.replicator.v1.KVStoreWriteService.DeleteStream:input_type -> kvalchemy.replicator.v1.DeleteStreamRequest
-	16, // 14: kvalchemy.replicator.v1.KVStoreReadService.Get:input_type -> kvalchemy.replicator.v1.GetRequest
-	1,  // 15: kvalchemy.replicator.v1.WALReplicationService.StreamWAL:output_type -> kvalchemy.replicator.v1.StreamWALResponse
-	5,  // 16: kvalchemy.replicator.v1.KVStoreWriteService.Put:output_type -> kvalchemy.replicator.v1.PutResponse
-	6,  // 17: kvalchemy.replicator.v1.KVStoreWriteService.PutStream:output_type -> kvalchemy.replicator.v1.PutStreamResponse
-	15, // 18: kvalchemy.replicator.v1.KVStoreWriteService.PutStreamChunksForKey:output_type -> kvalchemy.replicator.v1.PutStreamChunksForKeyResponse
-	8,  // 19: kvalchemy.replicator.v1.KVStoreWriteService.Delete:output_type -> kvalchemy.replicator.v1.DeleteResponse
-	10, // 20: kvalchemy.replicator.v1.KVStoreWriteService.DeleteStream:output_type -> kvalchemy.replicator.v1.DeleteStreamResponse
-	17, // 21: kvalchemy.replicator.v1.KVStoreReadService.Get:output_type -> kvalchemy.replicator.v1.GetResponse
-	15, // [15:22] is the sub-list for method output_type
-	8,  // [8:15] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	15, // 0: kvalchemy.replicator.v1.PutRequest.timestamp:type_name -> google.protobuf.Timestamp
+	0,  // 1: kvalchemy.replicator.v1.PutStreamRequest.kv_pairs:type_name -> kvalchemy.replicator.v1.PutRequest
+	4,  // 2: kvalchemy.replicator.v1.DeleteStreamRequest.deletes:type_name -> kvalchemy.replicator.v1.DeleteRequest
+	9,  // 3: kvalchemy.replicator.v1.PutStreamChunksForKeyRequest.start_marker:type_name -> kvalchemy.replicator.v1.ChunkStartMarker
+	11, // 4: kvalchemy.replicator.v1.PutStreamChunksForKeyRequest.commit_marker:type_name -> kvalchemy.replicator.v1.ChunkCommitMarker
+	10, // 5: kvalchemy.replicator.v1.PutStreamChunksForKeyRequest.chunk:type_name -> kvalchemy.replicator.v1.ChunkPutValue
+	0,  // 6: kvalchemy.replicator.v1.KVStoreWriteService.Put:input_type -> kvalchemy.replicator.v1.PutRequest
+	1,  // 7: kvalchemy.replicator.v1.KVStoreWriteService.PutStream:input_type -> kvalchemy.replicator.v1.PutStreamRequest
+	8,  // 8: kvalchemy.replicator.v1.KVStoreWriteService.PutStreamChunksForKey:input_type -> kvalchemy.replicator.v1.PutStreamChunksForKeyRequest
+	4,  // 9: kvalchemy.replicator.v1.KVStoreWriteService.Delete:input_type -> kvalchemy.replicator.v1.DeleteRequest
+	6,  // 10: kvalchemy.replicator.v1.KVStoreWriteService.DeleteStream:input_type -> kvalchemy.replicator.v1.DeleteStreamRequest
+	13, // 11: kvalchemy.replicator.v1.KVStoreReadService.Get:input_type -> kvalchemy.replicator.v1.GetRequest
+	2,  // 12: kvalchemy.replicator.v1.KVStoreWriteService.Put:output_type -> kvalchemy.replicator.v1.PutResponse
+	3,  // 13: kvalchemy.replicator.v1.KVStoreWriteService.PutStream:output_type -> kvalchemy.replicator.v1.PutStreamResponse
+	12, // 14: kvalchemy.replicator.v1.KVStoreWriteService.PutStreamChunksForKey:output_type -> kvalchemy.replicator.v1.PutStreamChunksForKeyResponse
+	5,  // 15: kvalchemy.replicator.v1.KVStoreWriteService.Delete:output_type -> kvalchemy.replicator.v1.DeleteResponse
+	7,  // 16: kvalchemy.replicator.v1.KVStoreWriteService.DeleteStream:output_type -> kvalchemy.replicator.v1.DeleteStreamResponse
+	14, // 17: kvalchemy.replicator.v1.KVStoreReadService.Get:output_type -> kvalchemy.replicator.v1.GetResponse
+	12, // [12:18] is the sub-list for method output_type
+	6,  // [6:12] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_unisondb_replicator_v1_service_proto_init() }
@@ -1123,8 +931,7 @@ func file_unisondb_replicator_v1_service_proto_init() {
 	if File_unisondb_replicator_v1_service_proto != nil {
 		return
 	}
-	file_unisondb_replicator_v1_service_proto_msgTypes[0].OneofWrappers = []any{}
-	file_unisondb_replicator_v1_service_proto_msgTypes[11].OneofWrappers = []any{
+	file_unisondb_replicator_v1_service_proto_msgTypes[8].OneofWrappers = []any{
 		(*PutStreamChunksForKeyRequest_StartMarker)(nil),
 		(*PutStreamChunksForKeyRequest_CommitMarker)(nil),
 		(*PutStreamChunksForKeyRequest_Chunk)(nil),
@@ -1135,9 +942,9 @@ func file_unisondb_replicator_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_unisondb_replicator_v1_service_proto_rawDesc), len(file_unisondb_replicator_v1_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   18,
+			NumMessages:   15,
 			NumExtensions: 0,
-			NumServices:   3,
+			NumServices:   2,
 		},
 		GoTypes:           file_unisondb_replicator_v1_service_proto_goTypes,
 		DependencyIndexes: file_unisondb_replicator_v1_service_proto_depIdxs,

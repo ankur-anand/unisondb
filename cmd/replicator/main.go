@@ -20,6 +20,7 @@ import (
 	"github.com/ankur-anand/unisondb/internal/services/kvstore"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
+	v1Streamer "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"github.com/hashicorp/go-metrics"
 	hashiprom "github.com/hashicorp/go-metrics/prometheus"
 	"github.com/pelletier/go-toml/v2"
@@ -168,7 +169,7 @@ func (ms *mainServer) setupGrpcServer(ctx context.Context) error {
 
 		grpc.KeepaliveEnforcementPolicy(kAlv))
 
-	v1.RegisterWALReplicationServiceServer(gS, rep)
+	v1Streamer.RegisterWalStreamerServiceServer(gS, rep)
 	v1.RegisterKVStoreReadServiceServer(gS, kvr)
 	// only register write server if allowed
 	if ms.cfg.AllowWrite {

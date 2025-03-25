@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
-	"github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
+	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 )

@@ -5,28 +5,6 @@ option go_package = "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unison
 
 import "google/protobuf/timestamp.proto";
 
-service WALReplicationService {
-  /// Stream WAL Logs
-  rpc StreamWAL(StreamWALRequest) returns (stream StreamWALResponse);
-}
-
-message StreamWALRequest {
-  optional bytes offset = 1; // Last applied WAL checkpoint offset.
-}
-
-// Server's Response Message (Streaming)
-message StreamWALResponse {
-  repeated WALRecord wal_records = 1;   // A batch of WAL records
-  google.protobuf.Timestamp sent_at = 2; // Server timestamp when the batch was sent
-}
-
-// WAL Record Format
-message WALRecord {
-  bytes offset = 1;
-  bytes record = 2;
-  fixed32 crc32_checksum = 3;
-}
-
 service KVStoreWriteService {
   rpc Put(PutRequest) returns (PutResponse);
   rpc PutStream(stream PutStreamRequest) returns (PutStreamResponse);
