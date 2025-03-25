@@ -11,7 +11,7 @@ import (
 	"github.com/ankur-anand/unisondb/internal/middleware"
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/pkg/replicator"
-	v2 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
+	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -22,25 +22,26 @@ const (
 )
 
 var (
-	// replicatorBatchWaitTime defines a timeout value after which even if batch size,
+	// batchWaitTime defines a timeout value after which even if batch size,
 	// threshold is not met all the reads from replicator will be flushed onto the channel.
-	replicatorBatchWaitTime = time.Millisecond * 100
+	batchWaitTime = time.Millisecond * 100
 
-	// replicatorBatchSize defines a size of batch.
-	replicatorBatchSize = 20
+	// batchSize defines a size of batch.
+	batchSize = 20
 
 	grpcMaxMsgSize = 1 << 20
 )
 
-// GrpcStreamer implements gRPC-based WALReplicationService.
+// GrpcStreamer implements gRPC-based WalStreamerService.
 type GrpcStreamer struct {
 	// namespace mapped engine
 	storageEngines map[string]*dbkernel.Engine
 	dynamicTimeout time.Duration
-	v2.UnimplementedWALReplicationServiceServer
+	v1.UnimplementedWalStreamerServiceServer
 	errGrp *errgroup.Group
 }
 
+// NewGrpcStreamer returns an initialized GrpcStreamer that implements  grpc-based WalStreamerService.
 func NewGrpcStreamer(errGrp *errgroup.Group, storageEngines map[string]*dbkernel.Engine, dynamicTimeout time.Duration) *GrpcStreamer {
 	return &GrpcStreamer{
 		storageEngines: storageEngines,
@@ -49,8 +50,8 @@ func NewGrpcStreamer(errGrp *errgroup.Group, storageEngines map[string]*dbkernel
 	}
 }
 
-// StreamWAL stream the underlying WAL record on the connection stream.
-func (s *GrpcStreamer) StreamWAL(request *v2.StreamWALRequest, g grpc.ServerStreamingServer[v2.StreamWALResponse]) error {
+// StreamWalRecords stream the underlying WAL record on the connection stream.
+func (s *GrpcStreamer) StreamWalRecords(request *v1.StreamWalRecordsRequest, g grpc.ServerStreamingServer[v1.StreamWalRecordsResponse]) error {
 	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
 
 	if namespace == "" {
@@ -68,14 +69,14 @@ func (s *GrpcStreamer) StreamWAL(request *v2.StreamWALRequest, g grpc.ServerStre
 		return services.ToGRPCError(namespace, reqID, method, services.ErrInvalidMetadata)
 	}
 	// create a new replicator instance.
-	slog.Debug("[kvalchemy.streamer.grpc] streaming WAL",
+	slog.Debug("[unisondb.streamer.grpc] streaming WAL",
 		"method", method,
 		reqIDKey, reqID,
 		"namespace", namespace,
 		"offset", meta,
 	)
 
-	walReceiver := make(chan []*v2.WALRecord, 2)
+	walReceiver := make(chan []*v1.WALRecord, 2)
 	replicatorErr := make(chan error, 1)
 	defer close(walReceiver)
 
@@ -83,8 +84,8 @@ func (s *GrpcStreamer) StreamWAL(request *v2.StreamWALRequest, g grpc.ServerStre
 	defer cancel()
 
 	rpInstance := replicator.NewReplicator(engine,
-		replicatorBatchSize,
-		replicatorBatchWaitTime, meta, "grpc")
+		batchSize,
+		batchWaitTime, meta, "grpc")
 
 	s.errGrp.Go(func() error {
 		defer close(replicatorErr)
@@ -116,13 +117,13 @@ func (s *GrpcStreamer) StreamWAL(request *v2.StreamWALRequest, g grpc.ServerStre
 //
 //nolint:gocognit
 func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
-	g grpc.ServerStreamingServer[v2.StreamWALResponse],
-	walReceiver chan []*v2.WALRecord,
+	g grpc.ServerStreamingServer[v1.StreamWalRecordsResponse],
+	walReceiver chan []*v1.WALRecord,
 	replicatorErr chan error) error {
 	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
 
 	var (
-		batch                  []*v2.WALRecord
+		batch                  []*v1.WALRecord
 		totalBatchSize         int
 		lastReceivedRecordTime = time.Now()
 	)
@@ -131,7 +132,7 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 		if err := s.flushBatch(batch, g); err != nil {
 			return err
 		}
-		batch = []*v2.WALRecord{}
+		batch = []*v1.WALRecord{}
 		totalBatchSize = 0
 		return nil
 	}
@@ -158,7 +159,7 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 		case walRecords := <-walReceiver:
 			for _, walRecord := range walRecords {
 				lastReceivedRecordTime = time.Now()
-				totalBatchSize = +len(walRecord.Record)
+				totalBatchSize += len(walRecord.Record)
 				batch = append(batch, walRecord)
 
 				if totalBatchSize >= grpcMaxMsgSize {
@@ -166,11 +167,10 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 						return services.ToGRPCError(namespace, reqID, method, err)
 					}
 				}
-
-				// flush remaining
-				if err := flusher(); err != nil {
-					return services.ToGRPCError(namespace, reqID, method, err)
-				}
+			}
+			// flush remaining
+			if err := flusher(); err != nil {
+				return services.ToGRPCError(namespace, reqID, method, err)
 			}
 		case err := <-replicatorErr:
 			if errors.Is(err, dbkernel.ErrInvalidOffset) {
@@ -181,14 +181,15 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 	}
 }
 
-func (s *GrpcStreamer) flushBatch(batch []*v2.WALRecord, g grpc.ServerStream) error {
+func (s *GrpcStreamer) flushBatch(batch []*v1.WALRecord, g grpc.ServerStream) error {
 	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
 	metricsStreamSendTotal.WithLabelValues(namespace, string(method), "grpc").Add(float64(len(batch)))
 	if len(batch) == 0 {
 		return nil
 	}
-	slog.Debug("[kvalchemy.streamer.grpc] Batch flushing", "size", len(batch))
-	response := &v2.StreamWALResponse{WalRecords: batch, SentAt: timestamppb.Now()}
+
+	slog.Debug("[unisondb.streamer.grpc] Batch flushing", "size", len(batch))
+	response := &v1.StreamWalRecordsResponse{Records: batch, ServerTimestamp: timestamppb.Now()}
 
 	start := time.Now()
 	defer func() {
@@ -196,7 +197,7 @@ func (s *GrpcStreamer) flushBatch(batch []*v2.WALRecord, g grpc.ServerStream) er
 	}()
 
 	if err := g.SendMsg(response); err != nil {
-		slog.Error("[kvalchemy.streamer.grpc] Stream: failed to send WAL records", "err", err,
+		slog.Error("[unisondb.streamer.grpc] Stream: failed to send WAL records", "err", err,
 			"records_count", len(batch), "namespace", namespace, reqIDKey, reqID)
 		metricsStreamSendErrors.WithLabelValues(namespace, string(method), "grpc").Inc()
 		return fmt.Errorf("failed to send WAL records: %w", err)

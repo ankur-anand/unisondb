@@ -15,7 +15,7 @@ import (
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
-	v2 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
+	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sync/errgroup"
@@ -41,7 +41,7 @@ type noopWalIO struct {
 	recordWalCount int
 }
 
-func (n *noopWalIO) Write(data *v2.WALRecord) error {
+func (n *noopWalIO) Write(data *v1.WALRecord) error {
 	n.recordWalCount++
 	return nil
 }
@@ -70,7 +70,7 @@ func TestServer_Invalid_Request(t *testing.T) {
 	}
 
 	dir := os.TempDir()
-	temp, err := os.MkdirTemp(dir, "kvalchemy")
+	temp, err := os.MkdirTemp(dir, "unisondb")
 	if err != nil {
 		panic(err)
 	}
@@ -100,7 +100,7 @@ func TestServer_Invalid_Request(t *testing.T) {
 	defer gS.Stop()
 
 	go func() {
-		v2.RegisterWALReplicationServiceServer(gS, server)
+		v1.RegisterWalStreamerServiceServer(gS, server)
 		if err := gS.Serve(listener); err != nil {
 
 			assert.NoError(t, err, "failed to grpc start server")
@@ -112,10 +112,10 @@ func TestServer_Invalid_Request(t *testing.T) {
 
 	assert.NoError(t, err, "failed to create grpc client")
 
-	client := v2.NewWALReplicationServiceClient(conn)
+	client := v1.NewWalStreamerServiceClient(conn)
 
 	t.Run("MissingNamespace", func(t *testing.T) {
-		wal, err := client.StreamWAL(ctx, &v2.StreamWALRequest{})
+		wal, err := client.StreamWalRecords(ctx, &v1.StreamWalRecordsRequest{})
 		assert.NoError(t, err, "failed to stream WAL")
 		_, err = wal.Recv()
 		assert.Error(t, err, "expected error on missing namespace")
@@ -129,7 +129,7 @@ func TestServer_Invalid_Request(t *testing.T) {
 	t.Run("NamespaceNotExists", func(t *testing.T) {
 		md := metadata.Pairs("x-namespace", "unknown")
 		ctx := metadata.NewOutgoingContext(context.Background(), md)
-		wal, err := client.StreamWAL(ctx, &v2.StreamWALRequest{})
+		wal, err := client.StreamWalRecords(ctx, &v1.StreamWalRecordsRequest{})
 		assert.NoError(t, err, "failed to stream WAL")
 		_, err = wal.Recv()
 		assert.Error(t, err, "expected error on non-existent namespace")
@@ -143,7 +143,7 @@ func TestServer_Invalid_Request(t *testing.T) {
 	t.Run("InvalidMetadata", func(t *testing.T) {
 		md := metadata.Pairs("x-namespace", nameSpaces[0])
 		ctx := metadata.NewOutgoingContext(context.Background(), md)
-		wal, err := client.StreamWAL(ctx, &v2.StreamWALRequest{
+		wal, err := client.StreamWalRecords(ctx, &v1.StreamWalRecordsRequest{
 			Offset: []byte{255, 2, 3}, // Corrupt data
 		})
 		assert.NoError(t, err, "failed to stream WAL")
@@ -177,7 +177,7 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 	}
 
 	dir := os.TempDir()
-	temp, err := os.MkdirTemp(dir, "kvalchemy")
+	temp, err := os.MkdirTemp(dir, "unisondb")
 	if err != nil {
 		panic(err)
 	}
@@ -218,7 +218,7 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 	defer gS.Stop()
 
 	go func() {
-		v2.RegisterWALReplicationServiceServer(gS, server)
+		v1.RegisterWalStreamerServiceServer(gS, server)
 		if err := gS.Serve(listener); err != nil {
 			assert.NoError(t, err, "failed to grpc start server")
 		}
@@ -228,7 +228,7 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 		grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	assert.NoError(t, err, "failed to create grpc client")
-	client := v2.NewWALReplicationServiceClient(conn)
+	client := v1.NewWalStreamerServiceClient(conn)
 
 	errGroup.Go(func() error {
 		ticker := time.NewTicker(10 * time.Millisecond)
@@ -256,7 +256,7 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 	t.Run("wal-replication", func(t *testing.T) {
 		md := metadata.Pairs("x-namespace", nameSpaces[0])
 		ctx := metadata.NewOutgoingContext(context.Background(), md)
-		wal, err := client.StreamWAL(ctx, &v2.StreamWALRequest{})
+		wal, err := client.StreamWalRecords(ctx, &v1.StreamWalRecordsRequest{})
 		assert.NoError(t, err, "failed to stream WAL")
 
 		valuesCount := 0
@@ -269,8 +269,8 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 				assert.Equal(t, statusErr.Message(), services.ErrStreamTimeout.Error(), "expected error message didn't match")
 				break
 			}
-			valuesCount = +len(val.WalRecords)
-			for _, record := range val.WalRecords {
+			valuesCount = +len(val.Records)
+			for _, record := range val.Records {
 				lastRecvIndex++
 				wr := logrecord.GetRootAsLogRecord(record.Record, 0)
 				assert.NotNil(t, wr, "error converting to wal record")
@@ -304,7 +304,7 @@ func TestServer_StreamWAL_Client(t *testing.T) {
 	}
 
 	dir := os.TempDir()
-	temp, err := os.MkdirTemp(dir, "kvalchemy")
+	temp, err := os.MkdirTemp(dir, "unisondb")
 	if err != nil {
 		panic(err)
 	}
@@ -345,7 +345,7 @@ func TestServer_StreamWAL_Client(t *testing.T) {
 	defer gS.Stop()
 
 	go func() {
-		v2.RegisterWALReplicationServiceServer(gS, server)
+		v1.RegisterWalStreamerServiceServer(gS, server)
 		if err := gS.Serve(listener); err != nil {
 			assert.NoError(t, err, "failed to grpc start server")
 		}
@@ -400,7 +400,7 @@ func TestServer_StreamWAL_MaxRetry(t *testing.T) {
 	}
 
 	dir := os.TempDir()
-	temp, err := os.MkdirTemp(dir, "kvalchemy")
+	temp, err := os.MkdirTemp(dir, "unisondb")
 	if err != nil {
 		panic(err)
 	}
@@ -441,7 +441,7 @@ func TestServer_StreamWAL_MaxRetry(t *testing.T) {
 	defer gS.Stop()
 
 	go func() {
-		v2.RegisterWALReplicationServiceServer(gS, server)
+		v1.RegisterWalStreamerServiceServer(gS, server)
 		if err := gS.Serve(listener); err != nil {
 			assert.NoError(t, err, "failed to grpc start server")
 		}
