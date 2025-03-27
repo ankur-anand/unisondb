@@ -217,13 +217,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 		offset: offset,
 		value:  memValue,
 	})
-
-	t.memTableEntries = append(t.memTableEntries, txMemTableEntry{
-		key:    rowKey,
-		offset: offset,
-		value:  memValue,
-	})
-
+	
 	t.checksum = crc32.Update(t.checksum, crc32.IEEETable, encoded)
 	t.valuesCount++
 	return nil

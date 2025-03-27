@@ -119,6 +119,9 @@ func (table *MemTable) Get(key []byte) y.ValueStruct {
 func (table *MemTable) GetRowYValue(rowKey []byte) []y.ValueStruct {
 	var result []y.ValueStruct
 	it := table.skipList.NewIterator()
+	defer func(it *skl.Iterator) {
+		_ = it.Close()
+	}(it)
 	for it.Seek(rowKey); it.Valid(); it.Next() {
 		key := it.Key()
 		if !bytes.HasPrefix(key, rowKey) {
