@@ -2,12 +2,13 @@ package store
 
 import (
 	"errors"
+	"hash/crc32"
 	"path/filepath"
 	"sync/atomic"
 
-	"github.com/ankur-anand/kvalchemy/dbkernel"
-	"github.com/ankur-anand/kvalchemy/dbkernel/compress"
-	"github.com/ankur-anand/unisondb/dbkernel/internal/wal/walrecord"
+	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/internal/logcodec"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/dgraph-io/badger/v4"
 )
 
@@ -33,24 +34,23 @@ func NewBadgerStore(dir string) (*BadgerStore, error) {
 }
 
 func (b *BadgerStore) Set(key, value []byte) error {
-	compressed, err := compress.CompressLZ4(value)
-	if err != nil {
-		return err
-	}
-	wr := walrecord.Record{
-		Hlc:          dbkernel.HLCNow(b.globalCounter.Add(1)),
-		Key:          key,
-		Value:        compressed,
-		LogOperation: walrecord.LogOperationInsert,
+
+	kvEncoded := logcodec.SerializeKVEntry(key, value)
+
+	index := b.globalCounter.Add(1)
+	wr := logcodec.LogRecord{
+		LSN:           index,
+		HLC:           dbkernel.HLCNow(index),
+		CRC32Checksum: crc32.ChecksumIEEE(kvEncoded),
+		OperationType: logrecord.LogOperationTypeInsert,
+		TxnState:      logrecord.TransactionStateNone,
+		EntryType:     logrecord.LogEntryTypeKV,
+		Entries:       [][]byte{kvEncoded},
 	}
 
-	val, err := wr.FBEncode()
-	if err != nil {
-		return err
-	}
-
+	val := wr.FBEncode(len(kvEncoded) + 512)
 	txn := b.db.NewTransaction(true)
-	err = txn.Set([]byte(key), val)
+	err := txn.Set([]byte(key), val)
 	if errors.Is(err, badger.ErrTxnTooBig) {
 		_ = txn.Commit()
 		txn = b.db.NewTransaction(true)
@@ -84,33 +84,9 @@ func (b *BadgerStore) Get(key []byte) ([]byte, error) {
 		return nil, nil
 	}
 
-	record := walrecord.GetRootAsWalRecord(value, 0)
-	if record.Operation() == walrecord.LogOperationDelete {
-		return nil, nil
-	}
-
-	return compress.DecompressLZ4(record.ValueBytes())
-}
-
-func (b *BadgerStore) Delete(key []byte) error {
-	wr := walrecord.Record{
-		Hlc:          dbkernel.HLCNow(b.globalCounter.Add(1)),
-		Key:          key,
-		LogOperation: walrecord.LogOperationDelete,
-	}
-
-	val, err := wr.FBEncode()
-	if err != nil {
-		return err
-	}
-	txn := b.db.NewTransaction(true)
-	err = txn.Set([]byte(key), val)
-	if errors.Is(err, badger.ErrTxnTooBig) {
-		_ = txn.Commit()
-		txn = b.db.NewTransaction(true)
-		err = txn.Set(key, val)
-	}
-	return txn.Commit()
+	record := logcodec.DeserializeLogRecord(value)
+	kv := logcodec.DeserializeKVEntry(record.Entries[0])
+	return kv.Value, nil
 }
 
 func (b *BadgerStore) Close() error {

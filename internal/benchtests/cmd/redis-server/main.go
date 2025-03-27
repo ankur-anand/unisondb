@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ankur-anand/kvalchemy/dbkernel"
-	"github.com/ankur-anand/kvalchemy/internal/benchtests/cmd/redis-server/store"
-	"github.com/ankur-anand/kvalchemy/internal/etc"
+	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/internal/benchtests/cmd/redis-server/store"
+	"github.com/ankur-anand/unisondb/internal/etc"
 	"github.com/hashicorp/go-metrics"
 	"github.com/tidwall/redcon"
 )
@@ -24,7 +24,6 @@ import (
 type Storage interface {
 	Set(key, value []byte) error
 	Get(key []byte) ([]byte, error)
-	Delete(key []byte) error
 	Close() error
 	TotalOpsCount() uint64
 }
@@ -130,12 +129,7 @@ func main() {
 						conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 						return
 					}
-					err := se.Delete(cmd.Args[1])
-					if err != nil {
-						conn.WriteError(err.Error())
-						return
-					}
-
+					
 					conn.WriteInt(1)
 				case "config":
 					// This simple (blank) response is only here to allow for the

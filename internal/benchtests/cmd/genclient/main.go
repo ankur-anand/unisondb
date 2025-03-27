@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ankur-anand/kvalchemy/internal/benchtests/cmd/genclient/gen"
+	"github.com/ankur-anand/unisondb/internal/benchtests/cmd/genclient/gen"
 	"github.com/openhistogram/circonusllhist"
 	"github.com/prometheus/common/helpers/templates"
 	"github.com/redis/go-redis/v9"
