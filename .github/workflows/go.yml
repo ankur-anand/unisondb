@@ -43,7 +43,7 @@ jobs:
             exit 1
           fi
 
-  tests:
+  test:
     runs-on: ubuntu-latest
     permissions:
       contents: read
