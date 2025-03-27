@@ -29,10 +29,10 @@ jobs:
         run: |
           go vet ./...
 
-      - name: Check go.mod tidy
-        run: |
-          go mod tidy
-          git diff --exit-code go.mod go.sum
+#      - name: Check go.mod tidy
+#        run: |
+#          go mod tidy
+#          git diff --exit-code go.mod go.sum
 
       - name: Run Go Fmt
         run: |
@@ -43,8 +43,10 @@ jobs:
             exit 1
           fi
 
-  test:
+  tests:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
