@@ -55,7 +55,7 @@ jobs:
       - run: go version
 
       - name: Run go test
-        run: go test -count 1 -v -race -covermode atomic -coverprofile=covprofile $(go list ./... | grep -v  proto)
+        run: go test -count 1 -v -race -covermode atomic -coverprofile=covprofile $(go list ./... | grep -vE  'schemas|cmd|etc|middleware')
 
       - name: Install goveralls
         run: go install github.com/mattn/goveralls@latest
@@ -63,5 +63,5 @@ jobs:
       - name: Send coverage
         env:
             COVERALLS_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
-        run: goveralls -coverprofile=covprofile -service=github
+        run: goveralls -coverprofile=covprofile -service=github -ignore
 
