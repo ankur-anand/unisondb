@@ -15,21 +15,21 @@ import (
 
 var (
 	mKeyActiveReplicator = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: "kvalchemy",
+		Namespace: "unisondb",
 		Subsystem: "replicator",
 		Name:      "active",
 	},
 		[]string{"namespace", "replicator_engine"})
 
 	mKeyReplicatorRecordsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "kvalchemy",
+		Namespace: "unisondb",
 		Subsystem: "replicator",
 		Name:      "records_total",
 		Help:      "Total number of WAL records processed",
 	}, []string{"namespace", "replicator_engine"})
 
 	mKeyReplicatorBatchesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "kvalchemy",
+		Namespace: "unisondb",
 		Subsystem: "replicator",
 		Name:      "batches_total",
 		Help:      "Total number of WAL batches processed",
