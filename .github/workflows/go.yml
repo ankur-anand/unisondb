@@ -1,4 +1,4 @@
-name: golang test and lint.
+name: Go CI
 
 on:
   pull_request:
@@ -9,13 +9,13 @@ on:
       - main
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '^1.24.0' # The Go version to download (if necessary) and use.
+          go-version: '^1.24.0'
       - run: go version
         # Step 6: Install golangci-lint
       - name: Install golangci-lint
@@ -25,5 +25,43 @@ jobs:
       - name: Run golangci-lint
         run: golangci-lint run ./...
 
+      - name: Run Go Vet
+        run: |
+          go vet ./...
+
+#      - name: Check go.mod tidy
+#        run: |
+#          go mod tidy
+#          git diff --exit-code go.mod go.sum
+
+      - name: Run Go Fmt
+        run: |
+          files=$(go fmt ./...)
+          if [ -n "$files" ]; then
+            echo "Please run gofmt on these files ..."
+            echo "$files"
+            exit 1
+          fi
+
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '^1.24.0'
+      - run: go version
+
       - name: Run go test
-        run: go test -v -race -covermode atomic $(go list ./... | grep -v  proto)
+        run: go test -count 1 -v -race -covermode atomic -coverprofile=covprofile $(go list ./... | grep -vE  'schemas|cmd|etc|middleware')
+
+      - name: Install goveralls
+        run: go install github.com/mattn/goveralls@latest
+
+      - name: Send coverage
+        env:
+            COVERALLS_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+        run: goveralls -coverprofile=covprofile -service=github
+
