@@ -14,9 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ankur-anand/kvalchemy/dbkernel"
-	"github.com/ankur-anand/kvalchemy/internal/benchtests/cmd/redis-server/store"
-	"github.com/ankur-anand/kvalchemy/internal/etc"
+	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/internal/benchtests/cmd/redis-server/store"
+	"github.com/ankur-anand/unisondb/internal/etc"
 	"github.com/hashicorp/go-metrics"
 	"github.com/tidwall/redcon"
 )
@@ -24,7 +24,6 @@ import (
 type Storage interface {
 	Set(key, value []byte) error
 	Get(key []byte) ([]byte, error)
-	Delete(key []byte) error
 	Close() error
 	TotalOpsCount() uint64
 }
@@ -33,13 +32,13 @@ var (
 	dataDir   = flag.String("dir", "./data", "data directory")
 	namespace = flag.String("namespace", "default", "namespace")
 	port      = flag.Int("port", 6380, "server port")
-	engine    = flag.String("engine", "alchemy", "database engine")
+	engine    = flag.String("engine", "unison", "database engine")
 )
 
 func main() {
 	flag.Parse()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+		Level: slog.LevelInfo,
 	}))
 
 	slog.SetDefault(logger)
@@ -128,11 +127,6 @@ func main() {
 				case "del":
 					if len(cmd.Args) != 2 {
 						conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
-						return
-					}
-					err := se.Delete(cmd.Args[1])
-					if err != nil {
-						conn.WriteError(err.Error())
 						return
 					}
 
