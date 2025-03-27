@@ -288,7 +288,7 @@ func (e *Engine) recoverWAL() error {
 		// once recovered update the metadata table again.
 		e.pendingMetadata.queueMetadata(&flushedMetadata{
 			metadata: &internal.Metadata{
-				RecordProcessed: uint64(walRecovery.RecoveredCount()),
+				RecordProcessed: e.opsFlushedCounter.Load(),
 				Pos:             walRecovery.LastRecoveredOffset(),
 			},
 			recordProcessed: walRecovery.RecoveredCount(),
