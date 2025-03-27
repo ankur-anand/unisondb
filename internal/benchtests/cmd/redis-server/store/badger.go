@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"hash/crc32"
 	"path/filepath"
@@ -16,21 +17,25 @@ type BadgerStore struct {
 	globalCounter atomic.Uint64
 	db            *badger.DB
 	opsCount      atomic.Uint64
+	totalSize     atomic.Uint64
+	cancel        context.CancelFunc
 }
 
 func NewBadgerStore(dir string) (*BadgerStore, error) {
 	fp := filepath.Join(dir, "badger")
 	opts := badger.DefaultOptions(fp)
 	opts.Dir, opts.ValueDir = fp, fp
-	opts.MemTableSize = 4 << 20
-	opts.ValueThreshold = 1 * 1024
-
+	// similar to the wal SYNC Bytes of the dbunison
+	opts.MemTableSize = 1 << 20
+	opts.ValueThreshold = 2 << 10
 	badgerDB, err := badger.Open(opts)
 	if err != nil {
 		return nil, err
 	}
 
-	return &BadgerStore{db: badgerDB}, nil
+	_, cancel := context.WithCancel(context.Background())
+
+	return &BadgerStore{db: badgerDB, cancel: cancel}, nil
 }
 
 func (b *BadgerStore) Set(key, value []byte) error {
@@ -49,6 +54,8 @@ func (b *BadgerStore) Set(key, value []byte) error {
 	}
 
 	val := wr.FBEncode(len(kvEncoded) + 512)
+	newSize := b.totalSize.Add(uint64(len(val)))
+
 	txn := b.db.NewTransaction(true)
 	err := txn.Set([]byte(key), val)
 	if errors.Is(err, badger.ErrTxnTooBig) {
@@ -56,7 +63,18 @@ func (b *BadgerStore) Set(key, value []byte) error {
 		txn = b.db.NewTransaction(true)
 		err = txn.Set(key, val)
 	}
-	return txn.Commit()
+
+	err = txn.Commit()
+	if err != nil {
+		return err
+	}
+
+	if newSize > 1<<20 {
+		//fmt.Println("sync")
+		b.db.Sync()
+		b.totalSize.Store(0)
+	}
+	return nil
 }
 
 func (b *BadgerStore) Get(key []byte) ([]byte, error) {
@@ -90,6 +108,7 @@ func (b *BadgerStore) Get(key []byte) ([]byte, error) {
 }
 
 func (b *BadgerStore) Close() error {
+	b.cancel()
 	return b.db.Close()
 }
 

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
 )
@@ -13,6 +14,7 @@ type KVAlchemy struct {
 
 func NewKVAlchemy(dir, namespace string) (*KVAlchemy, error) {
 	cfg := dbkernel.NewDefaultEngineConfig()
+	cfg.WalConfig.SyncInterval = 1 * time.Hour
 	engine, err := dbkernel.NewStorageEngine(dir, namespace, cfg)
 	return &KVAlchemy{
 		namespace: namespace,

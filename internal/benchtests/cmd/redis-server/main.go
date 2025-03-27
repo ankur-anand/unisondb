@@ -32,13 +32,13 @@ var (
 	dataDir   = flag.String("dir", "./data", "data directory")
 	namespace = flag.String("namespace", "default", "namespace")
 	port      = flag.Int("port", 6380, "server port")
-	engine    = flag.String("engine", "alchemy", "database engine")
+	engine    = flag.String("engine", "unison", "database engine")
 )
 
 func main() {
 	flag.Parse()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+		Level: slog.LevelInfo,
 	}))
 
 	slog.SetDefault(logger)
@@ -129,7 +129,7 @@ func main() {
 						conn.WriteError("ERR wrong number of arguments for '" + string(cmd.Args[0]) + "' command")
 						return
 					}
-					
+
 					conn.WriteInt(1)
 				case "config":
 					// This simple (blank) response is only here to allow for the
