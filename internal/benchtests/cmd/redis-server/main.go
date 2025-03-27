@@ -48,8 +48,8 @@ func main() {
 	var se Storage
 	var err error
 	switch *engine {
-	case "alchemy":
-		se, err = store.NewKVAlchemy(*dataDir, *namespace)
+	case "unison":
+		se, err = store.NewUnisonDB(*dataDir, *namespace)
 	case "badger":
 		se, err = store.NewBadgerStore(*dataDir)
 	case "bolt":
