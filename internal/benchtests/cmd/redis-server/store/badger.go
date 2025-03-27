@@ -54,8 +54,6 @@ func (b *BadgerStore) Set(key, value []byte) error {
 	}
 
 	val := wr.FBEncode(len(kvEncoded) + 512)
-	newSize := b.totalSize.Add(uint64(len(val)))
-
 	txn := b.db.NewTransaction(true)
 	err := txn.Set([]byte(key), val)
 	if errors.Is(err, badger.ErrTxnTooBig) {
@@ -69,11 +67,6 @@ func (b *BadgerStore) Set(key, value []byte) error {
 		return err
 	}
 
-	if newSize > 1<<20 {
-		//fmt.Println("sync")
-		b.db.Sync()
-		b.totalSize.Store(0)
-	}
 	return nil
 }
 
