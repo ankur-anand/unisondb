@@ -31,13 +31,14 @@ func TestReplicator_Replicate(t *testing.T) {
 		assert.NoError(t, engine.Put([]byte(key), []byte(value)), "put should not fail")
 	}
 
+	batchSize := 10
 	replicatorInstance := NewReplicator(engine,
-		10, 1*time.Second, nil, "testing")
+		batchSize, 5*time.Second, nil, "testing")
 
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
-	ticker := time.NewTicker(5 * time.Millisecond)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// parallely put
@@ -55,7 +56,7 @@ func TestReplicator_Replicate(t *testing.T) {
 		}
 	}()
 
-	recvChan := make(chan []*v1.WALRecord)
+	recvChan := make(chan []*v1.WALRecord, 10)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -70,6 +71,7 @@ outer:
 		select {
 		case recs := <-recvChan:
 			recvRecords = append(recvRecords, recs...)
+			assert.LessOrEqual(t, len(recs), batchSize, "should be less then batch size")
 		case <-ctx.Done():
 			break outer
 		}
@@ -96,7 +98,7 @@ outer:
 }
 
 func TestReplicator_ReplicateReaderTimer(t *testing.T) {
-	t.Skipf("skiping for CI: IMP to check the issue")
+
 	baseDir := t.TempDir()
 	namespace := "test_timer"
 
@@ -118,7 +120,7 @@ func TestReplicator_ReplicateReaderTimer(t *testing.T) {
 	replicatorInstance := NewReplicator(engine, 20000,
 		batchDuration, nil, "testing")
 
-	recvChan := make(chan []*v1.WALRecord, 1)
+	recvChan := make(chan []*v1.WALRecord, 10)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
