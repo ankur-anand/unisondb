@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"time"
 
+	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/services"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"github.com/prometheus/common/helpers/templates"
@@ -46,6 +47,23 @@ func NewGrpcStreamerClient(gcc *grpc.ClientConn, namespace string, wIO WalIO, of
 	}
 }
 
+// GetLatestOffset returns the latest offset for the provided namespace that upstream has seen.
+func (c *GrpcStreamerClient) GetLatestOffset(ctx context.Context) (*dbkernel.Offset, error) {
+	md := metadata.Pairs("x-namespace", c.namespace)
+	ctx = metadata.NewOutgoingContext(ctx, md)
+
+	resp, err := v1.NewWalStreamerServiceClient(c.gcc).GetLatestOffset(ctx, &v1.GetLatestOffsetRequest{})
+	if err != nil {
+		return nil, err
+	}
+
+	if len(resp.GetOffset()) == 0 {
+		return nil, nil
+	}
+	return dbkernel.DecodeOffset(resp.GetOffset()), nil
+}
+
+// StreamWAL start the wal Streaming for the namespace from the upstream.
 func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 	md := metadata.Pairs("x-namespace", c.namespace)
 	ctx = metadata.NewOutgoingContext(ctx, md)
