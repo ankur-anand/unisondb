@@ -610,6 +610,7 @@ func TestClientServer_StreamCancel(t *testing.T) {
 
 	errN := errGroup.Wait()
 	assert.NoError(t, errN)
+	assert.NoError(t, conn.Close())
 }
 
 type streamErrorCodeInjector struct {
