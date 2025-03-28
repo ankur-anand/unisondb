@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"errors"
 	"time"
 
 	"github.com/ankur-anand/wal"
@@ -15,6 +16,10 @@ const (
 	defaultBytesPerSync = 1 * wal.MB  // 1MB
 	defaultSegmentSize  = 16 * wal.MB // 16MB
 	defaultSyncInterval = 1 * time.Second
+)
+
+var (
+	ErrWalNextOffset = errors.New("wal next offset out of range")
 )
 
 func newWALOptions(dirPath string, c *Config) wal.Options {
