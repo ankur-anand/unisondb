@@ -1,13 +1,18 @@
-## unisondb 🚀
+## UnisonDB 🚀
+
+<img src="docs/logo.svg" width="300" alt="UnisonDB" />
+
 > A Hybrid KV Store for Fast Writes, Efficient Reads, and Seamless Replication — with Explicit Transactions, 
 > LOB and Wide Column Support, Powered by Logs and Trees.
+
+
 
 [![ci-tests](https://github.com/ankur-anand/unisondb/actions/workflows/go.yml/badge.svg)](https://github.com/ankur-anand/unisondb/actions/workflows/go.yml)
 [![Coverage Status](https://coveralls.io/repos/github/ankur-anand/unisondb/badge.svg?branch=main)](https://coveralls.io/github/ankur-anand/unisondb?branch=main)
 
 ## Overview
 
-unisondb is a high-performance, replicated key-value store that blends the best of WALs, Memtables, and B-Trees to achieve:
+UnisonDB is a high-performance, replicated key-value store that blends the best of WALs, Memtables, and B-Trees to achieve:
 
 * Blazing-fast writes without LSM compaction overhead.
 
