@@ -1,7 +1,6 @@
 package wal
 
 import (
-	"fmt"
 	"io"
 	"log/slog"
 	"slices"
@@ -174,8 +173,9 @@ func (w *WalIO) GetTransactionRecords(startOffset *Offset) ([]*logrecord.LogReco
 
 	for {
 		walEntry, err := w.Read(nextOffset)
+
 		if err != nil {
-			return nil, fmt.Errorf("failed to read WAL at offset %+v: %w", nextOffset, err)
+			return nil, errors.Wrapf(ErrWalNextOffset, "failed to read WAL at offset %+v: %s", nextOffset, err)
 		}
 
 		record := logrecord.GetRootAsLogRecord(walEntry, 0)

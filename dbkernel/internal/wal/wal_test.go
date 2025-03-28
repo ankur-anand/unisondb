@@ -237,4 +237,39 @@ func TestWalIO_Suite(t *testing.T) {
 		assert.Equal(t, key, string(kvEntry.Key), "key should match")
 		assert.Equal(t, data, string(kvEntry.Value), "value should match")
 	})
+
+	t.Run("get_transaction_records_incorrect_offset", func(t *testing.T) {
+		key := gofakeit.Name()
+		data := gofakeit.LetterN(10)
+
+		encodedKV := logcodec.SerializeKVEntry([]byte(key), []byte(data))
+
+		prevOffset := &wal.Offset{
+			SegmentId:   32,
+			BlockNumber: 10,
+			ChunkOffset: 1239,
+			ChunkSize:   98,
+		}
+
+		record := &logcodec.LogRecord{
+			LSN:             123456789,
+			HLC:             987654321,
+			OperationType:   logrecord.LogOperationTypeInsert,
+			TxnState:        logrecord.TransactionStateNone,
+			EntryType:       logrecord.LogEntryTypeKV,
+			TxnID:           []byte("transaction-001"),
+			PrevTxnWalIndex: prevOffset.Encode(),
+			Entries:         [][]byte{encodedKV},
+		}
+
+		fbRecord := record.FBEncode(len(encodedKV))
+
+		offset, err := walInstance.Append(fbRecord)
+		assert.NoError(t, err)
+		assert.NotNil(t, offset)
+
+		records, err := walInstance.GetTransactionRecords(offset)
+		assert.ErrorIs(t, err, wal.ErrWalNextOffset)
+		assert.Len(t, records, 0, "should return 0 transaction record")
+	})
 }
