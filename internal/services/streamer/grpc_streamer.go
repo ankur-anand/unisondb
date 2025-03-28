@@ -50,6 +50,26 @@ func NewGrpcStreamer(errGrp *errgroup.Group, storageEngines map[string]*dbkernel
 	}
 }
 
+// GetLatestOffset returns the latest wal offset of the wal for the provided namespace.
+func (s *GrpcStreamer) GetLatestOffset(ctx context.Context, _ *v1.GetLatestOffsetRequest) (*v1.GetLatestOffsetResponse, error) {
+	namespace, reqID, method := middleware.GetRequestInfo(ctx)
+
+	if namespace == "" {
+		return nil, services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)
+	}
+
+	engine, ok := s.storageEngines[namespace]
+	if !ok {
+		return nil, services.ToGRPCError(namespace, reqID, method, services.ErrNamespaceNotExists)
+	}
+
+	offset := engine.CurrentOffset()
+	if offset == nil {
+		return &v1.GetLatestOffsetResponse{}, nil
+	}
+	return &v1.GetLatestOffsetResponse{Offset: offset.Encode()}, nil
+}
+
 // StreamWalRecords stream the underlying WAL record on the connection stream.
 func (s *GrpcStreamer) StreamWalRecords(request *v1.StreamWalRecordsRequest, g grpc.ServerStreamingServer[v1.StreamWalRecordsResponse]) error {
 	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
