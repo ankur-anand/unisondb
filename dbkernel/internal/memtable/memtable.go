@@ -6,7 +6,6 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
-	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
@@ -44,6 +43,7 @@ type MemTable struct {
 	namespace     string
 
 	chunkedFlushed int
+	tsGenerator    *tsGenerator
 }
 
 // NewMemTable returns an initialized mem-table.
@@ -55,6 +55,7 @@ func NewMemTable(capacity int64, wIO *wal.WalIO, namespace string,
 		wIO:           wIO,
 		namespace:     namespace,
 		newTxnBatcher: newTxnBatcher,
+		tsGenerator:   &tsGenerator{},
 	}
 }
 
@@ -82,7 +83,8 @@ func (table *MemTable) Put(key []byte, val y.ValueStruct) error {
 	if val.UserMeta == internal.EntryTypeRow {
 		// We cannot save only one key, as a wide column row can have
 		// multiple column entity in different ops of transaction.
-		putKey = y.KeyWithTs(key, uint64(time.Now().UnixNano()))
+		ts := table.tsGenerator.Next()
+		putKey = y.KeyWithTs(key, ts)
 	}
 
 	table.opCount++
@@ -97,6 +99,10 @@ func (table *MemTable) SetOffset(offset *wal.Offset) {
 	if table.firstOffset == nil {
 		table.firstOffset = offset
 	}
+}
+
+func (table *MemTable) IncrOffset() {
+	table.offsetCount++
 }
 
 func (table *MemTable) GetBytesStored() int {
