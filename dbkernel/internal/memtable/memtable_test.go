@@ -519,3 +519,34 @@ func generateNChunkFBRecord(t *testing.T, n uint64) (string, []logcodec.LogRecor
 
 	return key, values, checksum
 }
+
+func TestPublic_Functions(t *testing.T) {
+	mmTable, _ := setupMemTableWithLMDB(t, 1<<20)
+	assert.NotNil(t, mmTable)
+	assert.True(t, mmTable.IsEmpty())
+	mmTable.IncrOffset()
+	n, err := mmTable.Flush(t.Context())
+	assert.NoError(t, err)
+	assert.Equal(t, n, 1)
+
+	key := []byte("key")
+	// more than 1 KB
+	value := gofakeit.LetterN(1100)
+	val := y.ValueStruct{Value: []byte(value)}
+	pos := new(wal.Offset)
+	pos.SegmentId = 1
+
+	err = mmTable.Put(key, val)
+	assert.NoError(t, err)
+	mmTable.SetOffset(pos)
+	assert.False(t, mmTable.IsEmpty())
+	assert.Equal(t, mmTable.GetLastOffset(), pos)
+	assert.Equal(t, mmTable.GetFirstOffset(), pos)
+	n, err = mmTable.Flush(t.Context())
+	assert.NoError(t, err)
+	assert.Equal(t, n, 2)
+
+	size := len(key) + len(value)
+	assert.Equal(t, mmTable.GetBytesStored(), size)
+
+}

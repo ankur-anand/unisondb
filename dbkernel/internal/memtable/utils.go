@@ -1,10 +1,28 @@
 package memtable
 
 import (
+	"time"
+
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/dgraph-io/badger/v4/y"
 )
+
+type tsGenerator struct {
+	lastTS uint64
+}
+
+func (g *tsGenerator) Next() uint64 {
+	now := uint64(time.Now().UnixNano())
+	// UnixNano() may not return a strictly increasing value in fast loops,
+	if now <= g.lastTS {
+		// ensure strictly increasing
+		g.lastTS++
+	} else {
+		g.lastTS = now
+	}
+	return g.lastTS
+}
 
 // BuildColumnMap builds the columns from the provided mem-table entries.
 // it modifies the provided columnEntries with the entries fetched from mem table.
