@@ -156,6 +156,59 @@ func benchmarkUnbufferedChannel(numGoroutines int) time.Duration {
 	return time.Since(start)
 }
 
+func benchmarkChannelCloseBroadcast(numGoroutines int) time.Duration {
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var ready sync.WaitGroup
+	var barrier sync.WaitGroup
+
+	wg.Add(numGoroutines)
+	ready.Add(numGoroutines)
+
+	ch := make(chan struct{})
+
+	done := make(chan struct{})
+	start := time.Now()
+
+	for j := 0; j < numGoroutines; j++ {
+		go func() {
+			ready.Done()
+			defer wg.Done()
+			for {
+				mu.Lock()
+				waitCh := ch
+				mu.Unlock()
+
+				select {
+				case <-waitCh:
+					_ = simulateWALIO()
+					barrier.Done()
+				case <-done:
+					return
+				}
+			}
+		}()
+	}
+
+	_ = simulateWALIO()
+	ready.Wait()
+
+	for i := 0; i < iterations; i++ {
+		barrier.Add(numGoroutines)
+
+		mu.Lock()
+		close(ch)                // broadcast to all
+		ch = make(chan struct{}) // prepare for next round
+		mu.Unlock()
+
+		barrier.Wait()
+	}
+
+	close(done)
+	wg.Wait()
+	return time.Since(start)
+}
+
 func writeResultsToCSV(writer *csv.Writer, results [][]string) {
 
 	writer.Write([]string{"Method", "Avg Time Per Iteration (ms)", "goroutines"})
@@ -178,25 +231,28 @@ func main() {
 
 	for _, numGoroutines := range []int{100, 1000, 5000} {
 		fmt.Println("Benchmarking with", numGoroutines, "goroutines", "for", iterations, "iteration")
-		var totalSyncCond, totalBuffered, totalUnbuffered time.Duration
+		var totalSyncCond, totalBuffered, totalUnbuffered, totalChannelClose time.Duration
 		for i := 0; i < iterations; i++ {
 			totalSyncCond += benchmarkSyncCond(numGoroutines)
 			totalBuffered += benchmarkBufferedChannel(numGoroutines)
 			totalUnbuffered += benchmarkUnbufferedChannel(numGoroutines)
+			totalChannelClose += benchmarkChannelCloseBroadcast(numGoroutines)
 		}
 
 		avgSyncCond := totalSyncCond.Seconds() * 1000 / float64(iterations)
 		avgBuffered := totalBuffered.Seconds() * 1000 / float64(iterations)
 		avgUnbuffered := totalUnbuffered.Seconds() * 1000 / float64(iterations)
+		avgChannelClose := totalChannelClose.Seconds() * 1000 / float64(iterations)
 
 		fmt.Printf("sync.Cond average time per iteration: %.6f ms\n", avgSyncCond)
 		fmt.Printf("Buffered channel average time per iteration: %.6f ms\n", avgBuffered)
 		fmt.Printf("Unbuffered channel average time per iteration: %.6f ms\n", avgUnbuffered)
-
+		fmt.Printf("Channel Close Average time per iteration: %.6f ms\n", avgChannelClose)
 		results := [][]string{
 			{"sync.Cond", fmt.Sprintf("%.6f", avgSyncCond), strconv.Itoa(numGoroutines)},
 			{"Buffered Channel", fmt.Sprintf("%.6f", avgBuffered), strconv.Itoa(numGoroutines)},
 			{"Unbuffered Channel", fmt.Sprintf("%.6f", avgUnbuffered), strconv.Itoa(numGoroutines)},
+			{"Channel Close", fmt.Sprintf("%.6f", avgChannelClose), strconv.Itoa(numGoroutines)},
 		}
 
 		writeResultsToCSV(writer, results)

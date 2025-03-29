@@ -77,9 +77,6 @@ type Engine struct {
 	startMetadata         internal.Metadata
 	shutdown              atomic.Bool
 
-	// uses a cond broadcast for notification.
-	notifierMu    sync.RWMutex
-	notifier      *sync.Cond
 	newTxnBatcher func(maxBatchSize int) internal.TxnBatcher
 	flushPaused   atomic.Bool
 
@@ -87,6 +84,10 @@ type Engine struct {
 	callback func()
 	ctx      context.Context
 	cancel   context.CancelFunc
+
+	// used for notification.
+	notifierMu   sync.RWMutex
+	appendNotify chan struct{}
 }
 
 // NewStorageEngine initializes WAL, MemTable, and BtreeStore and returns an initialized Engine for a namespace.
@@ -123,7 +124,7 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		return nil, err
 	}
 
-	engine.notifier = sync.NewCond(&engine.notifierMu)
+	engine.appendNotify = make(chan struct{})
 
 	return engine, nil
 }
@@ -439,10 +440,17 @@ func (e *Engine) writeOffset(offset *wal.Offset) {
 		// Signal all waiting routines that a new append has happened
 		// Atomically update lastChunkPosition
 		e.currentOffset.Store(offset)
-		e.notifierMu.Lock()
-		e.notifier.Broadcast()
-		e.notifierMu.Unlock()
+		e.notifyAppend()
 	}
+}
+
+func (e *Engine) notifyAppend() {
+	e.notifierMu.Lock()
+	defer e.notifierMu.Unlock()
+	if e.appendNotify != nil {
+		close(e.appendNotify)
+	}
+	e.appendNotify = make(chan struct{})
 }
 
 func (e *Engine) writeNilOffset() {
