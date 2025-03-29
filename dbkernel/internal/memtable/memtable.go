@@ -94,7 +94,7 @@ func (table *MemTable) Put(key []byte, val y.ValueStruct) error {
 func (table *MemTable) SetOffset(offset *wal.Offset) {
 	table.offsetCount++
 	table.lastOffset = offset
-	if table.firstOffset != nil {
+	if table.firstOffset == nil {
 		table.firstOffset = offset
 	}
 }
