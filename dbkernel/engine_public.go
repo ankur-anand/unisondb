@@ -153,13 +153,15 @@ func (e *Engine) WaitForAppend(ctx context.Context, timeout time.Duration, lastS
 		return nil
 	}
 
-	done := make(chan struct{})
-	go func() {
-		e.notifierMu.Lock()
-		defer e.notifierMu.Unlock()
-		e.notifier.Wait()
-		close(done)
-	}()
+	e.notifierMu.RLock()
+	done := e.appendNotify
+	e.notifierMu.RUnlock()
+
+	// check again (ca)
+	currentPos = e.currentOffset.Load()
+	if currentPos != nil && isNewChunkPosition(currentPos, lastSeen) {
+		return nil
+	}
 
 	select {
 	case <-ctx.Done():

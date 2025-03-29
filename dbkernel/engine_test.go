@@ -194,6 +194,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	// OpsFlushed and pause flush.
 	engine.fSyncStore()
 	engine.pauseFlush()
+	time.Sleep(100 * time.Millisecond)
 	_, err = engine.BtreeSnapshot(f)
 	assert.NoError(t, err)
 	err = f.Close()
