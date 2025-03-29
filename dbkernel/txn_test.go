@@ -196,3 +196,146 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 	})
 
 }
+
+func TestTxn_Interrupted(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test__txn_put_get"
+
+	conf := dbkernel.NewDefaultEngineConfig()
+	conf.BtreeConfig.Namespace = namespace
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, conf)
+	assert.NoError(t, err)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		err := engine.Close(ctx)
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+
+	kv := make(map[string][]byte)
+	txn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+
+	t.Run("batch_insert", func(t *testing.T) {
+		assert.NoError(t, err, "NewBatch operation should succeed")
+		assert.NotNil(t, txn, "NewBatch operation should succeed")
+
+		for i := 0; i < 10; i++ {
+			key := []byte(gofakeit.UUID())
+			value := []byte(gofakeit.Sentence(500))
+			kv[string(key)] = value
+			err := txn.AppendKVTxn(key, value)
+			assert.NoError(t, err, "Append operation should succeed")
+
+			value, err = engine.Get(key)
+			assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Key not Found Error should be present.")
+			assert.Nil(t, value, "Get operation should succeed")
+			assert.Nil(t, engine.CurrentOffset(), "uncommited should not cause the offset increase")
+		}
+	})
+
+	t.Run("simple_kv_insert", func(t *testing.T) {
+		for i := 0; i < 10; i++ {
+			key := []byte(gofakeit.UUID())
+			value := []byte(gofakeit.Sentence(500))
+			kv[string(key)] = value
+			err := engine.Put(key, value)
+			assert.NoError(t, err, "Append operation should succeed")
+
+			value, err = engine.Get(key)
+			assert.NoError(t, err, "Get operation should succeed")
+		}
+	})
+
+	t.Run("txn_commit", func(t *testing.T) {
+		assert.NoError(t, txn.Commit(), "Commit operation should succeed")
+		assert.Equal(t, txn.CommitOffset(), engine.CurrentOffset(), "Commit operation should succeed")
+	})
+}
+
+func Test_RowColumn_Txn(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test__txn_put_get"
+
+	conf := dbkernel.NewDefaultEngineConfig()
+	conf.BtreeConfig.Namespace = namespace
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, conf)
+	assert.NoError(t, err)
+	ctx := context.Background()
+	t.Cleanup(func() {
+		err := engine.Close(ctx)
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+
+	txn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeRow)
+	assert.NoError(t, err, "NewBatch operation should succeed")
+
+	rowsEntries := make(map[string]map[string][]byte)
+
+	for i := uint64(0); i < 10; i++ {
+		rowKey := gofakeit.UUID()
+
+		if rowsEntries[rowKey] == nil {
+			rowsEntries[rowKey] = make(map[string][]byte)
+		}
+
+		// for each row Key generate 5 ops
+		for j := 0; j < 5; j++ {
+
+			entries := make(map[string][]byte)
+			for k := 0; k < 10; k++ {
+				key := gofakeit.UUID()
+				val := gofakeit.LetterN(uint(i + 1))
+				rowsEntries[rowKey][key] = []byte(val)
+				entries[key] = []byte(val)
+			}
+
+			err := txn.AppendColumnTxn([]byte(rowKey), entries)
+			assert.NoError(t, err, "Append operation should succeed")
+		}
+	}
+
+	assert.NoError(t, txn.Commit(), "Commit operation should succeed")
+	assert.Equal(t, txn.CommitOffset(), engine.CurrentOffset(), "Commit operation should succeed")
+
+	for rowKey, entries := range rowsEntries {
+		value, err := engine.GetRowColumns(rowKey, nil)
+		assert.NoError(t, err, "Get operation should succeed")
+		assert.Equal(t, entries, value, "Get operation should succeed")
+	}
+
+	txn2, err := engine.NewTxn(logrecord.LogOperationTypeDelete, logrecord.LogEntryTypeRow)
+	assert.NoError(t, err, "NewBatch operation should succeed")
+
+	for rowKey, entries := range rowsEntries {
+		err := txn2.AppendColumnTxn([]byte(rowKey), nil)
+		assert.ErrorIs(t, err, dbkernel.ErrEmptyColumns, "Append operation should succeed")
+		err = txn2.AppendColumnTxn([]byte(rowKey), entries)
+		assert.NoError(t, err, "Append operation should succeed")
+	}
+
+	assert.NoError(t, txn2.Commit(), "Commit operation should succeed")
+	for rowKey := range rowsEntries {
+		value, err := engine.GetRowColumns(rowKey, nil)
+		assert.NoError(t, err, "Get operation should succeed")
+		assert.Equal(t, len(value), 0, "Get operation should succeed")
+	}
+
+	txn3, err := engine.NewTxn(logrecord.LogOperationTypeDeleteRowByKey, logrecord.LogEntryTypeRow)
+	assert.NoError(t, err, "NewBatch operation should succeed")
+	for rowKey, entries := range rowsEntries {
+		err = txn3.AppendColumnTxn([]byte(rowKey), entries)
+		assert.NoError(t, err, "Append operation should succeed")
+	}
+
+	assert.NoError(t, txn3.Commit(), "Commit operation should succeed")
+	for rowKey := range rowsEntries {
+		_, err := engine.GetRowColumns(rowKey, nil)
+		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Get operation should succeed")
+	}
+	assert.Equal(t, txn3.CommitOffset(), engine.CurrentOffset(), "Commit operation should succeed")
+}

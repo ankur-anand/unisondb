@@ -217,7 +217,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 		offset: offset,
 		value:  memValue,
 	})
-	
+
 	t.checksum = crc32.Update(t.checksum, crc32.IEEETable, encoded)
 	t.valuesCount++
 	return nil
@@ -297,13 +297,17 @@ func (t *Txn) memWriteChunk(encoded []byte) error {
 func (t *Txn) memWriteFull() error {
 	for _, memValue := range t.memTableEntries {
 		err := t.engine.memTableWrite(memValue.key, memValue.value)
+		//time.Sleep(1 * time.Nanosecond)
 		if err != nil {
 			t.err = err
 			return err
 		}
-		t.engine.writeOffset(memValue.offset)
+		// newer offset could have been written in mem-table at this point.
+		// the only newer offset at this point of time is the commit offset.
+		t.engine.writeNilOffset()
 	}
 
+	t.engine.writeOffset(t.prevOffset)
 	return nil
 }
 
@@ -317,4 +321,8 @@ func (t *Txn) Checksum() uint32 {
 
 func (t *Txn) ChunkedValueChecksum() uint32 {
 	return t.chunkedValueChecksum
+}
+
+func (t *Txn) CommitOffset() *Offset {
+	return t.prevOffset
 }

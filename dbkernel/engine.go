@@ -445,6 +445,10 @@ func (e *Engine) writeOffset(offset *wal.Offset) {
 	}
 }
 
+func (e *Engine) writeNilOffset() {
+	e.activeMemTable.IncrOffset()
+}
+
 // memTableWrite will write the provided key and value to the memTable.
 func (e *Engine) memTableWrite(key []byte, v y.ValueStruct) error {
 	var err error
