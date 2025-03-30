@@ -183,7 +183,10 @@ func TestEngine_WaitForAppend(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		time.Sleep(100 * time.Millisecond)
 		err := engine.Put(key, value)
 		assert.NoError(t, err, "Put operation should succeed")
@@ -203,7 +206,7 @@ func TestEngine_WaitForAppend(t *testing.T) {
 			cancel()
 		}()
 		defer cancel()
-		err = engine.WaitForAppend(ctx, timeout, engine.CurrentOffset())
+		err := engine.WaitForAppend(ctx, timeout, engine.CurrentOffset())
 		cancelErr <- err
 		close(cancelErr)
 	}()
@@ -219,6 +222,7 @@ func TestEngine_WaitForAppend(t *testing.T) {
 	defer cancel()
 	err = engine.WaitForAppend(ctx, timeout, lastOffset)
 	assert.NoError(t, err, "WaitForAppend should return without error after Put")
+	wg.Wait()
 }
 
 func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
