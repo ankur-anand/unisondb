@@ -32,10 +32,10 @@ var (
 	mKeyWaitForAppendTotal    = append(packageKey, "wait", "append", "total")
 	mKeyWaitForAppendDuration = append(packageKey, "wait", "append", "durations", "seconds")
 
-	mKeyRowSetTotal       = append(packageKey, "row", "set", "total")
+	mKeyRowSetTotal       = append(packageKey, "row", "put", "total")
 	mKeyRowGetTotal       = append(packageKey, "row", "get", "total")
 	mKeyRowDeleteTotal    = append(packageKey, "row", "delete", "total")
-	mKeyRowSetDuration    = append(packageKey, "row", "set", "durations", "seconds")
+	mKeyRowSetDuration    = append(packageKey, "row", "put", "durations", "seconds")
 	mKeyRowGetDuration    = append(packageKey, "row", "get", "durations", "seconds")
 	mKeyRowDeleteDuration = append(packageKey, "row", "delete", "durations", "seconds")
 )
@@ -128,7 +128,20 @@ func (e *Engine) Put(key, value []byte) error {
 	return e.persistKeyValue([][]byte{key}, [][]byte{value}, logrecord.LogOperationTypeInsert)
 }
 
-// Delete removes a key and its value pair from WAL and MemTable.
+// BatchPut insert the associated Key Value Pair.
+func (e *Engine) BatchPut(key, value [][]byte) error {
+	if e.shutdown.Load() {
+		return ErrInCloseProcess
+	}
+	metrics.IncrCounterWithLabels(mKeyPutTotal, float32(len(key)), e.metricsLabel)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels(mKeyPutDuration, startTime, e.metricsLabel)
+	}()
+	return e.persistKeyValue(key, value, logrecord.LogOperationTypeInsert)
+}
+
+// Delete removes a key and its value pair.
 func (e *Engine) Delete(key []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
@@ -141,6 +154,21 @@ func (e *Engine) Delete(key []byte) error {
 	}()
 
 	return e.persistKeyValue([][]byte{key}, nil, logrecord.LogOperationTypeDelete)
+}
+
+// BatchDelete removes all the key and its value pair.
+func (e *Engine) BatchDelete(keys [][]byte) error {
+	if e.shutdown.Load() {
+		return ErrInCloseProcess
+	}
+
+	metrics.IncrCounterWithLabels(mKeyDeleteTotal, float32(len(keys)), e.metricsLabel)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels(mKeyDeleteDuration, startTime, e.metricsLabel)
+	}()
+
+	return e.persistKeyValue(keys, nil, logrecord.LogOperationTypeDelete)
 }
 
 // WaitForAppend blocks until a put/delete operation occurs or timeout happens or context cancelled is done.
@@ -180,7 +208,6 @@ func isNewChunkPosition(current, lastSeen *Offset) bool {
 	if lastSeen == nil {
 		return true
 	}
-	// Compare SegmentId, BlockNumber, or Offset to check if a new chunk exists
 	return current.SegmentId > lastSeen.SegmentId ||
 		(current.SegmentId == lastSeen.SegmentId && current.BlockNumber > lastSeen.BlockNumber) ||
 		(current.SegmentId == lastSeen.SegmentId && current.BlockNumber == lastSeen.BlockNumber && current.ChunkOffset > lastSeen.ChunkOffset)
@@ -247,12 +274,12 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	return yValue.Value, nil
 }
 
-// SetColumnsInRow inserts or updates the provided column entries.
+// PutColumnsForRow inserts or updates the provided column entries.
 //
 // It's an upsert operation:
 // - existing column value will get updated to newer value, else a new column entry will be created for the
 // given row.
-func (e *Engine) SetColumnsInRow(rowKey string, columnEntries map[string][]byte) error {
+func (e *Engine) PutColumnsForRow(rowKey []byte, columnEntries map[string][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
@@ -262,13 +289,24 @@ func (e *Engine) SetColumnsInRow(rowKey string, columnEntries map[string][]byte)
 		metrics.MeasureSinceWithLabels(mKeyRowSetDuration, startTime, e.metricsLabel)
 	}()
 
-	columnsEntries := make([]map[string][]byte, 0, 1)
-	columnsEntries = append(columnsEntries, columnEntries)
-	return e.persistRowColumnAction(logrecord.LogOperationTypeInsert, [][]byte{[]byte(rowKey)}, columnsEntries)
+	columnsEntries := []map[string][]byte{columnEntries}
+	return e.persistRowColumnAction(logrecord.LogOperationTypeInsert, [][]byte{rowKey}, columnsEntries)
 }
 
-// DeleteColumnsFromRow removes the specified columns from the given row key.
-func (e *Engine) DeleteColumnsFromRow(rowKey string, columnEntries map[string][]byte) error {
+func (e *Engine) PutColumnsForRows(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
+	if e.shutdown.Load() {
+		return ErrInCloseProcess
+	}
+	metrics.IncrCounterWithLabels(mKeyRowSetTotal, float32(len(rowKeys)), e.metricsLabel)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels(mKeyRowSetDuration, startTime, e.metricsLabel)
+	}()
+	return e.persistRowColumnAction(logrecord.LogOperationTypeInsert, rowKeys, columnEntriesPerRow)
+}
+
+// DeleteColumnsForRow removes the specified columns from the given row key.
+func (e *Engine) DeleteColumnsForRow(rowKey []byte, columnEntries map[string][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
@@ -279,11 +317,24 @@ func (e *Engine) DeleteColumnsFromRow(rowKey string, columnEntries map[string][]
 	}()
 	columnsEntries := make([]map[string][]byte, 0, 1)
 	columnsEntries = append(columnsEntries, columnEntries)
-	return e.persistRowColumnAction(logrecord.LogOperationTypeDelete, [][]byte{[]byte(rowKey)}, columnsEntries)
+	return e.persistRowColumnAction(logrecord.LogOperationTypeDelete, [][]byte{rowKey}, columnsEntries)
+}
+
+// DeleteColumnsForRows removes specified columns from multiple rows.
+func (e *Engine) DeleteColumnsForRows(rowKeys [][]byte, columnEntries []map[string][]byte) error {
+	if e.shutdown.Load() {
+		return ErrInCloseProcess
+	}
+	metrics.IncrCounterWithLabels(mKeyRowDeleteTotal, float32(len(rowKeys)), e.metricsLabel)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels(mKeyRowDeleteDuration, startTime, e.metricsLabel)
+	}()
+	return e.persistRowColumnAction(logrecord.LogOperationTypeDelete, rowKeys, columnEntries)
 }
 
 // DeleteRow removes an entire row and all its associated column entries.
-func (e *Engine) DeleteRow(rowKey string) error {
+func (e *Engine) DeleteRow(rowKey []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
@@ -294,6 +345,19 @@ func (e *Engine) DeleteRow(rowKey string) error {
 	}()
 
 	return e.persistRowColumnAction(logrecord.LogOperationTypeDeleteRowByKey, [][]byte{[]byte(rowKey)}, nil)
+}
+
+func (e *Engine) BatchDeleteRows(rowKeys [][]byte) error {
+	if e.shutdown.Load() {
+		return ErrInCloseProcess
+	}
+	metrics.IncrCounterWithLabels(mKeyRowDeleteTotal, float32(len(rowKeys)), e.metricsLabel)
+	startTime := time.Now()
+	defer func() {
+		metrics.MeasureSinceWithLabels(mKeyRowDeleteDuration, startTime, e.metricsLabel)
+	}()
+
+	return e.persistRowColumnAction(logrecord.LogOperationTypeDeleteRowByKey, rowKeys, nil)
 }
 
 // GetRowColumns returns all the column value associated with the row. It's filters columns if predicate

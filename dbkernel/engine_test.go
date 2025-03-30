@@ -333,8 +333,8 @@ func TestEngine_GetRowColumns_WithMemTableRotateNoFlush(t *testing.T) {
 					entries[key] = []byte(val)
 				}
 
-				err := engine.SetColumnsInRow(rowKey, entries)
-				assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+				err := engine.PutColumnsForRow([]byte(rowKey), entries)
+				assert.NoError(t, err, "PutColumnsForRow operation should succeed")
 			}
 		}
 	})
@@ -358,8 +358,8 @@ func TestEngine_GetRowColumns_WithMemTableRotateNoFlush(t *testing.T) {
 			deleteEntries[key] = nil
 		}
 
-		err = engine.DeleteColumnsFromRow(randomRow, deleteEntries)
-		assert.NoError(t, err, "DeleteColumnsFromRow operation should succeed")
+		err = engine.DeleteColumnsForRow([]byte(randomRow), deleteEntries)
+		assert.NoError(t, err, "DeleteColumnsForRow operation should succeed")
 		rowEntry, err := engine.GetRowColumns(randomRow, nil)
 		assert.NoError(t, err, "failed to build column map")
 		assert.Equal(t, len(rowEntry), len(columnMap)-len(deleteEntries), "unexpected number of column values")
@@ -389,8 +389,8 @@ func TestEngine_GetRowColumns_WithMemTableRotateNoFlush(t *testing.T) {
 	}
 
 	t.Run("update_deleted_values", func(t *testing.T) {
-		err = engine.SetColumnsInRow(randomRow, newEntries)
-		assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+		err = engine.PutColumnsForRow([]byte(randomRow), newEntries)
+		assert.NoError(t, err, "PutColumnsForRow operation should succeed")
 		rowEntry, err := engine.GetRowColumns(randomRow, nil)
 		assert.NoError(t, err, "failed to build column map")
 		assert.Equal(t, len(rowEntry), len(columnMap), "unexpected number of column values")
@@ -413,7 +413,7 @@ func TestEngine_GetRowColumns_WithMemTableRotateNoFlush(t *testing.T) {
 
 	t.Run("entire_row_delete", func(t *testing.T) {
 		// delete the entire row.
-		err = engine.DeleteRow(randomRow)
+		err = engine.DeleteRow([]byte(randomRow))
 		assert.NoError(t, err, "DeleteRow operation should succeed")
 		rowEntry, err := engine.GetRowColumns(randomRow, nil)
 		assert.ErrorIs(t, err, ErrKeyNotFound, "failed to build column map")
@@ -462,8 +462,8 @@ func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
 					entries[key] = []byte(val)
 				}
 
-				err := engine.SetColumnsInRow(rowKey, entries)
-				assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+				err := engine.PutColumnsForRow([]byte(rowKey), entries)
+				assert.NoError(t, err, "PutColumnsForRow operation should succeed")
 			}
 		}
 	})
@@ -505,8 +505,8 @@ func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
 			deleteEntries[key] = nil
 		}
 
-		err = engine.DeleteColumnsFromRow(randomRow, deleteEntries)
-		assert.NoError(t, err, "DeleteColumnsFromRow operation should succeed")
+		err = engine.DeleteColumnsForRow([]byte(randomRow), deleteEntries)
+		assert.NoError(t, err, "DeleteColumnsForRow operation should succeed")
 		rowEntry, err := engine.GetRowColumns(randomRow, nil)
 		assert.NoError(t, err, "failed to build column map")
 		assert.Equal(t, len(rowEntry), len(columnMap)-len(deleteEntries), "unexpected number of column values")
@@ -535,8 +535,8 @@ func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
 	}
 
 	t.Run("update_deleted_values", func(t *testing.T) {
-		err = engine.SetColumnsInRow(randomRow, newEntries)
-		assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+		err = engine.PutColumnsForRow([]byte(randomRow), newEntries)
+		assert.NoError(t, err, "PutColumnsForRow operation should succeed")
 		rowEntry, err := engine.GetRowColumns(randomRow, nil)
 		assert.NoError(t, err, "failed to build column map")
 		assert.Equal(t, len(rowEntry), len(columnMap), "unexpected number of column values")
@@ -559,7 +559,7 @@ func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
 
 	t.Run("entire_row_delete", func(t *testing.T) {
 		// delete the entire row.
-		err = engine.DeleteRow(randomRow)
+		err = engine.DeleteRow([]byte(randomRow))
 		assert.NoError(t, err, "DeleteRow operation should succeed")
 		rowEntry, err := engine.GetRowColumns(randomRow, nil)
 		assert.ErrorIs(t, err, ErrKeyNotFound, "failed to build column map")
