@@ -283,7 +283,16 @@ func (e *Engine) recoverWAL() error {
 	e.writeSeenCounter.Add(uint64(walRecovery.RecoveredCount()))
 	e.recoveredEntriesCount = walRecovery.RecoveredCount()
 	e.opsFlushedCounter.Add(uint64(walRecovery.RecoveredCount()))
-	e.currentOffset.Store(walRecovery.LastRecoveredOffset())
+	var offset *wal.Offset
+	if len(checkpoint) != 0 {
+		metadata := internal.UnmarshalMetadata(checkpoint)
+		offset = metadata.Pos
+	}
+	if walRecovery.LastRecoveredOffset() != nil {
+		offset = walRecovery.LastRecoveredOffset()
+	}
+
+	e.currentOffset.Store(offset)
 
 	if walRecovery.RecoveredCount() > 0 {
 		// once recovered update the metadata table again.

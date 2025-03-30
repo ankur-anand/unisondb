@@ -194,7 +194,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	// OpsFlushed and pause flush.
 	engine.fSyncStore()
 	engine.pauseFlush()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(1 * time.Second)
 	_, err = engine.BtreeSnapshot(f)
 	assert.NoError(t, err)
 	err = f.Close()
@@ -565,5 +565,75 @@ func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
 		assert.ErrorIs(t, err, ErrKeyNotFound, "failed to build column map")
 		assert.Nil(t, rowEntry, "unexpected column values")
 	})
+
+}
+
+func TestRecoveryAndCheckPoint(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "testnamespace"
+	callbackSignal := make(chan struct{}, 1)
+	callback := func() {
+		select {
+		case callbackSignal <- struct{}{}:
+		default:
+		}
+	}
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+	config.DBEngine = BoltDBEngine
+	engine, err := NewStorageEngine(dir, namespace, config)
+	assert.NoError(t, err, "NewStorageEngine should not error")
+	engine.callback = callback
+
+	kv := make(map[string]string)
+	for i := 0; i < 100; i++ {
+		key := gofakeit.UUID()
+		value := gofakeit.LetterN(100)
+		kv[key] = value
+		err := engine.Put([]byte(key), []byte(value))
+		assert.NoError(t, err, "Put operation should succeed")
+	}
+
+	// rotate and flush memTable.
+	engine.rotateMemTable()
+
+	select {
+	case <-callbackSignal:
+	case <-time.After(5 * time.Second):
+		t.Errorf("timed out waiting for callback signal")
+	}
+
+	err = engine.close(context.Background())
+	assert.NoError(t, err, "storage engine close should not error")
+	engine, err = NewStorageEngine(dir, namespace, config)
+	assert.NoError(t, err, "NewStorageEngine should not error")
+	checkPoint, err := engine.GetWalCheckPoint()
+	assert.NoError(t, err, "GetWalCheckPoint should not error")
+	assert.Equal(t, checkPoint.Pos, engine.CurrentOffset())
+
+	entryCount := 100
+	for i := 0; i < 5; i++ {
+		err = engine.close(context.Background())
+		assert.NoError(t, err, "storage engine close should not error")
+		engine, err = NewStorageEngine(dir, namespace, config)
+		assert.NoError(t, err, "NewStorageEngine should not error")
+		for i := 0; i < 10; i++ {
+			key := gofakeit.UUID()
+			value := gofakeit.LetterN(100)
+			kv[key] = value
+			err := engine.Put([]byte(key), []byte(value))
+			assert.NoError(t, err, "Put operation should succeed")
+		}
+
+		assert.Equal(t, entryCount, int(engine.OpsFlushedCount()), "expected ops flushed count")
+		entryCount += 10
+		assert.Equal(t, entryCount, int(engine.OpsReceivedCount()), "expected ops received count")
+	}
+
+	for k, v := range kv {
+		value, err := engine.Get([]byte(k))
+		assert.NoError(t, err, "Get operation should succeed")
+		assert.Equal(t, v, string(value), "unexpected value for key")
+	}
 
 }

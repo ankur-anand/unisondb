@@ -107,6 +107,9 @@ func (e *Engine) GetWalCheckPoint() (*internal.Metadata, error) {
 	if err != nil && !errors.Is(err, kvdrivers.ErrKeyNotFound) {
 		return nil, err
 	}
+	if len(data) == 0 {
+		return nil, nil
+	}
 	metadata := internal.UnmarshalMetadata(data)
 	return &metadata, nil
 }
