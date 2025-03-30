@@ -518,8 +518,8 @@ func TestEngine_RowOperations(t *testing.T) {
 					entries[key] = []byte(val)
 				}
 
-				err := engine.SetColumnsInRow(rowKey, entries)
-				assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+				err := engine.PutColumnsForRow([]byte(rowKey), entries)
+				assert.NoError(t, err, "PutColumnsForRow operation should succeed")
 			}
 		}
 	})
@@ -543,8 +543,8 @@ func TestEngine_RowOperations(t *testing.T) {
 			deleteEntries[key] = nil
 		}
 
-		err = engine.DeleteColumnsFromRow(randomRow, deleteEntries)
-		assert.NoError(t, err, "DeleteColumnsFromRow operation should succeed")
+		err = engine.DeleteColumnsForRow([]byte(randomRow), deleteEntries)
+		assert.NoError(t, err, "DeleteColumnsForRow operation should succeed")
 		rowEntry, err := engine.GetRowColumns(randomRow, nil)
 		assert.NoError(t, err, "failed to build column map")
 		assert.Equal(t, len(rowEntry), len(columnMap)-len(deleteEntries), "unexpected number of column values")
@@ -557,8 +557,8 @@ func TestEngine_RowOperations(t *testing.T) {
 	}
 
 	t.Run("update_deleted_values", func(t *testing.T) {
-		err = engine.SetColumnsInRow(randomRow, newEntries)
-		assert.NoError(t, err, "SetColumnsInRow operation should succeed")
+		err = engine.PutColumnsForRow([]byte(randomRow), newEntries)
+		assert.NoError(t, err, "PutColumnsForRow operation should succeed")
 		rowEntry, err := engine.GetRowColumns(randomRow, nil)
 		assert.NoError(t, err, "failed to build column map")
 		assert.Equal(t, len(rowEntry), len(columnMap), "unexpected number of column values")
@@ -581,10 +581,124 @@ func TestEngine_RowOperations(t *testing.T) {
 
 	t.Run("entire_row_delete", func(t *testing.T) {
 		// delete the entire row.
-		err = engine.DeleteRow(randomRow)
+		err = engine.DeleteRow([]byte(randomRow))
 		assert.NoError(t, err, "DeleteRow operation should succeed")
 		rowEntry, err := engine.GetRowColumns(randomRow, nil)
 		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "failed to build column map")
 		assert.Nil(t, rowEntry, "unexpected column values")
+	})
+}
+
+func TestBatchRowColumns_APIs(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_persistence"
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.Close(context.Background())
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+
+	var rowKeys [][]byte
+	var columnsEntries []map[string][]byte
+
+	t.Run("put_row_columns", func(t *testing.T) {
+		for i := uint64(0); i < 100; i++ {
+			rowKey := gofakeit.UUID()
+			entries := make(map[string][]byte)
+			for k := 0; k < 10; k++ {
+				key := gofakeit.Name()
+				val := gofakeit.LetterN(uint(i + 1))
+				entries[key] = []byte(val)
+			}
+
+			rowKeys = append(rowKeys, []byte(rowKey))
+			columnsEntries = append(columnsEntries, entries)
+		}
+
+		err := engine.PutColumnsForRows(rowKeys, columnsEntries)
+		assert.NoError(t, err, "PutColumnsForRows operation should succeed")
+	})
+
+	t.Run("get_row_columns", func(t *testing.T) {
+		for i, rowKey := range rowKeys {
+			got, err := engine.GetRowColumns(string(rowKey), nil)
+			assert.NoError(t, err, "failed to get column entries")
+			assert.Equal(t, columnsEntries[i], got, "unexpected column entries")
+		}
+	})
+
+	t.Run("delete_row_columns", func(t *testing.T) {
+		err := engine.DeleteColumnsForRows(rowKeys, columnsEntries)
+		assert.NoError(t, err, "DeleteColumnsForRows operation should succeed")
+	})
+
+	t.Run("get_row_columns", func(t *testing.T) {
+		for _, rowKey := range rowKeys {
+			got, err := engine.GetRowColumns(string(rowKey), nil)
+			assert.NoError(t, err, "failed to get column entries")
+			assert.Zero(t, len(got), "unexpected number of column values")
+		}
+	})
+
+	t.Run("delete_rows", func(t *testing.T) {
+		err := engine.BatchDeleteRows(rowKeys)
+		assert.NoError(t, err, "BatchDeleteRows operation should succeed")
+		for _, rowKey := range rowKeys {
+			_, err := engine.GetRowColumns(string(rowKey), nil)
+			assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "failed to get column map")
+		}
+	})
+}
+
+func TestEngineBatchKV_APIs(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_persistence"
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.Close(context.Background())
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+
+	var keys [][]byte
+	var values [][]byte
+
+	t.Run("put_kv", func(t *testing.T) {
+		for i := uint64(0); i < 100; i++ {
+			key := gofakeit.UUID()
+			val := gofakeit.LetterN(uint(i + 1))
+			keys = append(keys, []byte(key))
+			values = append(values, []byte(val))
+		}
+
+		err := engine.BatchPut(keys, values)
+		assert.NoError(t, err, "BatchPut operation should succeed")
+	})
+
+	t.Run("get_kv", func(t *testing.T) {
+		for i, key := range keys {
+			got, err := engine.Get(key)
+			assert.NoError(t, err, "failed to get kv")
+			assert.Equal(t, values[i], got, "unexpected kv")
+		}
+	})
+
+	t.Run("delete_kv", func(t *testing.T) {
+		err := engine.BatchDelete(keys)
+		assert.NoError(t, err, "BatchDelete operation should succeed")
+	})
+
+	t.Run("get_kv", func(t *testing.T) {
+		for _, key := range keys {
+			_, err := engine.Get(key)
+			assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "failed to get kv")
+		}
 	})
 }
