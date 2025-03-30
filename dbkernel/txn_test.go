@@ -216,7 +216,7 @@ func TestTxn_Interrupted(t *testing.T) {
 
 	kv := make(map[string][]byte)
 	txn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
-	
+
 	t.Run("batch_insert", func(t *testing.T) {
 		assert.NoError(t, err, "NewBatch operation should succeed")
 		assert.NotNil(t, txn, "NewBatch operation should succeed")
