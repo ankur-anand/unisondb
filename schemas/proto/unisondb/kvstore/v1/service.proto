@@ -1,0 +1,192 @@
+syntax = "proto3";
+package unisondb.kvstore.v1;
+
+option go_package = "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/kvstore/v1";
+
+import "google/protobuf/timestamp.proto";
+
+message KeyValue {
+  bytes key = 1;
+  bytes value = 2;
+  fixed32 crc32_checksum = 3;
+}
+
+message RowColumnValue {
+  bytes row_key = 1;
+  // map of column names and values
+  //   Data {
+  //     row_key: "user_123"
+  //     columns: {
+  //       "first_name": "John"
+  //       "age": "25"
+  //       "email": "john@example.com"
+  //     }
+  //   }
+  map<string, bytes> columns = 2;
+  fixed32 crc32_checksum = 3;
+}
+
+service KVStoreWriteService {
+  // PutKey Store or Updates the Provided Key Value Pair.
+  rpc PutKey(PutKeyRequest) returns (PutKeyResponse);
+  rpc BatchPutKeys(BatchPutKeysRequest) returns (BatchPutKeysResponse);
+  // PutColumns stores provided column entries fro the given row.
+  rpc PutColumns(PutColumnsRequest) returns (PutColumnsResponse);
+  rpc BatchPutColumns(BatchPutColumnsRequest) returns (BatchPutColumnsResponse);
+
+  rpc DeleteKey(DeleteKeyRequest) returns (DeleteKeyResponse);
+  rpc DeleteColumns(DeleteColumnsRequest) returns (DeleteColumnsResponse);
+  rpc BatchDeleteKeys(BatchDeleteKeysRequest) returns (BatchDeleteKeysResponse);
+  rpc BatchDeleteColumns(BatchDeleteColumnsRequest) returns (BatchDeleteColumnsResponse);
+
+  rpc DeleteRow(DeleteRowRequest) returns (DeleteRowResponse);
+  rpc BatchDeleteRow(BatchDeleteRowRequest) returns (BatchDeleteRowResponse);
+}
+
+message PutKeyRequest {
+  KeyValue item = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message PutKeyResponse {}
+
+message PutColumnsRequest {
+  RowColumnValue item = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message PutColumnsResponse {}
+
+message BatchPutKeysRequest{
+  repeated KeyValue items = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message BatchPutKeysResponse{}
+
+message BatchPutColumnsRequest{
+  repeated RowColumnValue items = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message BatchPutColumnsResponse{}
+
+message DeleteKeyRequest {
+  string key = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message DeleteKeyResponse{}
+
+
+message DeleteColumnsRequest{
+  bytes row_key = 1;
+  repeated string column_names = 2;
+  google.protobuf.Timestamp timestamp = 3;
+}
+
+message DeleteColumnsResponse{}
+
+message BatchDeleteKeysRequest {
+  repeated string keys = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message BatchDeleteKeysResponse{}
+
+message DeleteColumns {
+  string row_key = 1;
+  repeated string column_names = 2;
+}
+
+message BatchDeleteColumnsRequest{
+  repeated DeleteColumns items = 1;
+  google.protobuf.Timestamp timestamp = 2;
+}
+
+message BatchDeleteColumnsResponse{}
+
+message DeleteRowRequest {
+  string row_key=1;
+}
+
+message DeleteRowResponse{}
+
+message BatchDeleteRowRequest{
+  repeated string row_keys = 1;
+}
+
+message BatchDeleteRowResponse{}
+
+// BlobChunkRequest message is used for streaming large binary objects (blobs) in smaller chunks.
+//
+message BlobChunkRequest {
+  bytes data = 1;
+  fixed32 crc32_checksum = 2;
+  bool last = 3;
+  fixed32 final_crc32_checksum = 4;
+}
+
+service KVStoreTransactionalWriteService {
+  rpc TransactionStream(stream TransactionRequest) returns (TransactionResponse);
+}
+
+message TransactionRequest {
+  oneof operation {
+    TransactionControl control = 1;
+    PutKeyRequest put_key = 2;
+    DeleteKeyRequest delete_key = 3;
+    PutColumnsRequest put_columns = 4;
+    DeleteColumnsRequest delete_columns = 5;
+    BlobChunkRequest chunked_put = 6;
+  }
+}
+
+message TransactionControl {
+  enum Type {
+    BEGIN = 0;
+    PREPARE = 1;
+    COMMIT = 2;
+  }
+  Type type = 1;
+  optional string txn_id = 2;
+}
+
+message TransactionResponse{}
+
+message GetColumnsRequest {
+  bytes row_key = 1;
+
+  // optional: filter specific column names only
+  repeated string include_columns = 2;
+}
+
+message GetColumnsResponse {
+  map<string, bytes> columns = 1;
+}
+
+message GetRequest {
+  bytes key = 1;
+}
+
+message GetResponse {
+  bytes data = 1;
+  bool chunked = 2;
+  fixed32 final_crc32_checksum = 3;
+}
+
+message GetLOBRequest {
+  bytes key = 1;
+}
+
+message GetLOBResponse{
+  bytes data = 1;
+  bool last = 2;
+  fixed32 final_crc32_checksum = 3;
+}
+
+service KVStoreReadService {
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc GetLOB(GetLOBRequest) returns (GetLOBResponse);
+  rpc GetColumns(GetColumnsRequest) returns (GetColumnsResponse);
+}
