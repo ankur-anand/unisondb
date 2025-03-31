@@ -23,7 +23,6 @@ var (
 	ErrInCloseProcess   = errors.New("in-Close process")
 	ErrDatabaseDirInUse = errors.New("pid.lock is held by another process")
 	ErrInternalError    = errors.New("internal error")
-	ErrInvalidOffset    = errors.New("invalid offset")
 )
 
 var (
