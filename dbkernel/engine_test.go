@@ -208,6 +208,19 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	defer db.Close()
 	keysCount := 0
 
+	var metadataBytes []byte
+	db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("sys.kv.unison.db.wal.metadata.bucket"))
+		assert.NotNil(t, bucket)
+		val := bucket.Get(internal.SysKeyWalCheckPoint)
+		assert.NotNil(t, val)
+		metadataBytes = make([]byte, len(val))
+		copy(metadataBytes, val)
+		return nil
+	})
+
+	metadata := internal.UnmarshalMetadata(metadataBytes)
+
 	db.View(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte(namespace))
 		assert.NotNil(t, bucket)
@@ -217,8 +230,11 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 		})
 		return nil
 	})
+
 	assert.Equal(t, uint64(keysCount), engine.OpsFlushedCount())
+	assert.Equal(t, uint64(keysCount), metadata.RecordProcessed)
 	assert.Equal(t, uint64(5001), engine.OpsReceivedCount())
+	
 	err = engine.Close(t.Context())
 	assert.NoError(t, err, "Failed to close engine")
 

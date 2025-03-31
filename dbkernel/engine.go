@@ -531,7 +531,7 @@ func (e *Engine) asyncMemTableFlusher(ctx context.Context) {
 	// check if there is item in queue that needs to be flushed
 	// based upon timer, as the process of input of the WAL write could
 	// be higher, then what bTreeStore could keep up the pace.
-	tick := time.NewTicker(10 * time.Second)
+	tick := time.NewTicker(30 * time.Second)
 
 	go func() {
 		defer e.wg.Done()
@@ -556,6 +556,10 @@ func (e *Engine) asyncMemTableFlusher(ctx context.Context) {
 
 // handleFlush flushes the sealed mem-table to btree store.
 func (e *Engine) handleFlush(ctx context.Context) {
+	if e.flushPaused.Load() {
+		slog.Warn("[unisondb.dbkernel]: FSync Flush Paused")
+		return
+	}
 	var mt *memtable.MemTable
 	e.mu.Lock()
 	metrics.SetGaugeWithLabels(mKeySealedMemTableTotal, float32(len(e.sealedMemTables)), e.metricsLabel)
@@ -615,17 +619,6 @@ func (p *pendingMetadata) queueMetadata(metadata *flushedMetadata) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.pendingMetadataWrites = append(p.pendingMetadataWrites, metadata)
-}
-
-func (p *pendingMetadata) dequeueMetadata() (*flushedMetadata, int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if len(p.pendingMetadataWrites) == 0 {
-		return nil, 0
-	}
-	m := p.pendingMetadataWrites[0]
-	p.pendingMetadataWrites = p.pendingMetadataWrites[1:]
-	return m, len(p.pendingMetadataWrites)
 }
 
 func (p *pendingMetadata) dequeueAllMetadata() ([]*flushedMetadata, int) {
@@ -732,9 +725,9 @@ func (e *Engine) pauseFlush() {
 	e.flushPaused.Store(true)
 }
 
-func (e *Engine) resumeFlush() {
-	e.flushPaused.Store(false)
-}
+//func (e *Engine) resumeFlush() {
+//	e.flushPaused.Store(false)
+//}
 
 func (e *Engine) close(ctx context.Context) error {
 	e.shutdown.Store(true)
