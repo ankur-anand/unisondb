@@ -54,7 +54,6 @@ func serializeLogRecord(record *LogRecord, builder *flatbuffers.Builder) []byte 
 }
 
 func serializeEntries(log *LogRecord, builder *flatbuffers.Builder) flatbuffers.UOffsetT {
-
 	kvOffsets := make([]flatbuffers.UOffsetT, len(log.Entries))
 	for i, kv := range log.Entries {
 		dataOffset := builder.CreateByteVector(kv)
@@ -76,7 +75,6 @@ func DeserializeLogRecord(data []byte) *LogRecord {
 
 // DeserializeFBRootLogRecord converts the FlatBuffer WAL Log Record to Go Struct LogRecord.
 func DeserializeFBRootLogRecord(fbRecord *logrecord.LogRecord) *LogRecord {
-
 	entriesLen := fbRecord.EntriesLength()
 	var entries [][]byte
 	for i := 0; i < entriesLen; i++ {

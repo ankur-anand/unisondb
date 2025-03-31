@@ -245,6 +245,7 @@ func TestTxn_Interrupted(t *testing.T) {
 
 			value, err = engine.Get(key)
 			assert.NoError(t, err, "Get operation should succeed")
+			assert.Equal(t, value, value, "Retrieved value should match the inserted value")
 		}
 	})
 
