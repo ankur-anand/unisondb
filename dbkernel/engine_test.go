@@ -234,7 +234,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	assert.Equal(t, uint64(keysCount), engine.OpsFlushedCount())
 	assert.Equal(t, uint64(keysCount), metadata.RecordProcessed)
 	assert.Equal(t, uint64(5001), engine.OpsReceivedCount())
-	
+
 	err = engine.Close(t.Context())
 	assert.NoError(t, err, "Failed to close engine")
 
