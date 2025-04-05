@@ -4,6 +4,14 @@ import (
 	"time"
 )
 
+const (
+	logicalBits = 23
+	logicalMask = (1 << logicalBits) - 1
+	timeMask    = (1 << (64 - logicalBits)) - 1
+	// CustomEpochMs is a Sentinel Value for Jan 1, 2025 @ 00:00:00 UTC.
+	CustomEpochMs = 1735689600000
+)
+
 // wall clock can jump forward or backward by the ntp.
 // monotonic time don't.
 // the process get monotonic time at the start of the process, so during it's life-time
@@ -16,34 +24,60 @@ func initMonotonic() {
 	monotonic = time.Since(startTime)
 }
 
-// DecodeHLC Extract lastTime and counter.
-func DecodeHLC(encodedHLC uint64) (uint64, uint16) {
-	lastTime := encodedHLC >> 16           // Extract upper 48 bits
-	counter := uint16(encodedHLC & 0xFFFF) // Extract lower 16 bits
+// HLCDecode Extract lastTime and counter from the encoded HLC.
+func HLCDecode(encodedHLC uint64) (uint64, uint32) {
+	// Extract upper 41 bits
+	lastTime := encodedHLC >> logicalBits
+	counter := uint32(encodedHLC & logicalMask)
 	return lastTime, counter
 }
 
 // IsConcurrent return true if the two hybrid logical clock have happened at the same time
-// but are distinct events.
+// but are distinct events within a millisecond interval.
 func IsConcurrent(hlc1, hlc2 uint64) bool {
-	lastTime1, counter1 := DecodeHLC(hlc1)
-	lastTime2, counter2 := DecodeHLC(hlc2)
+	lastTime1, counter1 := HLCDecode(hlc1)
+	lastTime2, counter2 := HLCDecode(hlc2)
 	return lastTime1 == lastTime2 && counter1 != counter2
 }
 
-// HLCNow return an encoded hybrid logical lock.
-// 48 bits are current timestamp
-// 16 bits are counter value. can track 65,536 (2^16) unique events per timestamp(nanosecond).
-func HLCNow(counter uint64) uint64 {
+var lastHLC uint64
+
+// HLCNow returns an encoded hybrid logical clock. 41 bits = ms timestamp since custom epoch and 23 bits = logical counter.
+func HLCNow() uint64 {
 	now := time.Now()
 	adjustment := monotonic - now.Sub(startTime)
-
-	// prevents backward time shifts
 	if adjustment < 0 {
 		adjustment = 0
 	}
 
-	ct := uint64(time.Now().Add(adjustment).UnixNano())
-	// (physical time << 16) | counter
-	return (ct << 16) | counter
+	ms := uint64(now.Add(adjustment).UnixMilli()) - CustomEpochMs
+	ms &= timeMask
+
+	prev := lastHLC
+	prevTS, prevCounter := HLCDecode(prev)
+
+	var newTS uint64
+	var newCounter uint64
+
+	switch {
+	case ms > prevTS:
+		newTS = ms
+		newCounter = 0
+	case ms == prevTS:
+		newTS = ms
+		newCounter = uint64(prevCounter) + 1
+		if newCounter > logicalMask {
+			panic("HLC counter overflow: too many events in one ms")
+		}
+	case ms < prevTS:
+		newTS = prevTS
+		newCounter = uint64(prevCounter) + 1
+		if newCounter > logicalMask {
+			panic("HLC counter overflow: time regression + counter overflow")
+		}
+	}
+
+	hlc := (newTS << logicalBits) | (newCounter & logicalMask)
+	lastHLC = hlc
+	return hlc
 }
