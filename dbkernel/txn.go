@@ -72,7 +72,7 @@ func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.
 	index := e.writeSeenCounter.Add(1)
 	record := logcodec.LogRecord{
 		LSN:             index,
-		HLC:             HLCNow(index),
+		HLC:             HLCNow(),
 		TxnID:           uuid,
 		EntryType:       valueType,
 		TxnState:        logrecord.TransactionStateBegin,
@@ -128,7 +128,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 
 	record := logcodec.LogRecord{
 		LSN:             index,
-		HLC:             HLCNow(index),
+		HLC:             HLCNow(),
 		CRC32Checksum:   checksum,
 		OperationType:   t.txnOperation,
 		TxnState:        logrecord.TransactionStatePrepare,
@@ -189,7 +189,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 
 	record := logcodec.LogRecord{
 		LSN:             index,
-		HLC:             HLCNow(index),
+		HLC:             HLCNow(),
 		CRC32Checksum:   checksum,
 		OperationType:   t.txnOperation,
 		TxnState:        logrecord.TransactionStatePrepare,
@@ -236,7 +236,7 @@ func (t *Txn) Commit() error {
 
 	record := logcodec.LogRecord{
 		LSN:             index,
-		HLC:             HLCNow(index),
+		HLC:             HLCNow(),
 		CRC32Checksum:   t.checksum,
 		OperationType:   t.txnOperation,
 		TxnState:        logrecord.TransactionStateCommit,

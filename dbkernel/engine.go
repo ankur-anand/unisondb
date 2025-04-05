@@ -350,7 +350,7 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	index := e.writeSeenCounter.Add(1)
-	hlc := HLCNow(index)
+	hlc := HLCNow()
 
 	record := logcodec.LogRecord{
 		LSN:           index,
@@ -411,7 +411,7 @@ func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [
 	defer e.mu.Unlock()
 
 	index := e.writeSeenCounter.Add(1)
-	hlc := HLCNow(index)
+	hlc := HLCNow()
 
 	record := logcodec.LogRecord{
 		LSN:           index,
