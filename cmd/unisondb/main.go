@@ -14,8 +14,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ankur-anand/unisondb/cmd/replicator/config"
+	"github.com/ankur-anand/unisondb/cmd/unisondb/config"
 	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/internal/etc"
 	"github.com/ankur-anand/unisondb/internal/middleware"
 	"github.com/ankur-anand/unisondb/internal/services/kvstore"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
@@ -51,6 +52,7 @@ func main() {
 	setupFunc := []func(context.Context) error{
 		server.init,
 		server.initTelemetry,
+		server.setupStorageConfig,
 		server.setupStorage,
 		server.setupGrpcServer,
 		server.setupHTTPServer,
@@ -129,6 +131,21 @@ func (ms *mainServer) initTelemetry(ctx context.Context) error {
 
 func (ms *mainServer) setupStorageConfig(ctx context.Context) error {
 	storeConfig := dbkernel.NewDefaultEngineConfig()
+
+	if ms.cfg.Storage.SegmentSize != "" {
+		value := etc.ParseSize(ms.cfg.Storage.SegmentSize)
+		storeConfig.WalConfig.SegmentSize = value
+	}
+
+	if ms.cfg.Storage.BytesPerSync != "" {
+		value := etc.ParseSize(ms.cfg.Storage.BytesPerSync)
+		storeConfig.WalConfig.BytesPerSync = uint32(value)
+	}
+
+	if ms.cfg.Storage.ArenaSize != "" {
+		value := etc.ParseSize(ms.cfg.Storage.ArenaSize)
+		storeConfig.ArenaSize = value
+	}
 
 	ms.storageConfig = storeConfig
 	return nil

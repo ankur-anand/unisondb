@@ -16,10 +16,9 @@ type GrpcConfig struct {
 }
 
 type StorageConfig struct {
-	BaseDir        string   `toml:"base_dir"`
-	Namespaces     []string `toml:"namespaces"`
-	BytesPerSync   string   `toml:"bytes_per_sync"`
-	SegmentSize    string   `toml:"segment_size"`
-	ValueThreshold string   `toml:"value_threshold"`
-	ArenaSize      string   `toml:"arena_size"`
+	BaseDir      string   `toml:"base_dir"`
+	Namespaces   []string `toml:"namespaces"`
+	BytesPerSync string   `toml:"bytes_per_sync"`
+	SegmentSize  string   `toml:"segment_size"`
+	ArenaSize    string   `toml:"arena_size"`
 }
