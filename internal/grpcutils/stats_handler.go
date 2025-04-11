@@ -13,7 +13,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/common/helpers/templates"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/stats"
+	"google.golang.org/grpc/status"
 )
 
 type contextKey string
@@ -40,9 +42,11 @@ type GRPCStatsHandler struct {
 	// activeConn is grpc(tcp level) connection.
 	activeConn     *prometheus.GaugeVec
 	connTotalCount *prometheus.CounterVec
-	rpcHandled     *prometheus.CounterVec
-	rpcDuration    *prometheus.HistogramVec
-	rpcInFlight    *prometheus.GaugeVec
+
+	rpcHandled      *prometheus.CounterVec
+	rpcDuration     *prometheus.HistogramVec
+	rpcInFlight     *prometheus.GaugeVec
+	rpcErrorCounter *prometheus.CounterVec
 
 	messageSize *prometheus.HistogramVec
 	sentMessage *prometheus.CounterVec
@@ -61,7 +65,8 @@ type streamInfo struct {
 
 func NewGRPCStatsHandler(methodInfo map[string]string) *GRPCStatsHandler {
 	return &GRPCStatsHandler{
-		methodInfo: methodInfo,
+		methodInfo:       methodInfo,
+		activeStreamsMap: sync.Map{},
 
 		activeConn: promauto.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: promNamespace,
@@ -100,7 +105,7 @@ func NewGRPCStatsHandler(methodInfo map[string]string) *GRPCStatsHandler {
 			Subsystem: promSubSystem,
 			Name:      "rpc_duration_seconds",
 			Help:      "Duration of completed rpc in seconds",
-		}, []string{"grpc_service", "grpc_method", "grpc_type"}),
+		}, []string{"grpc_service", "grpc_method", "grpc_type", "status_code"}),
 
 		rpcInFlight: promauto.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: promNamespace,
@@ -108,6 +113,13 @@ func NewGRPCStatsHandler(methodInfo map[string]string) *GRPCStatsHandler {
 			Name:      "rpc_inflight_total",
 			Help:      "Total number of rpc In Flight",
 		}, []string{"grpc_service", "grpc_method", "grpc_type"}),
+
+		rpcErrorCounter: promauto.NewCounterVec(prometheus.CounterOpts{
+			Namespace: promNamespace,
+			Subsystem: promSubSystem,
+			Name:      "rpc_error_total",
+			Help:      "Total number of RPC Errors",
+		}, []string{"grpc_service", "grpc_method", "grpc_type", "status_code"}),
 
 		recvMessage: promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: promNamespace,
@@ -132,13 +144,13 @@ func NewGRPCStatsHandler(methodInfo map[string]string) *GRPCStatsHandler {
 			Buckets: prometheus.ExponentialBuckets(1024, 2, 12),
 		}, []string{"grpc_service", "grpc_method", "grpc_type", "direction"}),
 
-		activeStreamsMap: sync.Map{},
 		activeStreamCount: promauto.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: promNamespace,
 			Subsystem: promSubSystem,
 			Name:      "active_streams",
 			Help:      "Number of currently active grpc streams",
 		}, []string{"grpc_service", "grpc_method", "stream_type"}),
+
 		streamAgeBucket: promauto.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: promNamespace,
 			Subsystem: promSubSystem,
@@ -185,8 +197,12 @@ func (h *GRPCStatsHandler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 		}
 
 	case *stats.End:
+		statusCode := getStatusCode(rpcStats.Error)
+		if rpcStats.Error != nil {
+			h.rpcErrorCounter.WithLabelValues(service, method, methodType, statusCode).Inc()
+		}
 		h.rpcInFlight.WithLabelValues(service, method, methodType).Dec()
-		h.rpcDuration.WithLabelValues(service, method, methodType).Observe(rpcStats.EndTime.Sub(rpcStats.BeginTime).Seconds())
+		h.rpcDuration.WithLabelValues(service, method, methodType, statusCode).Observe(rpcStats.EndTime.Sub(rpcStats.BeginTime).Seconds())
 		if methodType != unary {
 			h.activeStreamsMap.Delete(rpcID)
 			h.activeStreamCount.WithLabelValues(service, method, methodType).Dec()
@@ -199,6 +215,19 @@ func (h *GRPCStatsHandler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 		h.sentMessage.WithLabelValues(service, method, methodType).Inc()
 		h.messageSize.WithLabelValues(service, method, methodType, "sent").Observe(float64(rpcStats.WireLength))
 	}
+}
+
+func getStatusCode(err error) string {
+	if err == nil {
+		return codes.OK.String()
+	}
+
+	st, ok := status.FromError(err)
+	if ok {
+		return st.Code().String()
+	}
+
+	return codes.Unknown.String()
 }
 
 // https://opentelemetry.io/docs/specs/semconv/rpc/rpc-spans/
@@ -236,7 +265,7 @@ func (h *GRPCStatsHandler) HandleConn(ctx context.Context, connStats stats.ConnS
 	case *stats.ConnBegin:
 		h.activeConn.WithLabelValues().Inc()
 		h.connTotalCount.WithLabelValues().Inc()
-		slog.Info("[grpc] connection established",
+		slog.Info("[unisondb.grpc] connection established",
 			slog.Group("client",
 				slog.Group("address", slog.String("ip", clientIP)),
 				slog.String("port", clientPort)),
@@ -247,7 +276,7 @@ func (h *GRPCStatsHandler) HandleConn(ctx context.Context, connStats stats.ConnS
 		if startTime := ctx.Value(ctxKeyConnStartTime); startTime != nil {
 			duration := time.Since(startTime.(time.Time))
 			h.connDuration.WithLabelValues().Observe(duration.Seconds())
-			slog.Info("[grpc] connection close", slog.Group("client",
+			slog.Info("[unisondb.grpc] connection close", slog.Group("client",
 				slog.Group("address", slog.String("ip", clientIP)),
 				slog.String("port", clientPort)),
 				slog.String("duration", humanizeDuration(duration)),
