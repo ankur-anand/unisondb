@@ -12,7 +12,9 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/prometheus/common/expfmt"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/stats"
+	"google.golang.org/grpc/status"
 )
 
 type mockAddr struct {
@@ -131,6 +133,12 @@ func TestGRPCStatsHandler(t *testing.T) {
 	t.Run("test_handle_rpc", func(t *testing.T) {
 
 		loop := 0
+		errors := []error{
+			nil,
+			fmt.Errorf("some error"),
+			status.Error(codes.ResourceExhausted, "some error"),
+			status.Error(codes.Unavailable, "some error"),
+		}
 		for method := range methodInfo {
 			loop++
 			service, m := parseFullMethodName(method)
@@ -160,6 +168,7 @@ func TestGRPCStatsHandler(t *testing.T) {
 			end := &stats.End{
 				BeginTime: begin.BeginTime,
 				EndTime:   time.Now(),
+				Error:     errors[loop-1],
 			}
 			handler.HandleRPC(ctx, end)
 			assert.Equal(t, loop, testutil.CollectAndCount(handler.rpcDuration))
