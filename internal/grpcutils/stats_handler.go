@@ -265,7 +265,7 @@ func (h *GRPCStatsHandler) HandleConn(ctx context.Context, connStats stats.ConnS
 	case *stats.ConnBegin:
 		h.activeConn.WithLabelValues().Inc()
 		h.connTotalCount.WithLabelValues().Inc()
-		slog.Info("[grpc] connection established",
+		slog.Info("[unisondb.grpc] connection established",
 			slog.Group("client",
 				slog.Group("address", slog.String("ip", clientIP)),
 				slog.String("port", clientPort)),
@@ -276,7 +276,7 @@ func (h *GRPCStatsHandler) HandleConn(ctx context.Context, connStats stats.ConnS
 		if startTime := ctx.Value(ctxKeyConnStartTime); startTime != nil {
 			duration := time.Since(startTime.(time.Time))
 			h.connDuration.WithLabelValues().Observe(duration.Seconds())
-			slog.Info("[grpc] connection close", slog.Group("client",
+			slog.Info("[unisondb.grpc] connection close", slog.Group("client",
 				slog.Group("address", slog.String("ip", clientIP)),
 				slog.String("port", clientPort)),
 				slog.String("duration", humanizeDuration(duration)),
