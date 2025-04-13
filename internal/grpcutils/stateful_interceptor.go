@@ -19,8 +19,10 @@ var defaultLogRequestMethodDisabled = map[string]bool{
 
 var slowConsumerCounter = promauto.NewCounterVec(
 	prometheus.CounterOpts{
-		Name: "grpc_slow_consumer_total",
-		Help: "Count of slow consumer messages per gRPC method",
+		Namespace: promNamespace,
+		Subsystem: promSubSystem,
+		Name:      "grpc_slow_consumer_total",
+		Help:      "Count of slow consumer messages per gRPC method",
 	},
 	[]string{"grpc_service", "grpc_method", "stream_type"},
 )
@@ -140,7 +142,7 @@ func (i *Interceptor) TelemetryUnaryInterceptor(ctx context.Context, req interfa
 	endTime := time.Now()
 	duration := endTime.Sub(startTime)
 	grpcStatusCode := status.Code(err)
-	
+
 	if err != nil {
 		i.logger.Error("[unisondb.grpc]",
 			slog.String("event_type", "rpc.request.failed"),
