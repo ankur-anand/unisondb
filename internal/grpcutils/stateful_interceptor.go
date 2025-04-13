@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/status"
 )
@@ -16,7 +17,7 @@ var defaultLogRequestMethodDisabled = map[string]bool{
 	"/grpc.health.v1.Health/Watch": false,
 }
 
-var slowConsumerCounter = prometheus.NewCounterVec(
+var slowConsumerCounter = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "grpc_slow_consumer_total",
 		Help: "Count of slow consumer messages per gRPC method",
@@ -75,7 +76,6 @@ func (i *Interceptor) TelemetryStreamInterceptor(srv interface{},
 	duration := endTime.Sub(startTime)
 	grpcStatusCode := status.Code(err)
 
-	// Log completion.
 	if err != nil {
 		i.logger.Error("[unisondb.grpc]",
 			slog.String("event_type", "rpc.stream.failed"),
@@ -140,8 +140,7 @@ func (i *Interceptor) TelemetryUnaryInterceptor(ctx context.Context, req interfa
 	endTime := time.Now()
 	duration := endTime.Sub(startTime)
 	grpcStatusCode := status.Code(err)
-
-	// Log completion.
+	
 	if err != nil {
 		i.logger.Error("[unisondb.grpc]",
 			slog.String("event_type", "rpc.request.failed"),
@@ -177,4 +176,66 @@ func (i *Interceptor) TelemetryUnaryInterceptor(ctx context.Context, req interfa
 	}
 
 	return resp, err
+}
+
+type slowConsumerStream struct {
+	grpc.ServerStream
+	method     string
+	service    string
+	streamType string
+	client     string
+	namespace  string
+	requestID  string
+	logger     *slog.Logger
+	threshold  time.Duration
+}
+
+func SlowConsumerStreamInterceptor(threshold time.Duration, logger *slog.Logger) grpc.StreamServerInterceptor {
+	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		service, method := parseFullMethodName(info.FullMethod)
+		wrapped := &slowConsumerStream{
+			ServerStream: ss,
+			method:       method,
+			service:      service,
+			streamType:   grpcStreamType(info),
+			client:       peerAddress(ss.Context()),
+			namespace:    GetNamespace(ss.Context()),
+			requestID:    extractRequestID(ss.Context()),
+			logger:       logger,
+			threshold:    threshold,
+		}
+		return handler(srv, wrapped)
+	}
+}
+
+func (s *slowConsumerStream) SendMsg(m interface{}) error {
+	start := time.Now()
+	err := s.ServerStream.SendMsg(m)
+	elapsed := time.Since(start)
+
+	if elapsed > s.threshold {
+		s.logger.Warn("[unisondb.grpc]",
+			slog.String("event_type", "rpc.stream.slow_consumer"),
+			slog.Group("grpc",
+				slog.String("method", s.method),
+				slog.String("service", s.service),
+				slog.String("grpc_type", s.streamType),
+			),
+			slog.Group("request",
+				slog.String("id", s.requestID),
+				slog.String("client", s.client),
+				slog.String("namespace", s.namespace),
+			),
+			slog.Group("response",
+				slog.String("stream.send.duration", humanizeDuration(elapsed)),
+			),
+		)
+
+		slowConsumerCounter.WithLabelValues(s.service, s.method, s.streamType).Inc()
+	}
+	return err
+}
+
+func SlowConsumerMetric() *prometheus.CounterVec {
+	return slowConsumerCounter
 }

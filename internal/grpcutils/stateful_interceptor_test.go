@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/internal/grpcutils"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -156,4 +158,57 @@ func TestTelemetryStreamInterceptor_HealthWatch_NoLog(t *testing.T) {
 	err := i.TelemetryStreamInterceptor(nil, stream, streamInfo, handler)
 	assert.NoError(t, err)
 	assert.Len(t, logBuf.String(), 0)
+}
+
+type mockSendStream struct {
+	grpc.ServerStream
+	ctx           context.Context
+	simulateDelay time.Duration
+	called        bool
+}
+
+func (m *mockSendStream) Context() context.Context {
+	return m.ctx
+}
+
+func (m *mockSendStream) SendMsg(msg interface{}) error {
+	m.called = true
+	time.Sleep(m.simulateDelay)
+	return nil
+}
+
+func TestSlowConsumerStreamInterceptor_DetectsSlowSend(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	slowStream := &mockSendStream{
+		ctx: metadata.NewIncomingContext(context.Background(),
+			metadata.Pairs("x-namespace", "tenant-a")),
+		simulateDelay: 50 * time.Millisecond,
+	}
+
+	info := &grpc.StreamServerInfo{
+		FullMethod:     "/test.Service/StreamUnisondb",
+		IsClientStream: false,
+		IsServerStream: true,
+	}
+
+	interceptor := grpcutils.SlowConsumerStreamInterceptor(10*time.Millisecond, logger)
+
+	handler := func(srv interface{}, ss grpc.ServerStream) error {
+		return ss.SendMsg("msg")
+	}
+
+	err := interceptor(nil, slowStream, info, handler)
+	assert.NoError(t, err)
+	assert.True(t, slowStream.called)
+
+	logs := logBuf.String()
+	assert.Contains(t, logs, "rpc.stream.slow_consumer")
+	assert.Contains(t, logs, "StreamUnisondb")
+	assert.Contains(t, logs, "tenant-a")
+
+	count := testutil.ToFloat64(grpcutils.SlowConsumerMetric().
+		WithLabelValues("test.Service", "StreamUnisondb", "server_stream"))
+	assert.Equal(t, float64(1), count)
 }
