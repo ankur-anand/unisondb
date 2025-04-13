@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	storage "github.com/ankur-anand/unisondb/dbkernel"
-	"github.com/ankur-anand/unisondb/internal/middleware"
+	"github.com/ankur-anand/unisondb/internal/grpcutils"
 	"github.com/ankur-anand/unisondb/internal/services/kvstore"
 	"github.com/ankur-anand/unisondb/pkg/splitter"
 	"github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
@@ -85,15 +85,11 @@ func TestClient_PutKV_GetKV_DeleteKV(t *testing.T) {
 	listener := bufconn.Listen(listenerBuffSize)
 	defer listener.Close()
 
-	gS := grpc.NewServer(grpc.ChainStreamInterceptor(middleware.RequireNamespaceInterceptor,
-		middleware.RequestIDStreamInterceptor,
-		middleware.CorrelationIDStreamInterceptor,
-		middleware.MethodInterceptor,
-		middleware.TelemetryInterceptor),
-		grpc.ChainUnaryInterceptor(middleware.RequestIDUnaryInterceptor,
-			middleware.CorrelationIDUnaryInterceptor,
-			middleware.MethodUnaryInterceptor,
-			middleware.TelemetryUnaryInterceptor,
+	gS := grpc.NewServer(grpc.ChainStreamInterceptor(grpcutils.RequireNamespaceInterceptor,
+		grpcutils.RequestIDStreamInterceptor,
+		grpcutils.MethodInterceptor),
+		grpc.ChainUnaryInterceptor(grpcutils.RequestIDUnaryInterceptor,
+			grpcutils.MethodUnaryInterceptor,
 		))
 	defer gS.Stop()
 
@@ -235,15 +231,11 @@ func TestClient_PutStreamChunksForKey(t *testing.T) {
 	listener := bufconn.Listen(listenerBuffSize)
 	defer listener.Close()
 
-	gS := grpc.NewServer(grpc.ChainStreamInterceptor(middleware.RequireNamespaceInterceptor,
-		middleware.RequestIDStreamInterceptor,
-		middleware.CorrelationIDStreamInterceptor,
-		middleware.MethodInterceptor,
-		middleware.TelemetryInterceptor),
-		grpc.ChainUnaryInterceptor(middleware.RequestIDUnaryInterceptor,
-			middleware.CorrelationIDUnaryInterceptor,
-			middleware.MethodUnaryInterceptor,
-			middleware.TelemetryUnaryInterceptor,
+	gS := grpc.NewServer(grpc.ChainStreamInterceptor(grpcutils.RequireNamespaceInterceptor,
+		grpcutils.RequestIDStreamInterceptor,
+		grpcutils.MethodInterceptor),
+		grpc.ChainUnaryInterceptor(grpcutils.RequestIDUnaryInterceptor,
+			grpcutils.MethodUnaryInterceptor,
 		))
 	defer gS.Stop()
 

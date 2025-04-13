@@ -7,7 +7,7 @@ import (
 	"time"
 
 	storage "github.com/ankur-anand/unisondb/dbkernel"
-	"github.com/ankur-anand/unisondb/internal/middleware"
+	"github.com/ankur-anand/unisondb/internal/grpcutils"
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	v2 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
@@ -29,7 +29,7 @@ func NewKVWriterService(engines map[string]*storage.Engine) *KVWriterService {
 }
 
 func (k *KVWriterService) Put(ctx context.Context, request *v2.PutRequest) (*v2.PutResponse, error) {
-	namespace, reqID, method := middleware.GetRequestInfo(ctx)
+	namespace, reqID, method := grpcutils.GetRequestInfo(ctx)
 	if namespace == "" {
 		return nil, services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)
 	}
@@ -47,7 +47,7 @@ func (k *KVWriterService) Put(ctx context.Context, request *v2.PutRequest) (*v2.
 }
 
 func (k *KVWriterService) PutStream(g grpc.ClientStreamingServer[v2.PutStreamRequest, v2.PutStreamResponse]) error {
-	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
+	namespace, reqID, method := grpcutils.GetRequestInfo(g.Context())
 	if namespace == "" {
 		return services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)
 	}
@@ -79,7 +79,7 @@ func (k *KVWriterService) PutStreamChunksForKey(g grpc.ClientStreamingServer[v2.
 	ctx, cancel := context.WithTimeout(g.Context(), streamTimeout)
 	defer cancel()
 
-	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
+	namespace, reqID, method := grpcutils.GetRequestInfo(g.Context())
 	if namespace == "" {
 		return services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)
 	}
@@ -166,7 +166,7 @@ func (k *KVWriterService) handleCommitMarker(txn *storage.Txn,
 }
 
 func (k *KVWriterService) Delete(ctx context.Context, request *v2.DeleteRequest) (*v2.DeleteResponse, error) {
-	namespace, reqID, method := middleware.GetRequestInfo(ctx)
+	namespace, reqID, method := grpcutils.GetRequestInfo(ctx)
 	if namespace == "" {
 		return nil, services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)
 	}
@@ -183,7 +183,7 @@ func (k *KVWriterService) Delete(ctx context.Context, request *v2.DeleteRequest)
 }
 
 func (k *KVWriterService) DeleteStream(g grpc.ClientStreamingServer[v2.DeleteStreamRequest, v2.DeleteStreamResponse]) error {
-	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
+	namespace, reqID, method := grpcutils.GetRequestInfo(g.Context())
 	if namespace == "" {
 		return services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)
 	}

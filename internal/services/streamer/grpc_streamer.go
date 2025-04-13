@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
-	"github.com/ankur-anand/unisondb/internal/middleware"
+	"github.com/ankur-anand/unisondb/internal/grpcutils"
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/pkg/replicator"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
@@ -52,7 +52,7 @@ func NewGrpcStreamer(errGrp *errgroup.Group, storageEngines map[string]*dbkernel
 
 // GetLatestOffset returns the latest wal offset of the wal for the provided namespace.
 func (s *GrpcStreamer) GetLatestOffset(ctx context.Context, _ *v1.GetLatestOffsetRequest) (*v1.GetLatestOffsetResponse, error) {
-	namespace, reqID, method := middleware.GetRequestInfo(ctx)
+	namespace, reqID, method := grpcutils.GetRequestInfo(ctx)
 
 	if namespace == "" {
 		return nil, services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)
@@ -72,7 +72,7 @@ func (s *GrpcStreamer) GetLatestOffset(ctx context.Context, _ *v1.GetLatestOffse
 
 // StreamWalRecords stream the underlying WAL record on the connection stream.
 func (s *GrpcStreamer) StreamWalRecords(request *v1.StreamWalRecordsRequest, g grpc.ServerStreamingServer[v1.StreamWalRecordsResponse]) error {
-	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
+	namespace, reqID, method := grpcutils.GetRequestInfo(g.Context())
 
 	if namespace == "" {
 		return services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)
@@ -140,7 +140,7 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 	g grpc.ServerStreamingServer[v1.StreamWalRecordsResponse],
 	walReceiver chan []*v1.WALRecord,
 	replicatorErr chan error) error {
-	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
+	namespace, reqID, method := grpcutils.GetRequestInfo(g.Context())
 
 	var (
 		batch                  []*v1.WALRecord
@@ -202,7 +202,7 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 }
 
 func (s *GrpcStreamer) flushBatch(batch []*v1.WALRecord, g grpc.ServerStream) error {
-	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
+	namespace, reqID, method := grpcutils.GetRequestInfo(g.Context())
 	metricsStreamSendTotal.WithLabelValues(namespace, string(method), "grpc").Add(float64(len(batch)))
 	if len(batch) == 0 {
 		return nil

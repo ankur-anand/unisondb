@@ -3,6 +3,7 @@ package streamer_test
 import (
 	"bytes"
 	"context"
+	"log/slog"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -13,7 +14,7 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
-	"github.com/ankur-anand/unisondb/internal/middleware"
+	"github.com/ankur-anand/unisondb/internal/grpcutils"
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
@@ -91,10 +92,10 @@ func Test_Invalid_Request_At_Server(t *testing.T) {
 
 	listener := bufconn.Listen(listenerBuffSize)
 	defer listener.Close()
-	gS := grpc.NewServer(grpc.ChainStreamInterceptor(middleware.RequireNamespaceInterceptor,
-		middleware.RequestIDStreamInterceptor,
-		middleware.CorrelationIDStreamInterceptor,
-		middleware.TelemetryInterceptor))
+	il := grpcutils.NewStatefulInterceptor(slog.New(slog.NewTextHandler(os.Stdout, nil)), make(map[string]bool))
+	gS := grpc.NewServer(grpc.ChainStreamInterceptor(grpcutils.RequireNamespaceInterceptor,
+		grpcutils.RequestIDStreamInterceptor,
+		il.TelemetryStreamInterceptor))
 	defer gS.Stop()
 
 	go func() {
@@ -175,10 +176,8 @@ func Test_Invalid_Request_At_Client(t *testing.T) {
 
 	listener := bufconn.Listen(listenerBuffSize)
 	defer listener.Close()
-	gS := grpc.NewServer(grpc.ChainStreamInterceptor(middleware.RequireNamespaceInterceptor,
-		middleware.RequestIDStreamInterceptor,
-		middleware.CorrelationIDStreamInterceptor,
-		middleware.TelemetryInterceptor))
+	gS := grpc.NewServer(grpc.ChainStreamInterceptor(grpcutils.RequireNamespaceInterceptor,
+		grpcutils.RequestIDStreamInterceptor))
 	defer gS.Stop()
 
 	go func() {
@@ -258,10 +257,8 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 
 	listener := bufconn.Listen(listenerBuffSize)
 	defer listener.Close()
-	gS := grpc.NewServer(grpc.ChainStreamInterceptor(middleware.RequireNamespaceInterceptor,
-		middleware.RequestIDStreamInterceptor,
-		middleware.CorrelationIDStreamInterceptor,
-		middleware.TelemetryInterceptor))
+	gS := grpc.NewServer(grpc.ChainStreamInterceptor(grpcutils.RequireNamespaceInterceptor,
+		grpcutils.RequestIDStreamInterceptor))
 	defer gS.Stop()
 
 	go func() {
@@ -394,10 +391,8 @@ func TestServer_StreamWAL_Client(t *testing.T) {
 
 	listener := bufconn.Listen(listenerBuffSize)
 	defer listener.Close()
-	gS := grpc.NewServer(grpc.ChainStreamInterceptor(middleware.RequireNamespaceInterceptor,
-		middleware.RequestIDStreamInterceptor,
-		middleware.CorrelationIDStreamInterceptor,
-		middleware.TelemetryInterceptor))
+	gS := grpc.NewServer(grpc.ChainStreamInterceptor(grpcutils.RequireNamespaceInterceptor,
+		grpcutils.RequestIDStreamInterceptor))
 	defer gS.Stop()
 
 	go func() {
@@ -499,10 +494,8 @@ func TestServer_StreamWAL_MaxRetry(t *testing.T) {
 
 	listener := bufconn.Listen(listenerBuffSize)
 	defer listener.Close()
-	gS := grpc.NewServer(grpc.ChainStreamInterceptor(middleware.RequireNamespaceInterceptor,
-		middleware.RequestIDStreamInterceptor,
-		middleware.CorrelationIDStreamInterceptor,
-		middleware.TelemetryInterceptor))
+	gS := grpc.NewServer(grpc.ChainStreamInterceptor(grpcutils.RequireNamespaceInterceptor,
+		grpcutils.RequestIDStreamInterceptor))
 	defer gS.Stop()
 
 	go func() {
@@ -568,10 +561,8 @@ func TestClientServer_StreamCancel(t *testing.T) {
 
 	canceller := streamCanceller{}
 	defer listener.Close()
-	gS := grpc.NewServer(grpc.ChainStreamInterceptor(middleware.RequireNamespaceInterceptor,
-		middleware.RequestIDStreamInterceptor,
-		middleware.CorrelationIDStreamInterceptor,
-		middleware.TelemetryInterceptor, canceller.CancelInterceptor,
+	gS := grpc.NewServer(grpc.ChainStreamInterceptor(grpcutils.RequireNamespaceInterceptor,
+		grpcutils.RequestIDStreamInterceptor, canceller.CancelInterceptor,
 	),
 		grpc.InTapHandle(sCodeIn.MyServerInHandle))
 	defer gS.Stop()

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/ankur-anand/unisondb/internal/middleware"
+	"github.com/ankur-anand/unisondb/internal/grpcutils"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -24,7 +24,7 @@ var (
 
 // ToGRPCError Convert business error to gRPC error.
 // Custom types to avoid ordering issue while calling the function.
-func ToGRPCError(namespace string, reqID middleware.RequestID, method middleware.Method, err error) error {
+func ToGRPCError(namespace string, reqID grpcutils.RequestID, method grpcutils.Method, err error) error {
 	switch {
 	case errors.Is(err, ErrMissingNamespace):
 		return status.Error(codes.InvalidArgument, ErrMissingNamespace.Error())

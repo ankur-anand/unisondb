@@ -15,6 +15,5 @@ base_dir = "/tmp/kvalchemy/server"   # Base directory for storage
 namespaces = ["default", "tenant_1", "tenant_2"]
 bytes_per_sync = "1MB"
 segment_size = "16MB"
-value_threshold = "1KB"
 arena_size = "4MB"
 

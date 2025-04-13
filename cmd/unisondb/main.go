@@ -14,11 +14,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ankur-anand/unisondb/cmd/replicator/config"
+	"github.com/ankur-anand/unisondb/cmd/unisondb/config"
 	"github.com/ankur-anand/unisondb/dbkernel"
-	"github.com/ankur-anand/unisondb/internal/middleware"
+	"github.com/ankur-anand/unisondb/internal/etc"
+	"github.com/ankur-anand/unisondb/internal/grpcutils"
 	"github.com/ankur-anand/unisondb/internal/services/kvstore"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
+	"github.com/ankur-anand/unisondb/pkg/logutil"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
 	v1Streamer "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"github.com/hashicorp/go-metrics"
@@ -33,8 +35,15 @@ import (
 )
 
 var (
+	modeReplicator = "replicator"
+	modeRelayer    = "relayer"
+)
+
+var (
 	cfgFile = flag.String("c", "./config.toml", "config file")
 	env     = flag.String("e", "dev", "environment")
+	// possible value are replicator and relay.
+	mode = flag.String("m", "replicator", "mode")
 )
 
 var kAlv = keepalive.EnforcementPolicy{
@@ -51,6 +60,7 @@ func main() {
 	setupFunc := []func(context.Context) error{
 		server.init,
 		server.initTelemetry,
+		server.setupStorageConfig,
 		server.setupStorage,
 		server.setupGrpcServer,
 		server.setupHTTPServer,
@@ -130,6 +140,21 @@ func (ms *mainServer) initTelemetry(ctx context.Context) error {
 func (ms *mainServer) setupStorageConfig(ctx context.Context) error {
 	storeConfig := dbkernel.NewDefaultEngineConfig()
 
+	if ms.cfg.Storage.SegmentSize != "" {
+		value := etc.ParseSize(ms.cfg.Storage.SegmentSize)
+		storeConfig.WalConfig.SegmentSize = value
+	}
+
+	if ms.cfg.Storage.BytesPerSync != "" {
+		value := etc.ParseSize(ms.cfg.Storage.BytesPerSync)
+		storeConfig.WalConfig.BytesPerSync = uint32(value)
+	}
+
+	if ms.cfg.Storage.ArenaSize != "" {
+		value := etc.ParseSize(ms.cfg.Storage.ArenaSize)
+		storeConfig.ArenaSize = value
+	}
+
 	ms.storageConfig = storeConfig
 	return nil
 }
@@ -155,24 +180,26 @@ func (ms *mainServer) setupGrpcServer(ctx context.Context) error {
 	kvr := kvstore.NewKVReaderService(ms.engines)
 	kvw := kvstore.NewKVWriterService(ms.engines)
 
-	gS := grpc.NewServer(grpc.ChainStreamInterceptor(middleware.RequireNamespaceInterceptor,
-		middleware.RequestIDStreamInterceptor,
-		middleware.CorrelationIDStreamInterceptor,
-		middleware.MethodInterceptor,
-		middleware.TelemetryInterceptor),
+	pl := logutil.NewPercentLogger(map[slog.Level]float64{
+		slog.LevelInfo: 10,
+	}, slog.NewTextHandler(os.Stdout, nil), slog.LevelInfo)
+	ir := grpcutils.NewStatefulInterceptor(pl, make(map[string]bool))
+	gS := grpc.NewServer(grpc.ChainStreamInterceptor(grpcutils.RequireNamespaceInterceptor,
+		grpcutils.RequestIDStreamInterceptor,
+		grpcutils.MethodInterceptor,
+		ir.TelemetryStreamInterceptor),
 
-		grpc.ChainUnaryInterceptor(middleware.RequireNamespaceUnaryInterceptor,
-			middleware.RequestIDUnaryInterceptor,
-			middleware.CorrelationIDUnaryInterceptor,
-			middleware.MethodUnaryInterceptor,
-			middleware.TelemetryUnaryInterceptor),
+		grpc.ChainUnaryInterceptor(grpcutils.RequireNamespaceUnaryInterceptor,
+			grpcutils.RequestIDUnaryInterceptor,
+			grpcutils.MethodUnaryInterceptor,
+			ir.TelemetryUnaryInterceptor),
 
 		grpc.KeepaliveEnforcementPolicy(kAlv))
 
 	v1Streamer.RegisterWalStreamerServiceServer(gS, rep)
 	v1.RegisterKVStoreReadServiceServer(gS, kvr)
 	// only register write server if allowed
-	if ms.cfg.AllowWrite {
+	if *mode == "replicator" {
 		v1.RegisterKVStoreWriteServiceServer(gS, kvw)
 	}
 
