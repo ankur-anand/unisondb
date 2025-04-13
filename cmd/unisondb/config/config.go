@@ -6,7 +6,7 @@ type Config struct {
 	Grpc        GrpcConfig    `toml:"grpc"`
 	Storage     StorageConfig `toml:"storage"`
 	PprofEnable bool          `toml:"pprof_enable"`
-	AllowWrite  bool          `toml:"allow_write"`
+	logLevel    string        `toml:"log_level"`
 }
 
 type GrpcConfig struct {
@@ -21,4 +21,10 @@ type StorageConfig struct {
 	BytesPerSync string   `toml:"bytes_per_sync"`
 	SegmentSize  string   `toml:"segment_size"`
 	ArenaSize    string   `toml:"arena_size"`
+}
+
+type RelayConfig struct {
+	CertPath        string `toml:"cert_path"`
+	KeyPath         string `toml:"key_path"`
+	upstreamAddress string `toml:"upstream_address"`
 }

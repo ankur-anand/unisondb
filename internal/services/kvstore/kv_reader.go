@@ -5,7 +5,7 @@ import (
 	"hash/crc32"
 
 	storage "github.com/ankur-anand/unisondb/dbkernel"
-	"github.com/ankur-anand/unisondb/internal/middleware"
+	"github.com/ankur-anand/unisondb/internal/grpcutils"
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/pkg/splitter"
 	v2 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
@@ -24,7 +24,7 @@ func NewKVReaderService(engine map[string]*storage.Engine) *KVReaderService {
 }
 
 func (k *KVReaderService) Get(request *v2.GetRequest, g grpc.ServerStreamingServer[v2.GetResponse]) error {
-	namespace, reqID, method := middleware.GetRequestInfo(g.Context())
+	namespace, reqID, method := grpcutils.GetRequestInfo(g.Context())
 
 	if namespace == "" {
 		return services.ToGRPCError(namespace, reqID, method, services.ErrMissingNamespaceInMetadata)

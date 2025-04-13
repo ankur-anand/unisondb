@@ -21,6 +21,7 @@ require (
 	github.com/segmentio/ksuid v1.0.4
 	github.com/stretchr/testify v1.10.0
 	go.etcd.io/bbolt v1.4.0
+	go.opentelemetry.io/otel/trace v1.35.0
 	golang.org/x/sync v0.13.0
 	google.golang.org/grpc v1.71.1
 	google.golang.org/protobuf v1.36.6
