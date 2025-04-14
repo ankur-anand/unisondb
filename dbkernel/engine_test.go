@@ -46,6 +46,9 @@ func TestStorageEngine_Suite(t *testing.T) {
 			insertedKV[key] = value
 			err := engine.persistKeyValue([][]byte{[]byte(key)}, [][]byte{[]byte(value)}, logrecord.LogOperationTypeInsert)
 			assert.NoError(t, err, "persistKeyValue should not error")
+			valueType, ok := engine.getEntryTypeForKeyFromMemTable([]byte(key))
+			assert.True(t, ok, "getEntryTypeForKeyFromMemTable should return true")
+			assert.Equal(t, valueType, logrecord.LogEntryTypeKV)
 		}
 	})
 
@@ -244,6 +247,10 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 		assert.NotNil(t, retrievedValue, "Retrieved value should not be nil")
 		assert.Equal(t, len(retrievedValue), valueSize, "Value length mismatch")
 		assert.Equal(t, value, retrievedValue, "Retrieved value should match")
+
+		valueType, ok := engine.getEntryType(key)
+		assert.Equal(t, valueType, logrecord.LogEntryTypeKV, "")
+		assert.True(t, ok, "getEntryTypeForKey should succeed")
 	}
 
 	// 4000 ops, for keys, > As Batch is not Commited, (1 batch start + (not 1 batch commit.) not included)
@@ -348,6 +355,9 @@ func TestEngine_GetRowColumns_WithMemTableRotateNoFlush(t *testing.T) {
 			assert.NoError(t, err, "failed to build column map")
 			assert.Equal(t, len(v), len(rowEntry), "unexpected number of column values")
 			assert.Equal(t, v, rowEntry, "unexpected column values")
+			valueType, ok := engine.getEntryTypeForKeyFromMemTable([]byte(k))
+			assert.Equal(t, valueType, logrecord.LogEntryTypeRow, "")
+			assert.True(t, ok, "getEntryTypeForKeyFromMemTable should succeed")
 		}
 	})
 
@@ -367,6 +377,7 @@ func TestEngine_GetRowColumns_WithMemTableRotateNoFlush(t *testing.T) {
 		assert.NoError(t, err, "failed to build column map")
 		assert.Equal(t, len(rowEntry), len(columnMap)-len(deleteEntries), "unexpected number of column values")
 		assert.NotContains(t, rowEntry, deleteEntries, "unexpected column values")
+
 	})
 
 	t.Run("handle_mem_table_flush", func(t *testing.T) {
@@ -639,4 +650,103 @@ func TestRecoveryAndCheckPoint(t *testing.T) {
 		assert.Equal(t, v, string(value), "unexpected value for key")
 	}
 
+}
+
+func Test_MisMatch_Entry_Type(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "testnamespace"
+	callbackSignal := make(chan struct{}, 1)
+	callback := func() {
+		select {
+		case callbackSignal <- struct{}{}:
+		default:
+		}
+	}
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+	config.DBEngine = BoltDBEngine
+	engine, err := NewStorageEngine(dir, namespace, config)
+	assert.NoError(t, err, "NewStorageEngine should not error")
+	engine.callback = callback
+
+	kv := make(map[string]string)
+	for i := 0; i < 100; i++ {
+		key := gofakeit.UUID()
+		value := gofakeit.LetterN(100)
+		kv[key] = value
+		err := engine.Put([]byte(key), []byte(value))
+		assert.NoError(t, err, "Put operation should succeed")
+	}
+
+	engine.rotateMemTableNoFlush()
+
+	for k := range kv {
+		entryType, ok := engine.getEntryType([]byte(k))
+		assert.True(t, ok, "getEntryType operation should succeed")
+		assert.Equal(t, entryType, logrecord.LogEntryTypeKV, "unexpected entry type")
+	}
+
+	rowsEntries := make(map[string]map[string][]byte)
+	for i := uint64(0); i < 10; i++ {
+		rowKey := gofakeit.UUID()
+
+		if rowsEntries[rowKey] == nil {
+			rowsEntries[rowKey] = make(map[string][]byte)
+		}
+
+		// for each row Key generate 5 ops
+		for j := 0; j < 5; j++ {
+
+			entries := make(map[string][]byte)
+			for k := 0; k < 10; k++ {
+				key := gofakeit.Name()
+				val := gofakeit.LetterN(uint(i + 1))
+				rowsEntries[rowKey][key] = []byte(val)
+				entries[key] = []byte(val)
+			}
+
+			err := engine.PutColumnsForRow([]byte(rowKey), entries)
+			assert.NoError(t, err, "PutColumnsForRow operation should succeed")
+		}
+	}
+
+	engine.rotateMemTableNoFlush()
+	for k := range rowsEntries {
+		entryType, ok := engine.getEntryType([]byte(k))
+		assert.True(t, ok, "getEntryType operation should succeed")
+		assert.Equal(t, entryType, logrecord.LogEntryTypeRow, "unexpected entry type")
+	}
+
+	chunkedTxn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
+	assert.NoError(t, err, "NewTxn should not error")
+	chunkedKey := gofakeit.UUID()
+	for i := 0; i < 5; i++ {
+		err := chunkedTxn.AppendKVTxn([]byte(chunkedKey), []byte(gofakeit.LetterN(10)))
+		assert.NoError(t, err, "AppendTxn operation should succeed")
+	}
+
+	assert.NoError(t, chunkedTxn.Commit())
+
+	valueType, ok := engine.getEntryType([]byte(chunkedKey))
+	assert.True(t, ok, "getEntryType operation should succeed")
+	assert.Equal(t, valueType, logrecord.LogEntryTypeChunked, "unexpected entry type")
+	engine.rotateMemTableNoFlush()
+	valueType, ok = engine.getEntryType([]byte(chunkedKey))
+	assert.True(t, ok, "getEntryType operation should succeed")
+	assert.Equal(t, valueType, logrecord.LogEntryTypeChunked, "unexpected entry type")
+
+	for i := uint64(0); i < 10; i++ {
+		_, ok := engine.getEntryType([]byte(gofakeit.Name()))
+		assert.False(t, ok, "getEntryType operation should return !ok")
+	}
+
+	for rk := range rowsEntries {
+		err := engine.Put([]byte(rk), []byte(gofakeit.Name()))
+		assert.ErrorIs(t, err, ErrMisMatchKeyType)
+	}
+
+	for k := range kv {
+		err := engine.PutColumnsForRow([]byte(k), rowsEntries[k])
+		assert.ErrorIs(t, err, ErrMisMatchKeyType)
+	}
 }
