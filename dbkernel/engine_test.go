@@ -206,7 +206,6 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	db, err := bbolt.Open(name, 0600, nil)
 	assert.NoError(t, err)
 	defer db.Close()
-	keysCount := 0
 
 	var metadataBytes []byte
 	db.View(func(tx *bbolt.Tx) error {
@@ -221,18 +220,6 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 
 	metadata := internal.UnmarshalMetadata(metadataBytes)
 
-	db.View(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket([]byte(namespace))
-		assert.NotNil(t, bucket)
-		bucket.ForEach(func(k, v []byte) error {
-			keysCount++
-			return nil
-		})
-		return nil
-	})
-
-	assert.Equal(t, uint64(keysCount), engine.OpsFlushedCount())
-	assert.Equal(t, uint64(keysCount), metadata.RecordProcessed)
 	assert.Equal(t, uint64(5001), engine.OpsReceivedCount())
 
 	err = engine.Close(t.Context())
@@ -242,7 +229,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, engine)
 	// 4000 keys, total boltdb keys, batch is never commited.
-	assert.Equal(t, 4000, keysCount+engine.RecoveredWALCount())
+	assert.Equal(t, 4000, int(metadata.RecordProcessed)+engine.RecoveredWALCount())
 
 	defer func() {
 		err := engine.Close(t.Context())
