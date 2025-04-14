@@ -9,7 +9,7 @@ import (
 
 func TestRegisterGRPCSMethods(t *testing.T) {
 	methodTypes := RegisterGRPCSMethods(healthpb.Health_ServiceDesc)
-	
+
 	expected := map[string]string{
 		"/grpc.health.v1.Health/Check": "unary",
 		"/grpc.health.v1.Health/Watch": "server_stream",
