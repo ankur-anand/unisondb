@@ -13,24 +13,26 @@ const (
 	unary        = "unary"
 )
 
-func RegisterGRPCSMethods(server *grpc.Server) map[string]string {
+func RegisterGRPCSMethods(services ...grpc.ServiceDesc) map[string]string {
 	methodTypes := make(map[string]string)
+	for _, svc := range services {
+		for _, m := range svc.Methods {
+			fullMethod := fmt.Sprintf("/%s/%s", svc.ServiceName, m.MethodName)
+			methodTypes[fullMethod] = unary
+		}
+		for _, s := range svc.Streams {
+			fullMethod := fmt.Sprintf("/%s/%s", svc.ServiceName, s.StreamName)
 
-	for svc, info := range server.GetServiceInfo() {
-		for _, method := range info.Methods {
-			fullMethod := fmt.Sprintf("/%s/%s", svc, method.Name)
-
-			methodType := unary
-			if method.IsClientStream && method.IsServerStream {
+			methodType := serverStream
+			if s.ClientStreams && s.ServerStreams {
 				methodType = bidiStream
-			} else if method.IsClientStream {
+			} else if s.ClientStreams {
 				methodType = clientStream
-			} else if method.IsServerStream {
+			} else if s.ServerStreams {
 				methodType = serverStream
 			}
 			methodTypes[fullMethod] = methodType
 		}
 	}
-
 	return methodTypes
 }
