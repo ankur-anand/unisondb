@@ -11,8 +11,13 @@ const (
 	rowColumnValue byte = 253
 )
 
+type ValueEntryType byte
+
 const (
-	DefaultFlushSizeThreshold = 32
+	UnknownValueEntry ValueEntryType = iota
+	KeyValueValueEntry
+	ChunkedValueEntry
+	RowColumnValueEntry
 )
 
 const (

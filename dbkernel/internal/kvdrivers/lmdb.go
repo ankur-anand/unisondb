@@ -454,6 +454,43 @@ func (l *LmdbEmbed) deleteChunk(key []byte, storedValue []byte, txn *lmdb.Txn) e
 	return nil
 }
 
+// GetValueType returns the kind of value associated with the key if any.
+func (l *LmdbEmbed) GetValueType(key []byte) (ValueEntryType, error) {
+	rowKey := []byte(string(key) + rowKeySeperator)
+	entryType := UnknownValueEntry
+
+	err := l.env.View(func(txn *lmdb.Txn) error {
+		storedValue, err := txn.Get(l.db, key)
+		if err != nil {
+			if lmdb.IsNotFound(err) {
+				if storedValue, err = txn.Get(l.db, rowKey); lmdb.IsNotFound(err) {
+					return ErrKeyNotFound
+				}
+			}
+			if err != nil {
+				return fmt.Errorf("failed to get key %s: %w", string(key), err)
+			}
+		}
+
+		if len(storedValue) == 0 {
+			return ErrRecordCorrupted
+		}
+		flag := storedValue[0]
+		switch flag {
+		case kvValue:
+			entryType = KeyValueValueEntry
+		case chunkedValue:
+			entryType = ChunkedValueEntry
+		case rowColumnValue:
+			entryType = RowColumnValueEntry
+		}
+
+		return nil
+	})
+
+	return entryType, err
+}
+
 // Get retrieves a value associated with a key within a specific namespace.
 func (l *LmdbEmbed) Get(key []byte) ([]byte, error) {
 	rowKey := []byte(string(key) + rowKeySeperator)
