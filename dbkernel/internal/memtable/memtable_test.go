@@ -201,8 +201,9 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		assert.NoError(t, err)
 		memTable.SetOffset(lastOffset)
 
-		valueType := memTable.GetEntryTpe([]byte(key))
+		valueType, ok := memTable.GetEntryTpe([]byte(key))
 		assert.Equal(t, logrecord.LogEntryTypeChunked, valueType, "unexpected entry type")
+		assert.True(t, ok, "expected entry type to exist")
 
 		count, err := memTable.Flush(t.Context())
 		assert.NoError(t, err, "failed to processBatch")
@@ -477,9 +478,9 @@ func TestRow_KeysPut_Delete_GetRows_Flush(t *testing.T) {
 	BuildColumnMap(buildColumns, values)
 	assert.Equal(t, buildColumns, addEntries, "new added entry should be added")
 
-	valueType := mmTable.GetEntryTpe([]byte(randomRow))
+	valueType, ok := mmTable.GetEntryTpe([]byte(randomRow))
 	assert.Equal(t, valueType, logrecord.LogEntryTypeRow, "unexpected entry type")
-
+	assert.True(t, ok, "expected entry type to be logrecord.LogEntryTypeRow")
 	value, err = db.GetRowColumns([]byte(randomRow), nil)
 	assert.NoError(t, err, "get should not fail")
 	assert.Equal(t, len(value), len(addEntries), "unexpected number of column values")
@@ -560,9 +561,15 @@ func TestMemTable_GetEntryTpe(t *testing.T) {
 	mmTable, _ := setupMemTableWithLMDB(t, 1<<20)
 
 	key := []byte("test-key")
-	val := y.ValueStruct{Value: []byte("test-value"), Meta: internal.EntryTypeKV}
+	val := y.ValueStruct{Value: []byte("test-value"), Meta: internal.LogOperationInsert,
+		UserMeta: internal.EntryTypeKV}
 	err := mmTable.Put(key, val)
 	assert.NoError(t, err, "unexpected error on Put")
-	value := mmTable.GetEntryTpe(key)
+	value, ok := mmTable.GetEntryTpe(key)
 	assert.Equal(t, value, logrecord.LogEntryTypeKV)
+	assert.True(t, ok)
+
+	nValue, ok := mmTable.GetEntryTpe([]byte("no"))
+	assert.Equal(t, nValue, logrecord.LogEntryTypeKV)
+	assert.False(t, ok)
 }

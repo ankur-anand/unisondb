@@ -126,13 +126,16 @@ func (table *MemTable) Get(key []byte) y.ValueStruct {
 	return table.skipList.Get(y.KeyWithTs(key, 0))
 }
 
-func (table *MemTable) GetEntryTpe(key []byte) logrecord.LogEntryType {
+func (table *MemTable) GetEntryTpe(key []byte) (logrecord.LogEntryType, bool) {
 	_, ok := table.rowEntryKeys[xxhash.Sum64(key)]
 	if ok {
-		return logrecord.LogEntryTypeRow
+		return logrecord.LogEntryTypeRow, true
 	}
 	entry := table.skipList.Get(y.KeyWithTs(key, 0))
-	return logrecord.LogEntryType(entry.UserMeta)
+	if entry.Meta == 0 {
+		return logrecord.LogEntryType(entry.UserMeta), false
+	}
+	return logrecord.LogEntryType(entry.UserMeta), true
 }
 
 // GetRowYValue returns all the mem table entries associated with the provided rowKey.
