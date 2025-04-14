@@ -1,7 +1,6 @@
 package dbkernel
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -49,13 +48,21 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 		return err
 	}
 
-	if !bytes.Equal(receivedOffset, offset.Encode()) {
-		slog.Error("[dbkernel.replica.handler] expected offset of wal entry didn't matched the received offset",
-			"received", wal.DecodeOffset(receivedOffset), "inserted", offset)
+	if !isEqualOffset(offset, DecodeOffset(receivedOffset)) {
+		slog.Error("[unisondb.dbkernel] expected offset of wal entry didn't matched the received offset",
+			"received", wal.DecodeOffset(receivedOffset), "inserted", offset, "entry_size", len(encodedWal))
 		return ErrInvalidOffset
 	}
 
 	return wh.handleRecord(decoded, offset)
+}
+
+func isEqualOffset(local, remote *Offset) bool {
+	// IMP: not to validate the chunk size.
+	if local.SegmentId == remote.SegmentId && local.BlockNumber == remote.BlockNumber && local.ChunkOffset == remote.ChunkOffset {
+		return true
+	}
+	return false
 }
 
 func (wh *ReplicaWALHandler) handleRecord(record *logrecord.LogRecord, offset *Offset) error {
