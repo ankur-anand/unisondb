@@ -11,6 +11,7 @@ import (
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
+	"github.com/cespare/xxhash/v2"
 	"github.com/dgraph-io/badger/v4/skl"
 	"github.com/dgraph-io/badger/v4/y"
 )
@@ -44,6 +45,8 @@ type MemTable struct {
 
 	chunkedFlushed int
 	tsGenerator    *tsGenerator
+	// no pointer no gc.
+	rowEntryKeys map[uint64]struct{}
 }
 
 // NewMemTable returns an initialized mem-table.
@@ -56,6 +59,7 @@ func NewMemTable(capacity int64, wIO *wal.WalIO, namespace string,
 		namespace:     namespace,
 		newTxnBatcher: newTxnBatcher,
 		tsGenerator:   &tsGenerator{},
+		rowEntryKeys:  make(map[uint64]struct{}),
 	}
 }
 
@@ -85,6 +89,7 @@ func (table *MemTable) Put(key []byte, val y.ValueStruct) error {
 		// multiple column entity in different ops of transaction.
 		ts := table.tsGenerator.Next()
 		putKey = y.KeyWithTs(key, ts)
+		table.rowEntryKeys[xxhash.Sum64(key)] = struct{}{}
 	}
 
 	table.opCount++
@@ -119,6 +124,18 @@ func (table *MemTable) GetFirstOffset() *wal.Offset {
 
 func (table *MemTable) Get(key []byte) y.ValueStruct {
 	return table.skipList.Get(y.KeyWithTs(key, 0))
+}
+
+func (table *MemTable) GetEntryTpe(key []byte) (logrecord.LogEntryType, bool) {
+	_, ok := table.rowEntryKeys[xxhash.Sum64(key)]
+	if ok {
+		return logrecord.LogEntryTypeRow, true
+	}
+	entry := table.skipList.Get(y.KeyWithTs(key, 0))
+	if entry.Meta == 0 {
+		return logrecord.LogEntryType(entry.UserMeta), false
+	}
+	return logrecord.LogEntryType(entry.UserMeta), true
 }
 
 // GetRowYValue returns all the mem table entries associated with the provided rowKey.

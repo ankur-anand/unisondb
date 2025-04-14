@@ -49,6 +49,7 @@ type BtreeReader interface {
 	// Snapshot writes the complete database to the provided io writer.
 	Snapshot(w io.Writer) error
 	RetrieveMetadata(key []byte) ([]byte, error)
+	GetValueType(key []byte) (kvdrivers.ValueEntryType, error)
 }
 
 // BTreeStore combines the BtreeWriter and BtreeReader interfaces.

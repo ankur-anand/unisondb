@@ -398,6 +398,42 @@ func (b *BoltDBEmbed) deleteChunk(key []byte, storedValue []byte, bucket *bbolt.
 	return bucket.Delete(key)
 }
 
+// GetValueType returns the kind of value associated with the key if any.
+func (b *BoltDBEmbed) GetValueType(key []byte) (ValueEntryType, error) {
+	rowKey := []byte(string(key) + rowKeySeperator)
+	entryType := UnknownValueEntry
+
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(b.namespace)
+		if bucket == nil {
+			return ErrBucketNotFound
+		}
+
+		storedValue := bucket.Get(key)
+		if storedValue == nil {
+			// check if Column Value type
+			storedValue = bucket.Get(rowKey)
+			if storedValue == nil {
+				return ErrKeyNotFound
+			}
+		}
+
+		flag := storedValue[0]
+		switch flag {
+		case kvValue:
+			entryType = KeyValueValueEntry
+		case chunkedValue:
+			entryType = ChunkedValueEntry
+		case rowColumnValue:
+			entryType = RowColumnValueEntry
+		}
+
+		return nil
+	})
+
+	return entryType, err
+}
+
 // Get retrieves a value associated with a key within a specific namespace.
 func (b *BoltDBEmbed) Get(key []byte) ([]byte, error) {
 	rowKey := []byte(string(key) + rowKeySeperator)
