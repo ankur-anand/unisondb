@@ -417,7 +417,7 @@ func (b *BoltDBEmbed) GetValueType(key []byte) (ValueEntryType, error) {
 				return ErrKeyNotFound
 			}
 		}
-		
+
 		flag := storedValue[0]
 		switch flag {
 		case kvValue:
