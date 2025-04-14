@@ -54,6 +54,7 @@ type btreeReader interface {
 	// SnapShot writes the complete database to the provided io writer.
 	Snapshot(w io.Writer) error
 	RetrieveMetadata(key []byte) ([]byte, error)
+	GetValueType(key []byte) (kvdrivers.ValueEntryType, error)
 }
 
 // bTreeStore combines the btreeWriter and btreeReader interfaces.
@@ -152,6 +153,10 @@ func getTestSuites(factory *testSuite) []suite {
 		{
 			name:    "txn_set_delete_nm_rows_columns",
 			runFunc: factory.TestTxn_SetGetDelete_NMRowColumns,
+		},
+		{
+			name:    "get_value_type",
+			runFunc: factory.Test_GetValueType,
 		},
 	}
 }
@@ -1095,4 +1100,77 @@ func (s *testSuite) TestTxn_SetGetDelete_NMRowColumns(t *testing.T) {
 		_, err = s.store.GetRowColumns([]byte(rowKey1), nil)
 		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to fetch row columns")
 	})
+}
+
+func (s *testSuite) Test_GetValueType(t *testing.T) {
+	rowKey := "rows_key_get_value_type"
+	entries := make(map[string][]byte)
+	for i := 0; i < 1000; i++ {
+		key := gofakeit.UUID()
+		value := gofakeit.LetterN(uint(1000))
+		entries[key] = []byte(value)
+	}
+
+	rowKeys := [][]byte{[]byte(rowKey)}
+	columEntriesPerRow := make([]map[string][]byte, 0)
+	columEntriesPerRow = append(columEntriesPerRow, entries)
+
+	assert.NoError(t, s.store.SetManyRowColumns(rowKeys, columEntriesPerRow), "Failed to set row columns")
+
+	ChunkedKey := []byte("chunked_key_getvalue_type")
+	chunks := [][]byte{
+		[]byte("chunk_1_"),
+		[]byte("chunk_2_"),
+		[]byte("chunk_3"),
+	}
+
+	var checksum uint32
+	for i := 0; i < len(chunks); i++ {
+		checksum = crc32.Update(checksum, crc32.IEEETable, chunks[i])
+	}
+
+	err := s.store.SetChunks(ChunkedKey, chunks, checksum)
+	assert.NoError(t, err, "Failed to insert chunked value")
+
+	key := []byte("test_key_get_value_type")
+	value := []byte("hello world")
+	err = s.store.Set(key, value)
+	assert.NoError(t, err, "Failed to insert value")
+
+	tCases := []struct {
+		Name      string
+		Key       []byte
+		ValueType kvdrivers.ValueEntryType
+		Error     error
+	}{
+		{
+			Name:      "get_value_type_KV",
+			Key:       key,
+			ValueType: kvdrivers.KeyValueValueEntry,
+			Error:     nil,
+		}, {
+			Name:      "get_value_type_row",
+			Key:       []byte(rowKey),
+			ValueType: kvdrivers.RowColumnValueEntry,
+			Error:     nil,
+		}, {
+			Name:      "get_value_type_chunked",
+			Key:       ChunkedKey,
+			ValueType: kvdrivers.ChunkedValueEntry,
+			Error:     nil,
+		}, {
+			Name:      "get_value_type_nonexistent",
+			Key:       []byte("get_value_type_nonexistent"),
+			ValueType: kvdrivers.UnknownValueEntry,
+			Error:     kvdrivers.ErrKeyNotFound,
+		},
+	}
+
+	for _, tc := range tCases {
+		t.Run(tc.Name, func(t *testing.T) {
+			value, err := s.store.GetValueType(tc.Key)
+			assert.Equal(t, tc.ValueType, value, "GetValueType returned wrong value")
+			assert.Equal(t, tc.Error, err, "GetValueType returned wrong error")
+		})
+	}
 }
