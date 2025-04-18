@@ -2,6 +2,7 @@ package relayer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync/atomic"
@@ -22,15 +23,15 @@ type Streamer interface {
 
 var (
 	segmentLagGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: "unisondb",
-		Subsystem: "relayer",
+		Namespace: promNamespace,
+		Subsystem: promSubsystem,
 		Name:      "wal_segment_lag",
 		Help:      "Difference in segment IDs between upstream and local WAL replica",
 	}, []string{"namespace"})
 
 	segmentLagThresholdGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: "unisondb",
-		Subsystem: "relayer",
+		Namespace: promNamespace,
+		Subsystem: promSubsystem,
 		Name:      "wal_segment_lag_threshold",
 		Help:      "Configured segment lag threshold for the WAL relayer per namespace",
 	}, []string{"namespace"})
@@ -45,7 +46,7 @@ func (w walIOHandler) Write(data *v1.WALRecord) error {
 }
 
 var (
-	ErrSegmentLagThresholdExceeded = fmt.Errorf("segment lag threshold exceeded")
+	ErrSegmentLagThresholdExceeded = errors.New("segment lag threshold exceeded")
 )
 
 // Relayer relays WAL record from the upstream over the provided grpc connection for the given namespace.

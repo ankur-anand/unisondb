@@ -8,6 +8,7 @@ require (
 	github.com/ankur-anand/wal v0.0.4
 	github.com/bits-and-blooms/bloom/v3 v3.7.0
 	github.com/brianvoe/gofakeit/v7 v7.2.1
+	github.com/cenkalti/backoff/v5 v5.0.2
 	github.com/cespare/xxhash/v2 v2.3.0
 	github.com/dgraph-io/badger/v4 v4.6.0
 	github.com/dustin/go-humanize v1.0.1
@@ -24,6 +25,7 @@ require (
 	go.etcd.io/bbolt v1.4.0
 	go.opentelemetry.io/otel/trace v1.35.0
 	golang.org/x/sync v0.13.0
+	golang.org/x/time v0.11.0
 	google.golang.org/grpc v1.71.1
 	google.golang.org/protobuf v1.36.6
 )
