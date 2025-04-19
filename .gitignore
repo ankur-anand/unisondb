@@ -25,3 +25,5 @@ venv
 *.csv
 *.txt
 *.prof
+certs
+
