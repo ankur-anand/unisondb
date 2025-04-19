@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"slices"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
@@ -145,9 +146,11 @@ func (table *MemTable) GetRowYValue(rowKey []byte) []y.ValueStruct {
 	defer func(it *skl.Iterator) {
 		_ = it.Close()
 	}(it)
-	for it.Seek(rowKey); it.Valid(); it.Next() {
+	seekKey := y.KeyWithTs(rowKey, math.MaxUint64)
+	for it.Seek(seekKey); it.Valid(); it.Next() {
 		key := it.Key()
-		if !bytes.HasPrefix(key, rowKey) {
+		parsed := y.ParseKey(key)
+		if !bytes.Equal(parsed, rowKey) {
 			break
 		}
 
