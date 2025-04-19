@@ -3,7 +3,6 @@ package fuzzer
 import (
 	"context"
 	"log/slog"
-	"math"
 	"math/rand"
 	"sync"
 	"time"
@@ -62,19 +61,15 @@ func randColumnName() string {
 	return columnPrefix + string(randKey(4))
 }
 
-func (kp *KeyPool) Get(n int, zipf *rand.Zipf) [][]byte {
+func (kp *KeyPool) Get(n int) [][]byte {
 	kp.mu.RLock()
 	defer kp.mu.RUnlock()
 
 	out := make([][]byte, 0, n)
 	for i := 0; i < n; i++ {
 		var idx int
-		// use Zipfian selection if enabled
-		if zipf != nil {
-			idx = int(zipf.Uint64())
-		} else {
-			idx = rand.Intn(len(kp.keys))
-		}
+		idx = rand.Intn(len(kp.keys))
+
 		out = append(out, kp.keys[idx])
 	}
 	return out
@@ -141,7 +136,7 @@ func (cp *ColumnPool) Mutate() {
 }
 
 // FuzzEngineOps concurrently runs fuzzing operations against an Engine using multiple worker goroutines.
-func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int, enableZipf bool,
+func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 	numWorkers int, stats *FuzzStats, namespace string) {
 	keyPool := NewKeyPool(500, 5, 256)
 	rowKeyPool := NewKeyPool(500, 5, 256)
@@ -166,9 +161,6 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int, enableZipf bool
 		}
 	})
 
-	globalRNG := rand.New(rand.NewSource(time.Now().UnixNano()))
-	var rngMu sync.Mutex
-
 	workerRate := float64(opsPerSec) / float64(numWorkers)
 	workerInterval := time.Duration(float64(time.Second) / workerRate)
 
@@ -178,23 +170,13 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int, enableZipf bool
 			ticker := time.NewTicker(workerInterval)
 			defer ticker.Stop()
 
-			// 👇 Each worker gets its own Zipf generator
-			var localZipf *rand.Zipf
-			if enableZipf {
-				rngMu.Lock()
-				seed := globalRNG.Int63()
-				rngMu.Unlock()
-				localRand := rand.New(rand.NewSource(seed))
-				localZipf = rand.NewZipf(localRand, 1.2, math.MaxFloat64, uint64(keyPool.size-1))
-			}
-
 			for {
 				select {
 				case <-ctx.Done():
 					slog.Info("[unisondb.fuzzer] Worker shutting down", "workerID", workerID)
 					return nil
 				case <-ticker.C:
-					keys := keyPool.Get(3, localZipf)
+					keys := keyPool.Get(3)
 					// 1KB, 10KB, 50KB, 100KB
 					valueSizes := []int{1024, 10 * 1024, 50 * 1024, 100 * 1024}
 
@@ -204,7 +186,7 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int, enableZipf bool
 						values[i] = []byte(gofakeit.LetterN(uint(sz)))
 					}
 
-					rowKey := rowKeyPool.Get(1, localZipf)[0]
+					rowKey := rowKeyPool.Get(1)[0]
 					columns := columnPool.Get(rand.Intn(5) + 1)
 
 					ops := []struct {

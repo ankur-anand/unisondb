@@ -68,7 +68,7 @@ func TestFuzzEngineOps_Basic(t *testing.T) {
 	defer cancel()
 
 	stats := NewFuzzStats()
-	FuzzEngineOps(ctx, engine, 50, true, 3, stats, "test")
+	FuzzEngineOps(ctx, engine, 50, 3, stats, "test")
 
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
