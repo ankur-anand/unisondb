@@ -151,7 +151,6 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 		for {
 			select {
 			case <-ctx.Done():
-				slog.Info("Mutator shutting down")
 				return nil
 			case <-mutTicker.C:
 				keyPool.Mutate()
@@ -173,7 +172,8 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 			for {
 				select {
 				case <-ctx.Done():
-					slog.Info("[unisondb.fuzzer] Worker shutting down", "workerID", workerID)
+					slog.Debug("[unisondb.fuzzer] Worker shutting down",
+						"workerID", workerID, "namespace", namespace)
 					return nil
 				case <-ticker.C:
 					keys := keyPool.Get(3)
@@ -214,5 +214,5 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 	}
 
 	_ = g.Wait()
-	slog.Info("[unisondb.fuzzer] FuzzEngineOps: completed fuzzing")
+	slog.Info("[unisondb.fuzzer] FuzzEngineOps: completed fuzzing", "namespace", namespace)
 }
