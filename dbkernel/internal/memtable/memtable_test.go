@@ -573,3 +573,54 @@ func TestMemTable_GetEntryTpe(t *testing.T) {
 	assert.Equal(t, nValue, logrecord.LogEntryTypeKV)
 	assert.False(t, ok)
 }
+
+func TestGetRowYValue_ShortKeysShouldNotPanic(t *testing.T) {
+	mmTable, _ := setupMemTableWithLMDB(t, 1<<20)
+
+	shortKeys := [][]byte{
+		[]byte("a"),
+		[]byte("ab"),
+		[]byte("abc"),
+		[]byte("abcd"),
+		[]byte("abcde"),
+		[]byte("abcdef"),
+		[]byte("kp7y7d"),
+	}
+
+	for _, key := range shortKeys {
+		val := y.ValueStruct{Value: key,
+			UserMeta: internal.EntryTypeRow, Meta: internal.LogOperationInsert}
+		err := mmTable.Put(key, val)
+		assert.NoError(t, err, "Put should not fail for key: %s", key)
+	}
+
+	for _, key := range shortKeys {
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Errorf("GetRowYValue panicked for key %s: %v", key, r)
+				}
+			}()
+
+			vals := mmTable.GetRowYValue(key)
+			assert.Equal(t, 1, len(vals))
+			assert.NotNil(t, vals, "Returned value slice should not be nil for key: %s", key)
+		}()
+	}
+}
+
+func TestSamePrefix_RowKey(t *testing.T) {
+	mmTable, _ := setupMemTableWithLMDB(t, 1<<20)
+
+	val := y.ValueStruct{
+		Value:    []byte("value"),
+		UserMeta: internal.EntryTypeRow,
+		Meta:     internal.LogOperationInsert,
+	}
+
+	_ = mmTable.Put([]byte("xyzmncabc"), val)
+	_ = mmTable.Put([]byte("xyzmncabcdef"), val)
+	values := mmTable.GetRowYValue([]byte("xyzmncabc"))
+	assert.NotNil(t, values, "Returned value slice should not be nil for key: %s", val)
+	assert.Equal(t, 1, len(values), "only one row ")
+}
