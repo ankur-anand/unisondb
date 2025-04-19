@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -123,17 +124,23 @@ func (ms *Server) SetupStorageConfig(ctx context.Context) error {
 	storeConfig := dbkernel.NewDefaultEngineConfig()
 
 	if ms.cfg.Storage.SegmentSize != "" {
-		value := etc.ParseSize(ms.cfg.Storage.SegmentSize)
+		original := etc.ParseSize(ms.cfg.Storage.SegmentSize)
+		value := clampInt64(original, 4<<20, math.MaxInt64)
+		logClamped("SegmentSize", original, value)
 		storeConfig.WalConfig.SegmentSize = value
 	}
 
 	if ms.cfg.Storage.BytesPerSync != "" {
-		value := etc.ParseSize(ms.cfg.Storage.BytesPerSync)
-		storeConfig.WalConfig.BytesPerSync = uint32(value)
+		original := etc.ParseSize(ms.cfg.Storage.BytesPerSync)
+		value := clampToUint32(original, 512)
+		logClamped("BytesPerSync", original, value)
+		storeConfig.WalConfig.BytesPerSync = value
 	}
 
 	if ms.cfg.Storage.ArenaSize != "" {
-		value := etc.ParseSize(ms.cfg.Storage.ArenaSize)
+		original := etc.ParseSize(ms.cfg.Storage.ArenaSize)
+		value := clampInt64(original, 1<<20, math.MaxInt64)
+		logClamped("ArenaSize", original, value)
 		storeConfig.ArenaSize = value
 	}
 
@@ -399,4 +406,37 @@ func buildNamespaceSegmentLagMap(cfg *config.Config) (map[string]int, error) {
 		}
 	}
 	return nsLagMap, nil
+}
+
+func clampInt64(value, min, max int64) int64 {
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
+}
+
+func clampToUint32(value int64, min uint32) uint32 {
+	if value < 0 {
+		return min
+	}
+	if value > int64(math.MaxUint32) {
+		return math.MaxUint32
+	}
+	if value < int64(min) {
+		return min
+	}
+	return uint32(value)
+}
+
+func logClamped(field string, original, clamped any) {
+	if original != clamped {
+		slog.Warn("[unisondb.cliapp] Storage configuration value clamped",
+			"field", field,
+			"original", original,
+			"clamped", clamped,
+		)
+	}
 }
