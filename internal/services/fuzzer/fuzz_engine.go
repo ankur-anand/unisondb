@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/brianvoe/gofakeit/v7"
+	"golang.org/x/sync/errgroup"
 )
 
 type Engine interface {
@@ -146,20 +147,24 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int, enableZipf bool
 	rowKeyPool := NewKeyPool(500, 5, 256)
 	columnPool := NewColumnPool(50)
 
-	go func() {
+	g, ctx := errgroup.WithContext(ctx)
+
+	g.Go(func() error {
 		mutTicker := time.NewTicker(1 * time.Second)
 		defer mutTicker.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
-				return
+				slog.Info("Mutator shutting down")
+				return nil
 			case <-mutTicker.C:
 				keyPool.Mutate()
 				rowKeyPool.Mutate()
 				columnPool.Mutate()
 			}
 		}
-	}()
+	})
 
 	globalRNG := rand.New(rand.NewSource(time.Now().UnixNano()))
 	var rngMu sync.Mutex
@@ -167,12 +172,9 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int, enableZipf bool
 	workerRate := float64(opsPerSec) / float64(numWorkers)
 	workerInterval := time.Duration(float64(time.Second) / workerRate)
 
-	var wg sync.WaitGroup
-	wg.Add(numWorkers)
-
 	for i := 0; i < numWorkers; i++ {
-		go func(workerID int) {
-			defer wg.Done()
+		workerID := i
+		g.Go(func() error {
 			ticker := time.NewTicker(workerInterval)
 			defer ticker.Stop()
 
@@ -190,7 +192,7 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int, enableZipf bool
 				select {
 				case <-ctx.Done():
 					slog.Info("[unisondb.fuzzer] Worker shutting down", "workerID", workerID)
-					return
+					return nil
 				case <-ticker.C:
 					keys := keyPool.Get(3, localZipf)
 					// 1KB, 10KB, 50KB, 100KB
@@ -226,10 +228,9 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int, enableZipf bool
 					}
 				}
 			}
-		}(i)
+		})
 	}
 
-	<-ctx.Done()
-	wg.Wait()
-	slog.Info("FuzzEngineOps: completed fuzzing")
+	_ = g.Wait()
+	slog.Info("[unisondb.fuzzer] FuzzEngineOps: completed fuzzing")
 }
