@@ -151,7 +151,6 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 		for {
 			select {
 			case <-ctx.Done():
-				slog.Info("Mutator shutting down")
 				return nil
 			case <-mutTicker.C:
 				keyPool.Mutate()

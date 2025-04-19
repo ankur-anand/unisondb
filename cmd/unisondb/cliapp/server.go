@@ -16,6 +16,7 @@ import (
 	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/etc"
 	"github.com/ankur-anand/unisondb/internal/grpcutils"
+	"github.com/ankur-anand/unisondb/internal/services/fuzzer"
 	"github.com/ankur-anand/unisondb/internal/services/kvstore"
 	"github.com/ankur-anand/unisondb/internal/services/relayer"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
@@ -40,6 +41,7 @@ import (
 var (
 	modeReplicator = "replicator"
 	modeRelayer    = "relayer"
+	modeFuzzer     = "fuzzer"
 )
 
 var kAlv = keepalive.EnforcementPolicy{
@@ -65,6 +67,7 @@ type Server struct {
 	pl                    *slog.Logger
 	clientGrpcConnections map[string]*grpc.ClientConn
 	relayer               []relayerWithInfo
+	fuzzStats             *fuzzer.FuzzStats
 
 	// callbacks when shutdown.
 	DeferCallback []func(ctx context.Context)
@@ -104,6 +107,8 @@ func (ms *Server) InitTelemetry(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+
+	ms.fuzzStats = fuzzer.NewFuzzStats()
 
 	sink, err := hashiprom.NewPrometheusSink()
 	if err != nil {
@@ -278,7 +283,7 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 func (ms *Server) SetupHTTPServer(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", promhttp.Handler())
-
+	mux.Handle("GET /fuzzstats", ms.fuzzStats)
 	ms.httpServer = &http.Server{
 		WriteTimeout: time.Second * 15,
 		ReadTimeout:  time.Second * 15,
@@ -350,9 +355,10 @@ func (ms *Server) StartRelayer(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	g, ctx := errgroup.WithContext(ctx)
 
 	for _, r := range ms.relayer {
-		go func() {
+		g.Go(func() error {
 			relayer.RunLoop(ctx, relayer.LoopOptions{
 				Namespace:      r.namespace,
 				Run:            r.relayer.StartRelay,
@@ -360,10 +366,42 @@ func (ms *Server) StartRelayer(ctx context.Context) error {
 				Classify:       relayer.DefaultClassifier,
 				OnPermanentErr: func(err error) {},
 			})
-		}()
+			return nil
+		})
 	}
 
-	return nil
+	return g.Wait()
+}
+
+func (ms *Server) RunFuzzer(ctx context.Context) error {
+	if ms.mode != modeFuzzer {
+		return nil
+	}
+
+	if ms.cfg.FuzzConfig.OpsPerNamespace == 0 || ms.cfg.FuzzConfig.WorkersPerNamespace == 0 {
+		return fmt.Errorf("[unisondb.cliapp] invalid fuzz config: OpsPerNamespace=%d, WorkersPerNamespace=%d",
+			ms.cfg.FuzzConfig.OpsPerNamespace,
+			ms.cfg.FuzzConfig.WorkersPerNamespace,
+		)
+	}
+
+	g, ctx := errgroup.WithContext(ctx)
+
+	for _, engine := range ms.engines {
+		engine := engine
+		g.Go(func() error {
+			fuzzer.FuzzEngineOps(ctx,
+				engine,
+				ms.cfg.FuzzConfig.OpsPerNamespace,
+				ms.cfg.FuzzConfig.WorkersPerNamespace,
+				ms.fuzzStats,
+				engine.Namespace(),
+			)
+			return nil
+		})
+	}
+
+	return g.Wait()
 }
 
 func buildNamespaceGrpcClients(cfg config.Config) (map[string]*grpc.ClientConn, error) {

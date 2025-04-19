@@ -75,7 +75,7 @@ func TestFuzzStats_HandleMetrics(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	rec := httptest.NewRecorder()
 
-	stats.HandleMetrics(rec, req)
+	stats.ServeHTTP(rec, req)
 
 	resp := rec.Result()
 	defer resp.Body.Close()

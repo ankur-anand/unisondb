@@ -57,6 +57,13 @@ func main() {
 					return Run(c.Context, c.String("config"), c.String("env"), "relayer")
 				},
 			},
+			{
+				Name:  "fuzzer",
+				Usage: "Run in fuzzer mode, (should only be used for testing)",
+				Action: func(c *cli.Context) error {
+					return Run(c.Context, c.String("config"), c.String("env"), "fuzzer")
+				},
+			},
 		},
 	}
 
@@ -98,6 +105,7 @@ func Run(_ context.Context, configPath, env, mode string) error {
 		srv.RunGrpc,
 		srv.RunHTTP,
 		srv.StartRelayer,
+		srv.RunFuzzer,
 	}
 
 	g, groupCtx := errgroup.WithContext(ctx)

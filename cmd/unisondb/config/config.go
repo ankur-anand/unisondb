@@ -23,6 +23,7 @@ type Config struct {
 	RelayConfigs map[string]RelayConfig `toml:"relayer_config"`
 	LogConfig    LogConfig              `toml:"log_config"`
 	Limiter      Limiter                `toml:"limiter"`
+	FuzzConfig   FuzzConfig             `toml:"fuzz_config"`
 }
 
 type GrpcConfig struct {
@@ -59,6 +60,11 @@ type LogConfig struct {
 type Limiter struct {
 	Interval string `toml:"interval"`
 	Burst    int    `toml:"burst"`
+}
+
+type FuzzConfig struct {
+	OpsPerNamespace     int `toml:"ops_per_namespace"`
+	WorkersPerNamespace int `toml:"workers_per_namespace"`
 }
 
 func ParseLevelPercents(cfg LogConfig) (map[slog.Level]float64, error) {
