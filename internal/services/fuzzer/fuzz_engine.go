@@ -92,11 +92,9 @@ func (kp *KeyPool) Mutate() {
 		case 0:
 			newKey := randKey(rand.Intn(kp.maxLen-kp.minLen+1) + kp.minLen)
 			kp.keys[idx] = newKey
-			slog.Debug("KeyPool mutation: replaced key", "index", idx)
 		case 1:
 			dup := kp.keys[rand.Intn(len(kp.keys))]
 			kp.keys[idx] = dup
-			slog.Debug("KeyPool mutation: duplicated key", "index", idx)
 		}
 	}
 }
@@ -138,7 +136,6 @@ func (cp *ColumnPool) Mutate() {
 	for i := 0; i < mutations; i++ {
 		idx := rand.Intn(len(cp.columns))
 		cp.columns[idx] = randColumnName()
-		slog.Debug("ColumnPool mutation: changed column name", "index", idx)
 	}
 }
 
@@ -196,11 +193,15 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int, enableZipf bool
 					return
 				case <-ticker.C:
 					keys := keyPool.Get(3, localZipf)
-					values := [][]byte{
-						[]byte(gofakeit.LetterN(uint(rand.Intn(1024)))),
-						[]byte(gofakeit.LetterN(uint(rand.Intn(1024 * 500)))),
-						[]byte(gofakeit.LetterN(uint(rand.Intn(1024 * 100)))),
+					// 1KB, 10KB, 50KB, 100KB
+					valueSizes := []int{1024, 10 * 1024, 50 * 1024, 100 * 1024}
+
+					values := make([][]byte, 3)
+					for i := range values {
+						sz := valueSizes[rand.Intn(len(valueSizes))]
+						values[i] = []byte(gofakeit.LetterN(uint(sz)))
 					}
+
 					rowKey := rowKeyPool.Get(1, localZipf)[0]
 					columns := columnPool.Get(rand.Intn(5) + 1)
 
