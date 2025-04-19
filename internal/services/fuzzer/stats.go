@@ -100,7 +100,7 @@ func copyMap(m map[string]int64) map[string]int64 {
 	return c
 }
 
-func (fs *FuzzStats) HandleMetrics(w http.ResponseWriter, r *http.Request) {
+func (fs *FuzzStats) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	snapshot := fs.Snapshot()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(snapshot)
