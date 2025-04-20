@@ -14,7 +14,7 @@ type KVAlchemy struct {
 
 func NewUnisonDB(dir, namespace string) (*KVAlchemy, error) {
 	cfg := dbkernel.NewDefaultEngineConfig()
-	cfg.WalConfig.SyncInterval = 1 * time.Hour
+	cfg.WalConfig.SyncInterval = 1 * time.Second
 	engine, err := dbkernel.NewStorageEngine(dir, namespace, cfg)
 	return &KVAlchemy{
 		namespace: namespace,
