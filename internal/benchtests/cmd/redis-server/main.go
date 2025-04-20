@@ -8,6 +8,8 @@ import (
 	"log"
 	"log/slog"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"strings"
@@ -63,6 +65,10 @@ func main() {
 	}
 
 	defer se.Close()
+
+	go func() {
+		http.ListenAndServe("localhost:6060", nil)
+	}()
 
 	addr := net.JoinHostPort("", fmt.Sprintf("%d", *port))
 

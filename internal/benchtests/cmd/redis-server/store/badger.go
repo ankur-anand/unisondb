@@ -45,7 +45,7 @@ func (b *BadgerStore) Set(key, value []byte) error {
 	index := b.globalCounter.Add(1)
 	wr := logcodec.LogRecord{
 		LSN:           index,
-		HLC:           dbkernel.HLCNow(index),
+		HLC:           dbkernel.HLCNow(),
 		CRC32Checksum: crc32.ChecksumIEEE(kvEncoded),
 		OperationType: logrecord.LogOperationTypeInsert,
 		TxnState:      logrecord.TransactionStateNone,

@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/ankur-anand/kvalchemy/internal/benchtests/serialization/logrecord"
+	"github.com/ankur-anand/unisondb/internal/benchtests/serialization/logrecord"
 	flatbuffers "github.com/google/flatbuffers/go"
 	"google.golang.org/protobuf/proto"
 )
