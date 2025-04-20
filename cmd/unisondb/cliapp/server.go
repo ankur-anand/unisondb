@@ -58,7 +58,7 @@ type relayerWithInfo struct {
 type Server struct {
 	mode                  string
 	env                   string
-	grpcEnabled           bool
+	relayerGRPCEnabled    bool
 	cfg                   config.Config
 	engines               map[string]*dbkernel.Engine
 	grpcServer            *grpc.Server
@@ -73,10 +73,11 @@ type Server struct {
 	DeferCallback []func(ctx context.Context)
 }
 
-func (ms *Server) InitFromCLI(cfgPath, env, mode string) func(ctx context.Context) error {
+func (ms *Server) InitFromCLI(cfgPath, env, mode string, relayerGRPCEnabled bool) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		ms.mode = mode
 		ms.env = env
+		ms.relayerGRPCEnabled = relayerGRPCEnabled
 
 		cfgBytes, err := os.ReadFile(cfgPath)
 		if err != nil {
@@ -138,7 +139,7 @@ func (ms *Server) SetupStorageConfig(ctx context.Context) error {
 	if ms.cfg.Storage.BytesPerSync != "" {
 		original := etc.ParseSize(ms.cfg.Storage.BytesPerSync)
 		value := clampToUint32(original, 512)
-		logClamped("BytesPerSync", original, value)
+		logClamped("BytesPerSync", original, int64(value))
 		storeConfig.WalConfig.BytesPerSync = value
 	}
 
@@ -198,6 +199,11 @@ func (ms *Server) SetupRelayer(ctx context.Context) error {
 	}
 
 	for _, engine := range ms.engines {
+		conn, ok := conns[engine.Namespace()]
+		if !ok || conn == nil {
+			return fmt.Errorf("grpc client connection missing for namespace: %s", engine.Namespace())
+		}
+
 		rl := relayer.NewRelayer(engine, engine.Namespace(),
 			conns[engine.Namespace()], lagConf[engine.Namespace()], ms.pl)
 		ms.relayer = append(ms.relayer, relayerWithInfo{
@@ -210,7 +216,7 @@ func (ms *Server) SetupRelayer(ctx context.Context) error {
 }
 
 func (ms *Server) SetupGrpcServer(ctx context.Context) error {
-	if ms.mode == modeRelayer && !ms.grpcEnabled {
+	if ms.mode == modeRelayer && !ms.relayerGRPCEnabled {
 		slog.Info("[unisondb.cliapp] gRPC server disabled in relayer mode by flag/config")
 		return nil
 	}
@@ -275,6 +281,8 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 
 	ms.grpcServer = gS
 	ms.DeferCallback = append(ms.DeferCallback, func(ctx context.Context) {
+		slog.Info("[unisondb.cliapp] stopping gRPC server")
+		rep.Close()
 		gS.GracefulStop()
 	})
 	return nil
@@ -291,6 +299,7 @@ func (ms *Server) SetupHTTPServer(ctx context.Context) error {
 		Handler:      mux,
 	}
 	ms.DeferCallback = append(ms.DeferCallback, func(ctx context.Context) {
+		slog.Info("[unisondb.cliapp] stopping HTTP server")
 		err := ms.httpServer.Shutdown(ctx)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("[unisondb.cliapp] SetupHTTPServer: shutdown http server failed", "error", err)
@@ -415,12 +424,13 @@ func buildNamespaceGrpcClients(cfg config.Config) (map[string]*grpc.ClientConn, 
 		mu.Lock()
 		conn, exists := relayHashToConn[hash]
 		if !exists {
-
-			conn, err := config.NewRelayerGRPCConn(&relay)
+			var err error
+			conn, err = config.NewRelayerGRPCConn(&relay)
 			if err != nil {
 				mu.Unlock()
 				return nil, fmt.Errorf("failed to dial %s: %w", relay.UpstreamAddress, err)
 			}
+
 			relayHashToConn[hash] = conn
 		}
 		mu.Unlock()
@@ -469,7 +479,7 @@ func clampToUint32(value int64, min uint32) uint32 {
 	return uint32(value)
 }
 
-func logClamped(field string, original, clamped any) {
+func logClamped[T comparable](field string, original, clamped T) {
 	if original != clamped {
 		slog.Warn("[unisondb.cliapp] Storage configuration value clamped",
 			"field", field,

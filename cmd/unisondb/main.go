@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
 
@@ -36,7 +37,7 @@ func main() {
 			&cli.BoolFlag{
 				Name:    "grpc",
 				Aliases: []string{"G"},
-				Usage:   "Enable gRPC server",
+				Usage:   "Enable gRPC server in Relayer Mode",
 				EnvVars: []string{"UNISON_GRPC_ENABLED"},
 				Value:   false,
 			},
@@ -47,21 +48,24 @@ func main() {
 				Name:  "replicator",
 				Usage: "Run in replicator mode",
 				Action: func(c *cli.Context) error {
-					return Run(c.Context, c.String("config"), c.String("env"), "replicator")
+					return Run(c.Context, c.String("config"), c.String("env"),
+						"replicator", c.Bool("grpc"))
 				},
 			},
 			{
 				Name:  "relayer",
 				Usage: "Run in relayer mode",
 				Action: func(c *cli.Context) error {
-					return Run(c.Context, c.String("config"), c.String("env"), "relayer")
+					return Run(c.Context, c.String("config"), c.String("env"),
+						"relayer", c.Bool("grpc"))
 				},
 			},
 			{
 				Name:  "fuzzer",
 				Usage: "Run in fuzzer mode, (should only be used for testing)",
 				Action: func(c *cli.Context) error {
-					return Run(c.Context, c.String("config"), c.String("env"), "fuzzer")
+					return Run(c.Context, c.String("config"), c.String("env"),
+						"fuzzer", c.Bool("grpc"))
 				},
 			},
 		},
@@ -73,16 +77,18 @@ func main() {
 	}
 }
 
-func Run(_ context.Context, configPath, env, mode string) error {
+func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	srv := cliapp.Server{}
 
-	slog.Info("[unisondb.main] initializing", "mode", mode, "env", env)
+	slog.Info("[unisondb.main] initializing",
+		"mode", mode, "env", env,
+		"config-path", configPath)
 
 	setup := []func(context.Context) error{
-		srv.InitFromCLI(configPath, env, mode),
+		srv.InitFromCLI(configPath, env, mode, grpcEnabled),
 		srv.InitTelemetry,
 		srv.SetupStorageConfig,
 		srv.SetupStorage,
@@ -100,7 +106,7 @@ func Run(_ context.Context, configPath, env, mode string) error {
 
 	slog.Info("[unisondb.main] started", "mode", mode, "env", env)
 
-	// Run services concurrently
+	//IMP: run all the services concurrently
 	runFns := []func(context.Context) error{
 		srv.RunGrpc,
 		srv.RunHTTP,
@@ -128,10 +134,12 @@ func Run(_ context.Context, configPath, env, mode string) error {
 		slog.Info("[unisondb.main] context cancelled, initiating shutdown", "mode", mode, "env", env)
 	}
 
-	// Graceful shutdown
+	// begin graceful shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 
+	// reverse the order of shutdown
+	slices.Reverse(srv.DeferCallback)
 	for i, cb := range srv.DeferCallback {
 		func(idx int, f func(context.Context)) {
 			slog.Debug("[unisondb.main] executing shutdown callback", "index", idx)

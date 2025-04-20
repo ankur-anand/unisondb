@@ -1,0 +1,46 @@
+## Port of the http server
+http_port = 6000
+pprof_enable = true
+
+[grpc_config]
+port = 6001
+# SSL/TLS certificate paths for gRPC server
+cert_path = "../../certs/server.crt"
+key_path = "../../certs/server.key"
+ca_path = "../../certs/ca.crt"
+
+# StorageConfig stores all tunable parameters.
+[storage_config]
+base_dir = "/tmp/unisondb/relayer"   # Base directory for storage
+namespaces = ["default", "tenant_1", "tenant_2"]
+bytes_per_sync = "1MB"
+segment_size = "16MB"
+arena_size = "4MB"
+
+[fuzz_config]
+ops_per_namespace = 10
+workers_per_namespace = 2
+
+# Relayer Configuration
+[relayer_config]
+
+[relayer_config.relayer1]
+namespaces = ["default", "tenant_1", "tenant_2"]
+cert_path = "../../certs/client.crt"
+key_path = "../../certs/client.key"
+ca_path = "../../certs/ca.crt"
+upstream_address = "localhost:4001"
+segment_lag_threshold = 1
+
+[log_config]
+log_level = "info"
+
+[log_config.min_level_percents]
+debug = 0.01
+info = 1.0
+warn = 1.0
+error = 1.0
+
+[limiter]
+interval = "500ms"
+burst = 20

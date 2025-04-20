@@ -18,5 +18,5 @@ segment_size = "16MB"
 arena_size = "4MB"
 
 [fuzz_config]
-ops_per_namespace = 10
-workers_per_namespace = 2
+ops_per_namespace = 100
+workers_per_namespace = 20
