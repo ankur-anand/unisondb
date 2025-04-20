@@ -3,14 +3,23 @@ package grpcutils
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
+	"github.com/ankur-anand/unisondb/internal"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
+
+func isGracefulShutdown(err error) bool {
+	return status.Code(err) == codes.Unavailable &&
+		strings.Contains(err.Error(), internal.GracefulShutdownMsg)
+}
 
 var (
 	ErrMissingNamespaceInMetadata = errors.New("missing required metadata: x-namespace")

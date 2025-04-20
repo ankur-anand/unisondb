@@ -8,12 +8,15 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/internal"
 	"github.com/ankur-anand/unisondb/internal/grpcutils"
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/pkg/replicator"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -38,7 +41,8 @@ type GrpcStreamer struct {
 	storageEngines map[string]*dbkernel.Engine
 	dynamicTimeout time.Duration
 	v1.UnimplementedWalStreamerServiceServer
-	errGrp *errgroup.Group
+	errGrp   *errgroup.Group
+	shutdown chan struct{}
 }
 
 // NewGrpcStreamer returns an initialized GrpcStreamer that implements  grpc-based WalStreamerService.
@@ -47,7 +51,12 @@ func NewGrpcStreamer(errGrp *errgroup.Group, storageEngines map[string]*dbkernel
 		storageEngines: storageEngines,
 		dynamicTimeout: dynamicTimeout,
 		errGrp:         errGrp,
+		shutdown:       make(chan struct{}),
 	}
+}
+
+func (s *GrpcStreamer) Close() {
+	close(s.shutdown)
 }
 
 // GetLatestOffset returns the latest wal offset of the wal for the provided namespace.
@@ -166,6 +175,8 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 			if time.Since(lastReceivedRecordTime) > s.dynamicTimeout {
 				return services.ToGRPCError(namespace, reqID, method, services.ErrStreamTimeout)
 			}
+		case <-s.shutdown:
+			return status.Error(codes.Unavailable, internal.GracefulShutdownMsg)
 
 		case <-ctx.Done():
 			err := ctx.Err()

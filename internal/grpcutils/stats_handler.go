@@ -198,7 +198,7 @@ func (h *GRPCStatsHandler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 
 	case *stats.End:
 		statusCode := getStatusCode(rpcStats.Error)
-		if rpcStats.Error != nil {
+		if rpcStats.Error != nil && !isGracefulShutdown(rpcStats.Error) {
 			h.rpcErrorCounter.WithLabelValues(service, method, methodType, statusCode).Inc()
 		}
 		h.rpcInFlight.WithLabelValues(service, method, methodType).Dec()
