@@ -107,7 +107,6 @@ func (s *GrpcStreamer) StreamWalRecords(request *v1.StreamWalRecordsRequest, g g
 
 	walReceiver := make(chan []*v1.WALRecord, 2)
 	replicatorErr := make(chan error, 1)
-	defer close(walReceiver)
 
 	ctx, cancel := context.WithCancel(g.Context())
 	defer cancel()
@@ -116,8 +115,15 @@ func (s *GrpcStreamer) StreamWalRecords(request *v1.StreamWalRecordsRequest, g g
 		batchSize,
 		batchWaitTime, meta, "grpc")
 
+	// when server is closed, the goroutine would be closed upon
+	// cancel of ctx.
+	// walReceiver should be closed only when Replicate method returns.
 	s.errGrp.Go(func() error {
-		defer close(replicatorErr)
+		defer func() {
+			close(walReceiver)
+			close(replicatorErr)
+		}()
+
 		err := rpInstance.Replicate(ctx, walReceiver)
 		select {
 		case replicatorErr <- err:
