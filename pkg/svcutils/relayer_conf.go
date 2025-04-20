@@ -19,7 +19,6 @@ func BuildDefaultRelayerServiceConfigJSON() string {
 					{Service: "unisondb.streamer.v1.WalStreamerService", Method: "StreamWalRecords"},
 					{Service: "unisondb.streamer.v1.WalStreamerService", Method: "GetLatestOffset"},
 				},
-				Timeout: "10s",
 				RetryPolicy: &RetryPolicy{
 					MaxAttempts:          5,
 					InitialBackoff:       "0.2s",

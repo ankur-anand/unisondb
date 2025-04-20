@@ -95,7 +95,11 @@ func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 				slog.Warn("[unisondb.streamer.grpc.client] StreamWAL failed, retrying",
 					"namespace", c.namespace, "error", err,
 					"retry_count", retryCount)
-				time.Sleep(getJitteredBackoff(&backoff))
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(getJitteredBackoff(&backoff)):
+				}
 				continue
 			}
 			return handleStreamError(c.namespace, err)
@@ -107,7 +111,11 @@ func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 				slog.Warn("[unisondb.streamer.grpc.client] StreamWAL failed, retrying",
 					"namespace", c.namespace, "error", err,
 					"retry_count", retryCount)
-				time.Sleep(getJitteredBackoff(&backoff))
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(getJitteredBackoff(&backoff)):
+				}
 				continue
 			}
 			return err
@@ -145,7 +153,7 @@ func (c *GrpcStreamerClient) receiveWALRecords(client v1.WalStreamerService_Stre
 
 func handleStreamError(namespace string, err error) error {
 	sErr := status.Convert(err)
-	clientWalStreamErrTotal.WithLabelValues(namespace, sErr.Code().String()).Inc()
+	clientWalStreamErrTotal.WithLabelValues(namespace, "grpc", sErr.Code().String()).Inc()
 	slog.Error("[unisondb.streamer.grpc.client] Stream error", "namespace", namespace, "error", err)
 	return err
 }
