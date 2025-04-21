@@ -8,6 +8,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"sync"
 	"time"
@@ -69,6 +70,8 @@ type Server struct {
 	relayer               []relayerWithInfo
 	fuzzStats             *fuzzer.FuzzStats
 
+	pprofServer *http.Server
+
 	// callbacks when shutdown.
 	DeferCallback []func(ctx context.Context)
 }
@@ -128,6 +131,14 @@ func (ms *Server) InitTelemetry(ctx context.Context) error {
 
 func (ms *Server) SetupStorageConfig(ctx context.Context) error {
 	storeConfig := dbkernel.NewDefaultEngineConfig()
+
+	if ms.cfg.Storage.WalFsyncInterval != "" {
+		duration, err := time.ParseDuration(ms.cfg.Storage.WalFsyncInterval)
+		if err != nil {
+			return err
+		}
+		storeConfig.WalConfig.SyncInterval = duration
+	}
 
 	if ms.cfg.Storage.SegmentSize != "" {
 		original := etc.ParseSize(ms.cfg.Storage.SegmentSize)
@@ -410,7 +421,56 @@ func (ms *Server) RunFuzzer(ctx context.Context) error {
 		})
 	}
 
+	g.Go(func() error {
+		ms.fuzzStats.StartStatsMonitor(ctx, 1*time.Minute)
+		return nil
+	})
 	return g.Wait()
+}
+
+func (ms *Server) SetupPprofServer(ctx context.Context) error {
+	fmt.Println(ms.cfg.PProfConfig)
+	if !ms.cfg.PProfConfig.Enabled {
+		return nil
+	}
+	pprofServer := &http.Server{
+		Addr:         fmt.Sprintf("localhost:%d", ms.cfg.PProfConfig.Port),
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+		Handler:      http.DefaultServeMux,
+	}
+
+	ms.pprofServer = pprofServer
+
+	ms.DeferCallback = append(ms.DeferCallback, func(ctx context.Context) {
+		slog.Info("[unisondb.cliapp] shutting down pprof HTTP server")
+		if err := pprofServer.Shutdown(ctx); err != nil {
+			slog.Error("[unisondb.cliapp] failed to shutdown pprof HTTP server", "err", err)
+		}
+	})
+	return nil
+}
+
+func (ms *Server) RunPprofServer(ctx context.Context) error {
+	if !ms.cfg.PProfConfig.Enabled {
+		return nil
+	}
+	slog.Info("[unisondb.cliapp] pprof HTTP server started", "port", ms.cfg.PProfConfig.Port)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- ms.pprofServer.ListenAndServe()
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-errCh:
+		if !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	}
 }
 
 func buildNamespaceGrpcClients(cfg config.Config) (map[string]*grpc.ClientConn, error) {

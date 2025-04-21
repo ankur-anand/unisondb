@@ -82,7 +82,7 @@ func (i *Interceptor) TelemetryStreamInterceptor(srv interface{},
 		if isGracefulShutdown(err) {
 			return err
 		}
-		
+
 		i.logger.Error("[unisondb.grpc]",
 			slog.String("event_type", "rpc.stream.failed"),
 			slog.Group("grpc",

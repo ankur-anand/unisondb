@@ -1,7 +1,9 @@
 package fuzzer
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"sync"
 	"time"
@@ -25,12 +27,14 @@ type FuzzStats struct {
 	mu        sync.Mutex
 	startTime time.Time
 	stats     map[string]*internalNS
+	once      sync.Once
 }
 
 func NewFuzzStats() *FuzzStats {
 	return &FuzzStats{
 		startTime: time.Now(),
 		stats:     make(map[string]*internalNS),
+		once:      sync.Once{},
 	}
 }
 
@@ -104,4 +108,33 @@ func (fs *FuzzStats) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	snapshot := fs.Snapshot()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(snapshot)
+}
+
+func (fs *FuzzStats) StartStatsMonitor(ctx context.Context, interval time.Duration) {
+	fs.once.Do(func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				snapshot := fs.Snapshot()
+
+				for ns, stats := range snapshot {
+					if stats.OpsRate == 0 {
+						panic("Fuzzing activity stopped: ops dropped to zero for namespace: " + ns)
+					}
+					slog.Info("[unisondb.fuzzer] Fuzzing stats",
+						"namespace", ns,
+						"op_count", stats.OpCount,
+						"error_count", stats.ErrorCount,
+						"ops_rate", stats.OpsRate,
+						"uptime_secs", stats.Uptime,
+					)
+				}
+			}
+		}
+	})
 }
