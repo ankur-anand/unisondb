@@ -16,6 +16,26 @@ import (
 )
 
 func main() {
+	cliapp.PrintBanner()
+	var commands []*cli.Command
+
+	if replicatorCommand != nil {
+		commands = append(commands, replicatorCommand)
+	}
+
+	commands = append(commands, &cli.Command{
+		Name:  "relayer",
+		Usage: "Run in relayer mode",
+		Action: func(c *cli.Context) error {
+			return Run(c.Context, c.String("config"), c.String("env"),
+				"relayer", c.Bool("grpc"))
+		},
+	})
+
+	if fuzzerCommand != nil {
+		commands = append(commands, fuzzerCommand)
+	}
+
 	app := &cli.App{
 		Name:  "unisondb",
 		Usage: "Run UnisonDB",
@@ -43,32 +63,7 @@ func main() {
 			},
 		},
 
-		Commands: []*cli.Command{
-			{
-				Name:  "replicator",
-				Usage: "Run in replicator mode",
-				Action: func(c *cli.Context) error {
-					return Run(c.Context, c.String("config"), c.String("env"),
-						"replicator", c.Bool("grpc"))
-				},
-			},
-			{
-				Name:  "relayer",
-				Usage: "Run in relayer mode",
-				Action: func(c *cli.Context) error {
-					return Run(c.Context, c.String("config"), c.String("env"),
-						"relayer", c.Bool("grpc"))
-				},
-			},
-			{
-				Name:  "fuzzer",
-				Usage: "Run in fuzzer mode, (should only be used for testing)",
-				Action: func(c *cli.Context) error {
-					return Run(c.Context, c.String("config"), c.String("env"),
-						"fuzzer", c.Bool("grpc"))
-				},
-			},
-		},
+		Commands: commands,
 	}
 
 	if err := app.Run(os.Args); err != nil {
@@ -95,6 +90,7 @@ func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) erro
 		srv.SetupGrpcServer,
 		srv.SetupHTTPServer,
 		srv.SetupRelayer,
+		srv.SetupPprofServer,
 	}
 
 	for i, fn := range setup {
@@ -112,6 +108,7 @@ func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) erro
 		srv.RunHTTP,
 		srv.StartRelayer,
 		srv.RunFuzzer,
+		srv.RunPprofServer,
 	}
 
 	g, groupCtx := errgroup.WithContext(ctx)

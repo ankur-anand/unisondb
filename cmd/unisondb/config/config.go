@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -19,7 +20,7 @@ type Config struct {
 	HTTPPort     int                    `toml:"http_port"`
 	Grpc         GrpcConfig             `toml:"grpc_config"`
 	Storage      StorageConfig          `toml:"storage_config"`
-	PprofEnable  bool                   `toml:"pprof_enable"`
+	PProfConfig  PProfConfig            `toml:"pprof_config"`
 	RelayConfigs map[string]RelayConfig `toml:"relayer_config"`
 	LogConfig    LogConfig              `toml:"log_config"`
 	Limiter      Limiter                `toml:"limiter"`
@@ -34,11 +35,12 @@ type GrpcConfig struct {
 }
 
 type StorageConfig struct {
-	BaseDir      string   `toml:"base_dir"`
-	Namespaces   []string `toml:"namespaces"`
-	BytesPerSync string   `toml:"bytes_per_sync"`
-	SegmentSize  string   `toml:"segment_size"`
-	ArenaSize    string   `toml:"arena_size"`
+	BaseDir          string   `toml:"base_dir"`
+	Namespaces       []string `toml:"namespaces"`
+	BytesPerSync     string   `toml:"bytes_per_sync"`
+	SegmentSize      string   `toml:"segment_size"`
+	ArenaSize        string   `toml:"arena_size"`
+	WalFsyncInterval string   `toml:"wal_fsync_interval"`
 }
 
 // RelayConfig holds TLS and upstream gRPC config.
@@ -65,6 +67,11 @@ type Limiter struct {
 type FuzzConfig struct {
 	OpsPerNamespace     int `toml:"ops_per_namespace"`
 	WorkersPerNamespace int `toml:"workers_per_namespace"`
+}
+
+type PProfConfig struct {
+	Enabled bool `toml:"enabled"`
+	Port    int  `toml:"port"`
 }
 
 func ParseLevelPercents(cfg LogConfig) (map[slog.Level]float64, error) {
@@ -115,7 +122,6 @@ func NewRelayerGRPCConn(cfg *RelayConfig) (*grpc.ClientConn, error) {
 	return grpc.NewClient(cfg.UpstreamAddress,
 		grpc.WithTransportCredentials(creds),
 		grpc.WithDefaultServiceConfig(cfg.GrpcServiceConfig))
-
 }
 
 func HashRelayConfig(relay RelayConfig) string {
@@ -133,7 +139,7 @@ func HashRelayConfig(relay RelayConfig) string {
 	b.WriteString(strconv.Itoa(relay.SegmentLagThreshold))
 
 	sum := sha256.Sum256([]byte(b.String()))
-	return fmt.Sprintf("%x", sum)
+	return hex.EncodeToString(sum[:])
 }
 
 func BuildLimiter(cfg Limiter) (*rate.Limiter, error) {

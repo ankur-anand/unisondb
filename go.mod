@@ -10,8 +10,10 @@ require (
 	github.com/brianvoe/gofakeit/v7 v7.2.1
 	github.com/cenkalti/backoff/v5 v5.0.2
 	github.com/cespare/xxhash/v2 v2.3.0
+	github.com/common-nighthawk/go-figure v0.0.0-20210622060536-734e95fb86be
 	github.com/dgraph-io/badger/v4 v4.6.0
 	github.com/dustin/go-humanize v1.0.1
+	github.com/fatih/color v1.18.0
 	github.com/gofrs/flock v0.12.1
 	github.com/google/flatbuffers v25.2.10+incompatible
 	github.com/google/uuid v1.6.0
@@ -41,6 +43,8 @@ require (
 	github.com/hashicorp/golang-lru v1.0.2 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/client_model v0.6.1 // indirect

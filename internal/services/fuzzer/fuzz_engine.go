@@ -67,8 +67,7 @@ func (kp *KeyPool) Get(n int) [][]byte {
 
 	out := make([][]byte, 0, n)
 	for i := 0; i < n; i++ {
-		var idx int
-		idx = rand.Intn(len(kp.keys))
+		var idx = rand.Intn(len(kp.keys))
 
 		out = append(out, kp.keys[idx])
 	}
@@ -79,7 +78,7 @@ func (kp *KeyPool) Mutate() {
 	kp.mu.Lock()
 	defer kp.mu.Unlock()
 
-	// Mutate 1-10% of the keys.
+	// mutate 1-10% of the keys.
 	mutations := rand.Intn(kp.size/10) + 1
 	for i := 0; i < mutations; i++ {
 		idx := rand.Intn(len(kp.keys))
@@ -145,74 +144,86 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 	g, ctx := errgroup.WithContext(ctx)
 
 	g.Go(func() error {
-		mutTicker := time.NewTicker(1 * time.Second)
-		defer mutTicker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				return nil
-			case <-mutTicker.C:
-				keyPool.Mutate()
-				rowKeyPool.Mutate()
-				columnPool.Mutate()
-			}
-		}
+		return startMutationLoop(ctx, keyPool, rowKeyPool, columnPool)
 	})
 
-	workerRate := float64(opsPerSec) / float64(numWorkers)
-	workerInterval := time.Duration(float64(time.Second) / workerRate)
+	workerInterval := time.Duration(float64(time.Second) / (float64(opsPerSec) / float64(numWorkers)))
+	slog.Info("[unisondb.fuzzer] fuzzing worker interval", "namespace", namespace, "interval", workerInterval)
 
+	// fuzzing workers
 	for i := 0; i < numWorkers; i++ {
 		workerID := i
 		g.Go(func() error {
-			ticker := time.NewTicker(workerInterval)
-			defer ticker.Stop()
-
-			for {
-				select {
-				case <-ctx.Done():
-					slog.Debug("[unisondb.fuzzer] Worker shutting down",
-						"workerID", workerID, "namespace", namespace)
-					return nil
-				case <-ticker.C:
-					keys := keyPool.Get(3)
-					// 1KB, 10KB, 50KB, 100KB
-					valueSizes := []int{1024, 10 * 1024, 50 * 1024, 100 * 1024}
-
-					values := make([][]byte, 3)
-					for i := range values {
-						sz := valueSizes[rand.Intn(len(valueSizes))]
-						values[i] = []byte(gofakeit.LetterN(uint(sz)))
-					}
-
-					rowKey := rowKeyPool.Get(1)[0]
-					columns := columnPool.Get(rand.Intn(5) + 1)
-
-					ops := []struct {
-						name string
-						fn   func()
-					}{
-						{"Put", func() { _ = e.Put(keys[0], values[0]) }},
-						{"BatchPut", func() { _ = e.BatchPut(keys, values) }},
-						{"Delete", func() { _ = e.Delete(keys[1]) }},
-						{"BatchDelete", func() { _ = e.BatchDelete(keys) }},
-						{"PutColumnsForRow", func() { _ = e.PutColumnsForRow(rowKey, columns) }},
-						{"DeleteColumnsForRow", func() { _ = e.DeleteColumnsForRow(rowKey, columns) }},
-					}
-
-					selected := rand.Intn(len(ops))
-					op := ops[selected]
-					op.fn()
-
-					if stats != nil {
-						stats.Inc(namespace, op.name)
-					}
-				}
-			}
+			return runFuzzWorker(ctx, e, workerID, workerInterval, keyPool, rowKeyPool, columnPool, stats, namespace)
 		})
 	}
 
 	_ = g.Wait()
 	slog.Info("[unisondb.fuzzer] FuzzEngineOps: completed fuzzing", "namespace", namespace)
+}
+
+func startMutationLoop(ctx context.Context, keyPool, rowKeyPool *KeyPool, columnPool *ColumnPool) error {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			keyPool.Mutate()
+			rowKeyPool.Mutate()
+			columnPool.Mutate()
+		}
+	}
+}
+
+func runFuzzWorker(ctx context.Context, e Engine, workerID int, interval time.Duration,
+	keyPool, rowKeyPool *KeyPool, columnPool *ColumnPool, stats *FuzzStats, namespace string) error {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			slog.Debug("[unisondb.fuzzer] Worker shutting down", "workerID", workerID, "namespace", namespace)
+			return nil
+		case <-ticker.C:
+			executeRandomOp(e, keyPool, rowKeyPool, columnPool, stats, namespace)
+		}
+	}
+}
+
+func executeRandomOp(e Engine, keyPool, rowKeyPool *KeyPool, columnPool *ColumnPool,
+	stats *FuzzStats, namespace string) {
+	keys := keyPool.Get(3)
+	valueSizes := []int{1024, 10 * 1024, 50 * 1024, 100 * 1024}
+	values := make([][]byte, 3)
+	for i := range values {
+		sz := valueSizes[rand.Intn(len(valueSizes))]
+		values[i] = []byte(gofakeit.LetterN(uint(sz)))
+	}
+	rowKey := rowKeyPool.Get(1)[0]
+	columns := columnPool.Get(rand.Intn(5) + 1)
+
+	ops := []struct {
+		name string
+		fn   func() error
+	}{
+		{"Put", func() error { return e.Put(keys[0], values[0]) }},
+		{"BatchPut", func() error { return e.BatchPut(keys, values) }},
+		{"Delete", func() error { return e.Delete(keys[1]) }},
+		{"BatchDelete", func() error { return e.BatchDelete(keys) }},
+		{"PutColumnsForRow", func() error { return e.PutColumnsForRow(rowKey, columns) }},
+		{"DeleteColumnsForRow", func() error { return e.DeleteColumnsForRow(rowKey, columns) }},
+	}
+
+	op := ops[rand.Intn(len(ops))]
+	if err := op.fn(); err != nil {
+		slog.Error("[unisondb.fuzzer] Operation failed", "op", op.name, "err", err)
+	}
+
+	if stats != nil {
+		stats.Inc(namespace, op.name)
+	}
 }
