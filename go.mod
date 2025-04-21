@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	github.com/PowerDNS/lmdb-go v1.9.3
 	github.com/anishathalye/porcupine v1.0.2
-	github.com/ankur-anand/wal v0.0.4
+	github.com/ankur-anand/wal v0.0.5
 	github.com/bits-and-blooms/bloom/v3 v3.7.0
 	github.com/brianvoe/gofakeit/v7 v7.2.1
 	github.com/cenkalti/backoff/v5 v5.0.2
