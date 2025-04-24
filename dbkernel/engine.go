@@ -714,7 +714,7 @@ func (e *Engine) asyncFSync() {
 					break COALESCE
 				}
 				select {
-				case _, ok := <-e.flushReqSignal:
+				case _, ok := <-e.fsyncReqSignal:
 					if !ok {
 						break COALESCE
 					}
