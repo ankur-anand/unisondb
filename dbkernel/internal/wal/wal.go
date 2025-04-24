@@ -2,6 +2,7 @@ package wal
 
 import (
 	"io"
+	"log"
 	"log/slog"
 	"slices"
 	"time"
@@ -73,12 +74,12 @@ func (w *WalIO) Sync() error {
 func (w *WalIO) Close() error {
 	_, err := w.appendLog.WriteAll()
 	if err != nil {
-		slog.Error("[kvalchemy.wal] write to log file failed]", "error", err)
+		slog.Error("[unisondb.wal] write to log file failed]", "error", err)
 		w.metrics.IncrCounterWithLabels(walMetricsAppendErrors, 1, w.label)
 	}
 	err = w.Sync()
 	if err != nil {
-		slog.Error("[kvalchemy.wal] Fsync to log file failed]", "error", err)
+		slog.Error("[unisondb.wal] Fsync to log file failed]", "error", err)
 		w.metrics.IncrCounterWithLabels(walMetricsFSyncErrors, 1, w.label)
 	}
 	return w.appendLog.Close()
@@ -105,6 +106,9 @@ func (w *WalIO) Append(data []byte) (*Offset, error) {
 		w.metrics.MeasureSinceWithLabels(walMetricsAppendLatency, startTime, w.label)
 	}()
 	off, err := w.appendLog.Write(data)
+	if errors.Is(err, wal.ErrFsync) {
+		log.Fatalf("[unisondb.wal] write to log file failed: %v", err)
+	}
 	if err != nil {
 		w.metrics.IncrCounterWithLabels(walMetricsAppendErrors, 1, w.label)
 	}
