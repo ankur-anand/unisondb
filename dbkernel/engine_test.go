@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"hash/crc32"
 	"os"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"
+	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/assert"
 	"go.etcd.io/bbolt"
 )
@@ -749,4 +752,83 @@ func Test_MisMatch_Entry_Type(t *testing.T) {
 		err := engine.PutColumnsForRow([]byte(k), rowsEntries[k])
 		assert.ErrorIs(t, err, ErrMisMatchKeyType)
 	}
+}
+
+func Test_ASyncFSync_Coalescing(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "testnamespace"
+	fsyncCall := atomic.Int64{}
+	callback := func() {
+		fsyncCall.Add(1)
+	}
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+
+	initMonotonic()
+	label := []metrics.Label{{Name: "namespace", Value: namespace}}
+	signal := make(chan struct{}, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	engine := &Engine{
+		namespace:       namespace,
+		config:          config,
+		wg:              &sync.WaitGroup{},
+		metricsLabel:    label,
+		flushReqSignal:  signal,
+		pendingMetadata: &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
+		ctx:             ctx,
+		cancel:          cancel,
+		callback:        func() {},
+		fsyncReqSignal:  make(chan struct{}, 1),
+	}
+
+	err := engine.initStorage(dir, namespace, config)
+	assert.NoError(t, err, "NewStorageEngine should not error")
+
+	engine.appendNotify = make(chan struct{})
+
+	engine.callback = callback
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		engine.asyncMemTableFlusher(ctx)
+	}()
+
+	for i := 0; i < 100; i++ {
+		engine.pendingMetadata.queueMetadata(&flushedMetadata{
+			metadata: &internal.Metadata{
+				RecordProcessed: uint64(100 + i),
+				Pos: &Offset{
+					SegmentId:   0,
+					ChunkOffset: int64(i),
+					BlockNumber: uint32(1 + i),
+				},
+			},
+		})
+
+		engine.fsyncReqSignal <- struct{}{}
+	}
+
+	for {
+		engine.pendingMetadata.mu.Lock()
+		pl := len(engine.pendingMetadata.pendingMetadataWrites)
+		engine.pendingMetadata.mu.Unlock()
+		if pl != 0 {
+			time.Sleep(10 * time.Millisecond)
+		} else {
+			break
+		}
+
+	}
+
+	cancel()
+	wg.Wait()
+	assert.Less(t, fsyncCall.Load(), int64(100), "Coalescing should have happened")
+	assert.Greater(t, fsyncCall.Load(), int64(1), "Coalescing should have happened")
+	metadata, err := engine.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
+	assert.NoError(t, err, "RetrieveMetadata should not error")
+	um := internal.UnmarshalMetadata(metadata)
+	assert.Equal(t, uint64(199), um.RecordProcessed, "record processed should be 199")
+	assert.Equal(t, uint32(100), um.Pos.BlockNumber, "block number should be 100")
 }
