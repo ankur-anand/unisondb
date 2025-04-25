@@ -20,6 +20,7 @@ const (
 
 var (
 	ErrWalNextOffset = errors.New("wal next offset out of range")
+	ErrWalFSync      = wal.ErrFsync
 )
 
 func newWALOptions(dirPath string, c *Config) wal.Options {

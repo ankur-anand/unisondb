@@ -832,3 +832,55 @@ func Test_ASyncFSync_Coalescing(t *testing.T) {
 	assert.Equal(t, uint64(199), um.RecordProcessed, "record processed should be 199")
 	assert.Equal(t, uint32(100), um.Pos.BlockNumber, "block number should be 100")
 }
+
+type mockWalSyncer struct {
+	syncCount atomic.Int64
+	cancel    context.CancelFunc
+}
+
+func (m *mockWalSyncer) Sync() error {
+	m.syncCount.Add(1)
+	m.cancel()
+	return nil
+}
+
+func Test_WalSyncer_Sync(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "testnamespace"
+	fsyncCall := atomic.Int64{}
+	callback := func() {
+		fsyncCall.Add(1)
+	}
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+
+	initMonotonic()
+	label := []metrics.Label{{Name: "namespace", Value: namespace}}
+	signal := make(chan struct{}, 2)
+	ctx, cancel := context.WithCancel(context.Background())
+	engine := &Engine{
+		namespace:       namespace,
+		config:          config,
+		wg:              &sync.WaitGroup{},
+		metricsLabel:    label,
+		flushReqSignal:  signal,
+		pendingMetadata: &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
+		ctx:             ctx,
+		cancel:          cancel,
+		callback:        func() {},
+		fsyncReqSignal:  make(chan struct{}, 1),
+	}
+
+	err := engine.initStorage(dir, namespace, config)
+	assert.NoError(t, err, "NewStorageEngine should not error")
+
+	engine.appendNotify = make(chan struct{})
+
+	engine.callback = callback
+	syncer := &mockWalSyncer{cancel: cancel}
+	engine.walSyncer = syncer
+	engine.syncWalAtInterval(ctx)
+	engine.wg.Wait()
+
+	assert.Equal(t, int64(1), syncer.syncCount.Load(), "WalSyncer should have happened")
+}
