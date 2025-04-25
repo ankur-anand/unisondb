@@ -881,6 +881,6 @@ func Test_WalSyncer_Sync(t *testing.T) {
 	engine.walSyncer = syncer
 	engine.syncWalAtInterval(ctx)
 	engine.wg.Wait()
-	
+
 	assert.Equal(t, int64(1), syncer.syncCount.Load(), "WalSyncer should have happened")
 }
