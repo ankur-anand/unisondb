@@ -62,6 +62,7 @@ type Engine struct {
 	namespace         string
 	dataStore         internal.BTreeStore
 	walIO             *wal.WalIO
+	walSyncer         walSyncer
 	config            *EngineConfig
 	metricsLabel      []metrics.Label
 	fileLock          *flock.Flock
@@ -115,6 +116,7 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 
 	// background task:
 	engine.asyncMemTableFlusher(ctx)
+	engine.syncWalAtInterval(ctx)
 
 	if err := engine.loadMetaValues(); err != nil {
 		return nil, err
@@ -174,6 +176,7 @@ func (e *Engine) initStorage(dataDir, namespace string, conf *EngineConfig) erro
 	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001) // 1M keys, 0.01% false positives
 	e.bloom = bloomFilter
 	e.activeMemTable = mTable
+	e.walSyncer = walIO
 	return nil
 }
 
@@ -607,6 +610,28 @@ func (e *Engine) asyncMemTableFlusher(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+func (e *Engine) syncWalAtInterval(ctx context.Context) {
+	if e.config.WalConfig.SyncInterval > 0 {
+		e.wg.Add(1)
+		go func() {
+			defer e.wg.Done()
+			ticker := time.NewTicker(e.config.WalConfig.SyncInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					err := e.walSyncer.Sync()
+					if errors.Is(err, wal.ErrWalFSync) {
+						log.Fatalf("[unisondb.dbkernel] wal fsync failed: %v", err)
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
 }
 
 // handleFlush flushes the sealed mem-table to btree store.

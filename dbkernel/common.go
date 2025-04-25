@@ -59,3 +59,7 @@ func NewDefaultEngineConfig() *EngineConfig {
 		DBEngine: LMDBEngine,
 	}
 }
+
+type walSyncer interface {
+	Sync() error
+}
