@@ -429,7 +429,6 @@ func (ms *Server) RunFuzzer(ctx context.Context) error {
 }
 
 func (ms *Server) SetupPprofServer(ctx context.Context) error {
-	fmt.Println(ms.cfg.PProfConfig)
 	if !ms.cfg.PProfConfig.Enabled {
 		return nil
 	}

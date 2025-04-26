@@ -64,7 +64,7 @@ func (m *mockEngine) DeleteColumnsForRow(rowKey []byte, columnEntries map[string
 func TestFuzzEngineOps_Basic(t *testing.T) {
 	engine := &mockEngine{}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	stats := NewFuzzStats()
@@ -85,4 +85,26 @@ func TestFuzzEngineOps_Basic(t *testing.T) {
 	require.Equal(t, int64(engine.deleteColumnsCalls), nsStats.OpCount["DeleteColumnsForRow"])
 	require.Greater(t, nsStats.Uptime, float64(0), "uptime should be positive")
 	require.GreaterOrEqual(t, nsStats.OpsRate, float64(0), "ops rate should not be negative")
+}
+
+type noopEngine struct{}
+
+func (n *noopEngine) Put(key, value []byte) error                                       { return nil }
+func (n *noopEngine) BatchPut(keys, values [][]byte) error                              { return nil }
+func (n *noopEngine) Delete(key []byte) error                                           { return nil }
+func (n *noopEngine) BatchDelete(keys [][]byte) error                                   { return nil }
+func (n *noopEngine) PutColumnsForRow(rowKey []byte, column map[string][]byte) error    { return nil }
+func (n *noopEngine) DeleteColumnsForRow(rowKey []byte, column map[string][]byte) error { return nil }
+
+func BenchmarkExecuteRandomOp(b *testing.B) {
+	keyPool := NewKeyPool(500, 5, 64)
+	rowKeyPool := NewKeyPool(500, 5, 64)
+	columnPool := NewColumnPool(50)
+	valuePool := NewValuePool([]int{1024, 10 * 1024, 50 * 1024, 100 * 1024}, 1000)
+	engine := &noopEngine{}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		executeRandomOp(engine, keyPool, rowKeyPool, columnPool, NewFuzzStats(), "test", valuePool)
+	}
 }
