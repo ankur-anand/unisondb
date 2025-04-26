@@ -166,6 +166,7 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 	keyPool := NewKeyPool(500, 5, 256)
 	rowKeyPool := NewKeyPool(500, 5, 256)
 	columnPool := NewColumnPool(50)
+	valuePool := NewValuePool([]int{1024, 10 * 1024, 50 * 1024, 100 * 1024}, 100)
 
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -180,7 +181,6 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 	for i := 0; i < numWorkers; i++ {
 		workerID := i
 		g.Go(func() error {
-			valuePool := NewValuePool([]int{1024, 10 * 1024, 50 * 1024, 100 * 1024}, 1000)
 			return runFuzzWorker(ctx, e, workerID, workerInterval, keyPool, rowKeyPool, columnPool, stats, namespace, valuePool)
 		})
 	}
