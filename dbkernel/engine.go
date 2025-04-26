@@ -81,6 +81,9 @@ type Engine struct {
 	newTxnBatcher func(maxBatchSize int) internal.TxnBatcher
 	flushPaused   atomic.Bool
 
+	btreeFlushInterval        time.Duration
+	btreeFlushIntervalEnabled bool
+
 	// used only during testing
 	callback func()
 	ctx      context.Context
@@ -96,18 +99,21 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 	initMonotonic()
 	label := []metrics.Label{{Name: "namespace", Value: namespace}}
 	signal := make(chan struct{}, 2)
+	btreeFlushInterval, btreeFlushIntervalEnabled := conf.effectiveBTreeFlushInterval()
 	ctx, cancel := context.WithCancel(context.Background())
 	engine := &Engine{
-		namespace:       namespace,
-		config:          conf,
-		wg:              &sync.WaitGroup{},
-		metricsLabel:    label,
-		flushReqSignal:  signal,
-		pendingMetadata: &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
-		ctx:             ctx,
-		cancel:          cancel,
-		callback:        func() {},
-		fsyncReqSignal:  make(chan struct{}, 1),
+		namespace:                 namespace,
+		config:                    conf,
+		wg:                        &sync.WaitGroup{},
+		metricsLabel:              label,
+		flushReqSignal:            signal,
+		pendingMetadata:           &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
+		ctx:                       ctx,
+		cancel:                    cancel,
+		callback:                  func() {},
+		fsyncReqSignal:            make(chan struct{}, 1),
+		btreeFlushInterval:        btreeFlushInterval,
+		btreeFlushIntervalEnabled: btreeFlushIntervalEnabled,
 	}
 
 	if err := engine.initStorage(dataDir, namespace, conf); err != nil {
@@ -117,6 +123,7 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 	// background task:
 	engine.asyncMemTableFlusher(ctx)
 	engine.syncWalAtInterval(ctx)
+	engine.fsyncBtreeAtInterval(ctx)
 
 	if err := engine.loadMetaValues(); err != nil {
 		return nil, err
@@ -634,6 +641,27 @@ func (e *Engine) syncWalAtInterval(ctx context.Context) {
 	}
 }
 
+func (e *Engine) fsyncBtreeAtInterval(ctx context.Context) {
+	if !e.btreeFlushIntervalEnabled {
+		return
+	}
+
+	e.wg.Add(1)
+	go func() {
+		defer e.wg.Done()
+		ticker := time.NewTicker(e.btreeFlushInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				e.fSyncStore()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
 // handleFlush flushes the sealed mem-table to btree store.
 func (e *Engine) handleFlush(ctx context.Context) {
 	if e.flushPaused.Load() {
@@ -672,10 +700,12 @@ func (e *Engine) handleFlush(ctx context.Context) {
 		metrics.IncrCounterWithLabels(mKeySealedMemFlushRecordTotal, float32(recordProcessed), e.metricsLabel)
 		metrics.IncrCounterWithLabels(mKeySealedMemFlushTotal, 1, e.metricsLabel)
 
-		select {
-		case e.fsyncReqSignal <- struct{}{}:
-		default:
-			slog.Debug("fsync queue signal channel full")
+		if !e.btreeFlushIntervalEnabled {
+			select {
+			case e.fsyncReqSignal <- struct{}{}:
+			default:
+				slog.Debug("fsync queue signal channel full")
+			}
 		}
 
 		slog.Debug("[unisondb.dbkernel] Flushed MemTable",

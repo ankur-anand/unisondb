@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/memtable"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"
@@ -883,4 +886,214 @@ func Test_WalSyncer_Sync(t *testing.T) {
 	engine.wg.Wait()
 
 	assert.Equal(t, int64(1), syncer.syncCount.Load(), "WalSyncer should have happened")
+}
+
+type mockedTree struct {
+	fsyncCall atomic.Int64
+}
+
+func (m *mockedTree) BatchPut(keys, values [][]byte) error {
+	return nil
+}
+
+func (m *mockedTree) BatchDelete(keys [][]byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) BatchPutRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) BatchDeleteRows(rowKeys [][]byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) Commit() error {
+	return nil
+}
+
+func (m *mockedTree) Stats() kvdrivers.TxnStats {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) Set(key []byte, value []byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) SetMany(keys [][]byte, values [][]byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) SetChunks(key []byte, chunks [][]byte, checksum uint32) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) Delete(key []byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) DeleteMany(keys [][]byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) DeleteManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) DeleteEntireRows(rowKeys [][]byte) (int, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) StoreMetadata(key []byte, value []byte) error {
+	return nil
+}
+
+func (m *mockedTree) FSync() error {
+	m.fsyncCall.Add(1)
+	return nil
+}
+
+func (m *mockedTree) Get(key []byte) ([]byte, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) GetRowColumns(rowKey []byte, filter func([]byte) bool) (map[string][]byte, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) Snapshot(w io.Writer) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) RetrieveMetadata(key []byte) ([]byte, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) GetValueType(key []byte) (kvdrivers.ValueEntryType, error) {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) Close() error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func TestBtreeSyncInterval(t *testing.T) {
+
+	namespace := "testnamespace"
+
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+
+	initMonotonic()
+	label := []metrics.Label{{Name: "namespace", Value: namespace}}
+	signal := make(chan struct{}, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	mt := &mockedTree{}
+
+	engine := &Engine{
+		namespace:                 namespace,
+		config:                    config,
+		wg:                        &sync.WaitGroup{},
+		metricsLabel:              label,
+		flushReqSignal:            signal,
+		pendingMetadata:           &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
+		ctx:                       ctx,
+		cancel:                    cancel,
+		callback:                  func() {},
+		fsyncReqSignal:            make(chan struct{}, 1),
+		btreeFlushInterval:        10 * time.Millisecond,
+		btreeFlushIntervalEnabled: true,
+		dataStore:                 mt,
+		bloom:                     bloom.NewWithEstimates(1_000_000, 0.0001),
+		sealedMemTables:           make([]*memtable.MemTable, 0),
+	}
+
+	for i := 0; i < 100; i++ {
+		engine.pendingMetadata.queueMetadata(&flushedMetadata{
+			metadata: &internal.Metadata{
+				RecordProcessed: uint64(100 + i),
+				Pos: &Offset{
+					SegmentId:   0,
+					ChunkOffset: int64(i),
+					BlockNumber: uint32(1 + i),
+				},
+			},
+		})
+	}
+
+	engine.fsyncBtreeAtInterval(ctx)
+	engine.wg.Wait()
+	assert.Equal(t, int64(1), mt.fsyncCall.Load())
+	mmTable := memtable.NewMemTable(1<<20, nil, namespace, func(maxBatchSize int) internal.TxnBatcher {
+		return mt
+	})
+	err := mmTable.Put([]byte("test_key"), getValueStruct(internal.LogOperationInsert, internal.EntryTypeKV, []byte("hi")))
+	assert.NoError(t, err)
+	engine.sealedMemTables = append(engine.sealedMemTables, mmTable)
+	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	engine.asyncMemTableFlusher(ctx)
+	engine.flushReqSignal <- struct{}{}
+	engine.wg.Wait()
+	assert.Equal(t, int64(1), mt.fsyncCall.Load())
+}
+
+func TestBtreeSyncInterval_Engine(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "testnamespace"
+	callbackSignal := make(chan struct{}, 2)
+	callback := func() {
+		close(callbackSignal)
+	}
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+	config.DBEngine = BoltDBEngine
+	// this should default to least 1 second
+	config.BTreeFlushInterval = 1 * time.Second
+	engine, err := NewStorageEngine(dir, namespace, config)
+	assert.NoError(t, err, "NewStorageEngine should not error")
+	engine.callback = callback
+
+	kv := make(map[string]string)
+	for i := 0; i < 100; i++ {
+		key := gofakeit.UUID()
+		value := gofakeit.LetterN(100)
+		kv[key] = value
+		err := engine.Put([]byte(key), []byte(value))
+		assert.NoError(t, err, "Put operation should succeed")
+	}
+	engine.rotateMemTable()
+
+	select {
+	case <-callbackSignal:
+	case <-time.After(5 * time.Second):
+		t.Errorf("callback timeout waiting for timer fsync")
+	}
 }

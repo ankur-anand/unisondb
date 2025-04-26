@@ -2,6 +2,7 @@ package dbkernel
 
 import (
 	"errors"
+	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
@@ -40,10 +41,11 @@ const (
 
 // EngineConfig embeds all the config needed for Engine.
 type EngineConfig struct {
-	ArenaSize   int64            `toml:"arena_size"`
-	WalConfig   wal.Config       `toml:"wal_config"`
-	BtreeConfig kvdrivers.Config `toml:"btree_config"`
-	DBEngine    DBEngine         `toml:"db_engine"`
+	ArenaSize          int64            `toml:"arena_size"`
+	WalConfig          wal.Config       `toml:"wal_config"`
+	BtreeConfig        kvdrivers.Config `toml:"btree_config"`
+	DBEngine           DBEngine         `toml:"db_engine"`
+	BTreeFlushInterval time.Duration    `toml:"btree_flush_interval"`
 }
 
 // NewDefaultEngineConfig returns an initialized default config for engine.
@@ -57,6 +59,15 @@ func NewDefaultEngineConfig() *EngineConfig {
 			MmapSize:  4 << 30,
 		},
 		DBEngine: LMDBEngine,
+	}
+}
+
+func (cfg *EngineConfig) effectiveBTreeFlushInterval() (time.Duration, bool) {
+	switch {
+	case cfg.BTreeFlushInterval < 1*time.Second:
+		return 0, false
+	default:
+		return cfg.BTreeFlushInterval, true
 	}
 }
 
