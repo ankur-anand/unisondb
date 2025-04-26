@@ -134,6 +134,32 @@ func (cp *ColumnPool) Mutate() {
 	}
 }
 
+type ValuePool struct {
+	values [][]byte
+}
+
+func NewValuePool(sizes []int, countPerSize int) *ValuePool {
+	values := make([][]byte, 0, len(sizes)*countPerSize)
+	for _, sz := range sizes {
+		for i := 0; i < countPerSize; i++ {
+			b := make([]byte, sz)
+			fillRandomBytes(b)
+			values = append(values, b)
+		}
+	}
+	return &ValuePool{values: values}
+}
+
+func fillRandomBytes(b []byte) {
+	for i := range b {
+		b[i] = byte(rand.Intn(256))
+	}
+}
+
+func (vp *ValuePool) Get() []byte {
+	return vp.values[rand.Intn(len(vp.values))]
+}
+
 // FuzzEngineOps concurrently runs fuzzing operations against an Engine using multiple worker goroutines.
 func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 	numWorkers int, stats *FuzzStats, namespace string) {
@@ -154,7 +180,8 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 	for i := 0; i < numWorkers; i++ {
 		workerID := i
 		g.Go(func() error {
-			return runFuzzWorker(ctx, e, workerID, workerInterval, keyPool, rowKeyPool, columnPool, stats, namespace)
+			valuePool := NewValuePool([]int{1024, 10 * 1024, 50 * 1024, 100 * 1024}, 1000)
+			return runFuzzWorker(ctx, e, workerID, workerInterval, keyPool, rowKeyPool, columnPool, stats, namespace, valuePool)
 		})
 	}
 
@@ -179,7 +206,7 @@ func startMutationLoop(ctx context.Context, keyPool, rowKeyPool *KeyPool, column
 }
 
 func runFuzzWorker(ctx context.Context, e Engine, workerID int, interval time.Duration,
-	keyPool, rowKeyPool *KeyPool, columnPool *ColumnPool, stats *FuzzStats, namespace string) error {
+	keyPool, rowKeyPool *KeyPool, columnPool *ColumnPool, stats *FuzzStats, namespace string, valuePool *ValuePool) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -189,20 +216,16 @@ func runFuzzWorker(ctx context.Context, e Engine, workerID int, interval time.Du
 			slog.Debug("[unisondb.fuzzer] Worker shutting down", "workerID", workerID, "namespace", namespace)
 			return nil
 		case <-ticker.C:
-			executeRandomOp(e, keyPool, rowKeyPool, columnPool, stats, namespace)
+			executeRandomOp(e, keyPool, rowKeyPool, columnPool, stats, namespace, valuePool)
 		}
 	}
 }
 
 func executeRandomOp(e Engine, keyPool, rowKeyPool *KeyPool, columnPool *ColumnPool,
-	stats *FuzzStats, namespace string) {
+	stats *FuzzStats, namespace string, valuePool *ValuePool) {
 	keys := keyPool.Get(3)
-	valueSizes := []int{1024, 10 * 1024, 50 * 1024, 100 * 1024}
-	values := make([][]byte, 3)
-	for i := range values {
-		sz := valueSizes[rand.Intn(len(valueSizes))]
-		values[i] = []byte(gofakeit.LetterN(uint(sz)))
-	}
+	values := [][]byte{valuePool.Get(), valuePool.Get(), valuePool.Get()}
+
 	rowKey := rowKeyPool.Get(1)[0]
 	columns := columnPool.Get(rand.Intn(5) + 1)
 
