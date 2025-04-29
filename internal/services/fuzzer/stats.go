@@ -14,6 +14,7 @@ type NamespaceStats struct {
 	ErrorCount int64            `json:"error_count"`
 	OpsRate    float64          `json:"ops_rate"`
 	Uptime     float64          `json:"uptime"`
+	Duration   time.Duration
 }
 
 type internalNS struct {
@@ -89,6 +90,7 @@ func (fs *FuzzStats) Snapshot() map[string]NamespaceStats {
 			ErrorCount: current.ErrorCount,
 			OpsRate:    opsRate,
 			Uptime:     uptime,
+			Duration:   time.Since(fs.startTime),
 		}
 		current.LastTotalOps = total
 		current.LastUpdated = now
@@ -126,12 +128,15 @@ func (fs *FuzzStats) StartStatsMonitor(ctx context.Context, interval time.Durati
 					if stats.OpsRate == 0 {
 						panic("Fuzzing activity stopped: ops dropped to zero for namespace: " + ns)
 					}
-					slog.Info("[unisondb.fuzzer] Fuzzing stats",
-						"namespace", ns,
-						"op_count", stats.OpCount,
-						"error_count", stats.ErrorCount,
-						"ops_rate", stats.OpsRate,
-						"uptime_secs", stats.Uptime,
+					slog.Info("[unisondb.fuzzer]",
+						slog.String("event_type", "fuzzer.stats.report"),
+						slog.Group("stats",
+							slog.String("namespace", ns),
+							slog.Any("op_count", stats.OpCount),
+							slog.Int64("error_count", stats.ErrorCount),
+							slog.String("uptime", humanizeDuration(stats.Duration)),
+							slog.Float64("ops_rate", stats.OpsRate),
+						),
 					)
 				}
 			}

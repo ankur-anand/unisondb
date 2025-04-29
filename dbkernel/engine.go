@@ -281,11 +281,14 @@ func (e *Engine) recoverWAL() error {
 		return err
 	}
 
-	slog.Info("[unisondb.dbkernal] wal recovered",
-		"recovered_count", walRecovery.RecoveredCount(),
-		"namespace", e.namespace,
-		"btree_engine", e.config.DBEngine,
-		"durations", humanizeDuration(time.Since(startTime)),
+	slog.Info("[unisondb.dbkernal]",
+		slog.String("event_type", "wal.recovered"),
+		slog.Group("wal",
+			slog.String("namespace", e.namespace),
+			slog.String("btree_engine", string(e.config.DBEngine))),
+		slog.Group("recovery",
+			slog.String("durations", humanizeDuration(time.Since(startTime))),
+			slog.Int("count", walRecovery.RecoveredCount())),
 	)
 	metrics.IncrCounterWithLabels(mKeyWalRecoveryRecordTotal, float32(walRecovery.RecoveredCount()), e.metricsLabel)
 	metrics.MeasureSinceWithLabels(mKeyWalRecoveryDuration, startTime, e.metricsLabel)
@@ -708,9 +711,14 @@ func (e *Engine) handleFlush(ctx context.Context) {
 			}
 		}
 
-		slog.Debug("[unisondb.dbkernel] Flushed MemTable",
-			"ops_flushed", recordProcessed, "namespace", e.namespace,
-			"duration", humanizeDuration(time.Since(startTime)), "bytes_flushed", humanize.Bytes(uint64(mt.GetBytesStored())))
+		slog.Debug("[unisondb.dbkernel]",
+			slog.String("event_type", "memtable.flushed"),
+			slog.Group("flushed",
+				slog.String("namespace", e.namespace),
+				slog.String("duration", humanizeDuration(time.Since(startTime))),
+				slog.Int("ops", recordProcessed),
+				slog.String("bytes", humanize.Bytes(uint64(mt.GetBytesStored())))),
+		)
 	}
 }
 
@@ -821,9 +829,14 @@ func (e *Engine) fSyncStore() {
 	}
 	metrics.MeasureSinceWithLabels(mKeyFSyncDurations, startTime, e.metricsLabel)
 
-	slog.Debug("[unisondb.dbkernel]: Flushed mem table and created WAL checkpoint",
-		"ops_flushed", fm.recordProcessed, "namespace", e.namespace,
-		"duration", humanizeDuration(time.Since(startTime)), "bytes_flushed", humanize.Bytes(fm.bytesFlushed))
+	slog.Debug("[unisondb.dbkernel]",
+		slog.String("event_type", "btree.fsync"),
+		slog.Group("fsync",
+			slog.String("namespace", e.namespace),
+			slog.String("duration", humanizeDuration(time.Since(startTime))),
+			slog.Uint64("record_processed", fm.metadata.RecordProcessed)),
+	)
+
 	if e.callback != nil {
 		go e.callback()
 	}

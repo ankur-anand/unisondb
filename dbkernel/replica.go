@@ -30,6 +30,17 @@ func NewReplicaWALHandler(engine *Engine) *ReplicaWALHandler {
 // ApplyRecord validates and applies a WAL record to the mem table which later get flushed to Btree Store.
 func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byte) error {
 	if receivedOffset == nil {
+		slog.Error("[unisondb.dbkernal]",
+			slog.String("event_type", "apply.record.errored"),
+			slog.String("error", "received nil offset while applying record"),
+			slog.Group("engine",
+				slog.String("namespace", wh.engine.namespace),
+			),
+			slog.Group("ops",
+				slog.Uint64("received", wh.engine.writeSeenCounter.Load()),
+				slog.Uint64("flushed", wh.engine.opsFlushedCounter.Load()),
+			),
+		)
 		return ErrInvalidOffset
 	}
 
@@ -49,8 +60,22 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 	}
 
 	if !isEqualOffset(offset, DecodeOffset(receivedOffset)) {
-		slog.Error("[unisondb.dbkernel] expected offset of wal entry didn't matched the received offset",
-			"received", wal.DecodeOffset(receivedOffset), "inserted", offset, "entry_size", len(encodedWal))
+		slog.Error("[unisondb.dbkernal]",
+			slog.String("event_type", "apply.record.errored"),
+			slog.String("error", " expected offset of wal entry didn't matched the received offset"),
+			slog.Group("engine",
+				slog.String("namespace", wh.engine.namespace),
+			),
+			slog.Group("ops",
+				slog.Uint64("received", wh.engine.writeSeenCounter.Load()),
+				slog.Uint64("flushed", wh.engine.opsFlushedCounter.Load()),
+			),
+			slog.Group("offset",
+				slog.Any("received", wal.DecodeOffset(receivedOffset)),
+				slog.Any("inserted", offset),
+				slog.Int("entry_size", len(encodedWal))),
+		)
+
 		return ErrInvalidOffset
 	}
 

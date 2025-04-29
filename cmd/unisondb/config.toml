@@ -11,11 +11,25 @@ ca_path = "../../certs/ca.crt"
 
 # StorageConfig stores all tunable parameters.
 [storage_config]
-base_dir = "/tmp/kvalchemy/server"   # Base directory for storage
+base_dir = "/tmp/unisondb/server"   # Base directory for storage
 namespaces = ["default", "tenant_1", "tenant_2"]
 bytes_per_sync = "1MB"
 segment_size = "16MB"
 arena_size = "4MB"
+
+[pprof_config]
+enabled = true
+port = 6070
+
+[log_config]
+log_level = "info"
+
+## this is for grpc logging only
+[log_config.min_level_percents]
+debug = 100.0
+info  = 50.0
+warn  = 100.0
+error = 100.0
 
 [fuzz_config]
 ops_per_namespace = 100

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/brianvoe/gofakeit/v7"
+	"github.com/prometheus/common/helpers/templates"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -135,19 +136,30 @@ func (cp *ColumnPool) Mutate() {
 }
 
 type ValuePool struct {
-	values [][]byte
+	smallValues [][]byte
+	largeValues [][]byte
 }
 
 func NewValuePool(sizes []int, countPerSize int) *ValuePool {
-	values := make([][]byte, 0, len(sizes)*countPerSize)
+	var smallValues [][]byte
+	var largeValues [][]byte
+
 	for _, sz := range sizes {
 		for i := 0; i < countPerSize; i++ {
 			b := make([]byte, sz)
 			fillRandomBytes(b)
-			values = append(values, b)
+			if sz <= 2048 {
+				smallValues = append(smallValues, b)
+			} else {
+				largeValues = append(largeValues, b)
+			}
 		}
 	}
-	return &ValuePool{values: values}
+
+	return &ValuePool{
+		smallValues: smallValues,
+		largeValues: largeValues,
+	}
 }
 
 func fillRandomBytes(b []byte) {
@@ -157,7 +169,11 @@ func fillRandomBytes(b []byte) {
 }
 
 func (vp *ValuePool) Get() []byte {
-	return vp.values[rand.Intn(len(vp.values))]
+	// 90% chance for small value
+	if rand.Float64() < 0.9 {
+		return vp.smallValues[rand.Intn(len(vp.smallValues))]
+	}
+	return vp.largeValues[rand.Intn(len(vp.largeValues))]
 }
 
 // FuzzEngineOps concurrently runs fuzzing operations against an Engine using multiple worker goroutines.
@@ -166,7 +182,7 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 	keyPool := NewKeyPool(500, 5, 256)
 	rowKeyPool := NewKeyPool(500, 5, 256)
 	columnPool := NewColumnPool(50)
-	valuePool := NewValuePool([]int{1024, 10 * 1024, 50 * 1024, 100 * 1024}, 100)
+	valuePool := NewValuePool([]int{100, 500, 1024, 2048, 10 * 1024, 50 * 1024, 100 * 1024}, 100)
 
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -175,7 +191,11 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 	})
 
 	workerInterval := time.Duration(float64(time.Second) / (float64(opsPerSec) / float64(numWorkers)))
-	slog.Info("[unisondb.fuzzer] fuzzing worker interval", "namespace", namespace, "interval", workerInterval)
+	slog.Info("[unisondb.fuzzer]",
+		slog.String("event_type", "fuzzing.started"),
+		slog.Group("worker",
+			slog.String("namespace", namespace),
+			slog.Duration("interval", workerInterval)))
 
 	// fuzzing workers
 	for i := 0; i < numWorkers; i++ {
@@ -186,7 +206,17 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 	}
 
 	_ = g.Wait()
-	slog.Info("[unisondb.fuzzer] FuzzEngineOps: completed fuzzing", "namespace", namespace)
+	snapshot := stats.Snapshot()
+	nameSpacedStats := snapshot[namespace]
+	slog.Info("[unisondb.fuzzer]",
+		slog.String("event_type", "fuzzing.completed"),
+		slog.Group("stats",
+			slog.String("namespace", namespace),
+			slog.Int64("error_count", nameSpacedStats.ErrorCount),
+			slog.String("runtime", humanizeDuration(nameSpacedStats.Duration)),
+			slog.Any("op_count", nameSpacedStats.OpCount),
+		),
+	)
 }
 
 func startMutationLoop(ctx context.Context, keyPool, rowKeyPool *KeyPool, columnPool *ColumnPool) error {
@@ -213,7 +243,6 @@ func runFuzzWorker(ctx context.Context, e Engine, workerID int, interval time.Du
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Debug("[unisondb.fuzzer] Worker shutting down", "workerID", workerID, "namespace", namespace)
 			return nil
 		case <-ticker.C:
 			executeRandomOp(e, keyPool, rowKeyPool, columnPool, stats, namespace, valuePool)
@@ -249,4 +278,12 @@ func executeRandomOp(e Engine, keyPool, rowKeyPool *KeyPool, columnPool *ColumnP
 	if stats != nil {
 		stats.Inc(namespace, op.name)
 	}
+}
+
+func humanizeDuration(d time.Duration) string {
+	s, err := templates.HumanizeDuration(d)
+	if err != nil {
+		return d.String()
+	}
+	return s
 }

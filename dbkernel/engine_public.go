@@ -15,6 +15,7 @@ import (
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/dgraph-io/badger/v4/y"
+	"github.com/dustin/go-humanize"
 	"github.com/hashicorp/go-metrics"
 )
 
@@ -70,7 +71,15 @@ func (cw *countingWriter) Write(p []byte) (int, error) {
 
 // BtreeSnapshot returns the snapshot of the current btree store.
 func (e *Engine) BtreeSnapshot(w io.Writer) (int64, error) {
-	slog.Info("[unisondb.dbkernal] BTree snapshot received")
+	slog.Info("[unisondb.dbkernal]",
+		slog.String("event_type", "btree.snapshot.requested"),
+		slog.Group("engine",
+			slog.String("namespace", e.namespace)),
+		slog.Group("ops",
+			slog.Uint64("received", e.writeSeenCounter.Load()),
+			slog.Uint64("flushed", e.opsFlushedCounter.Load())),
+	)
+
 	startTime := time.Now()
 	cw := &countingWriter{w: w}
 	metrics.IncrCounterWithLabels(mKeySnapshotTotal, 1, e.metricsLabel)
@@ -80,8 +89,33 @@ func (e *Engine) BtreeSnapshot(w io.Writer) (int64, error) {
 	}()
 
 	err := e.dataStore.Snapshot(cw)
+	if err == nil {
+		slog.Info("[unisondb.dbkernal]",
+			slog.String("event_type", "btree.snapshot.completed"),
+			slog.Group("engine",
+				slog.String("namespace", e.namespace)),
+			slog.Group("ops",
+				slog.Uint64("received", e.writeSeenCounter.Load()),
+				slog.Uint64("flushed", e.opsFlushedCounter.Load())),
+			slog.Group("snapshot",
+				slog.String("duration", humanizeDuration(time.Since(startTime))),
+				slog.String("bytes", humanize.Bytes(uint64(cw.count))),
+			))
+	}
+
 	if err != nil {
-		slog.Error("[unisondb.dbkernal] BTree snapshot error", "error", err)
+		slog.Error("[unisondb.dbkernal]",
+			slog.String("event_type", "btree.snapshot.errored"),
+			slog.String("error", err.Error()),
+			slog.Group("engine",
+				slog.String("namespace", e.namespace)),
+			slog.Group("ops",
+				slog.Uint64("received", e.writeSeenCounter.Load()),
+				slog.Uint64("flushed", e.opsFlushedCounter.Load())),
+			slog.Group("snapshot",
+				slog.String("duration", humanizeDuration(time.Since(startTime))),
+				slog.String("bytes", humanize.Bytes(uint64(cw.count))),
+			))
 	}
 	return cw.count, err
 }
@@ -458,11 +492,18 @@ func (e *Engine) Close(ctx context.Context) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	slog.Info("[unisondb.dbkernel]: Closing Down", "namespace", e.namespace,
-		"ops_received", e.writeSeenCounter.Load(),
-		"ops_flushed", e.opsFlushedCounter.Load())
+	err := e.close(ctx)
 
-	return e.close(ctx)
+	slog.Info("[unisondb.dbkernal]",
+		slog.String("event_type", "closed"),
+		slog.Group("engine",
+			slog.String("namespace", e.namespace)),
+		slog.Group("ops",
+			slog.Uint64("received", e.writeSeenCounter.Load()),
+			slog.Uint64("flushed", e.opsFlushedCounter.Load())),
+	)
+
+	return err
 }
 
 type Reader = wal.Reader
