@@ -17,7 +17,7 @@ variable "env" {
 }
 
 locals {
-  group    = "do.uninsondb-${var.env}-${var.region}"
+  group    = "do.unisondb-${var.env}-${var.region}"
   vpc_name = "vpc-${local.group}"
   tags = [local.group, var.env, var.region]
 }
