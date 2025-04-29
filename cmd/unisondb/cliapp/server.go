@@ -256,13 +256,22 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 	statsHandler := grpcutils.NewGRPCStatsHandler(grpcMethods)
 
 	ir := grpcutils.NewStatefulInterceptor(ms.pl, enabledMethodsLogs)
+	var serverOpts []grpc.ServerOption
 
-	creds, err := svcutils.NewMTLSCreds(ms.cfg.Grpc.CertPath, ms.cfg.Grpc.KeyPath, ms.cfg.Grpc.CAPath)
-	if err != nil {
-		return err
+	if ms.cfg.Grpc.AllowInsecure {
+		slog.Warn("[unisondb.cliapp]",
+			slog.String("event_type", "grpc.INSECURE.Mode"),
+			slog.Bool("allow_insecure", ms.cfg.Grpc.AllowInsecure),
+			slog.Int("port", ms.cfg.Grpc.Port))
+	} else {
+		creds, err := svcutils.NewMTLSCreds(ms.cfg.Grpc.CertPath, ms.cfg.Grpc.KeyPath, ms.cfg.Grpc.CAPath)
+		if err != nil {
+			return fmt.Errorf("failed to load TLS credentials: %w", err)
+		}
+		serverOpts = append(serverOpts, grpc.Creds(creds))
 	}
 
-	gS := grpc.NewServer(grpc.Creds(creds),
+	serverOpts = append(serverOpts,
 		grpc.StatsHandler(statsHandler),
 		grpc.ChainStreamInterceptor(grpcutils.RequireNamespaceInterceptor,
 			grpcutils.RequestIDStreamInterceptor,
@@ -281,6 +290,10 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 		}),
 		// https://github.com/grpc/grpc-go/pull/6922
 		grpc.WaitForHandlers(true),
+	)
+
+	gS := grpc.NewServer(
+		serverOpts...,
 	)
 
 	healthServer := health.NewServer()

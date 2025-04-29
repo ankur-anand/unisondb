@@ -13,6 +13,7 @@ import (
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Config : top-level configuration.
@@ -28,10 +29,11 @@ type Config struct {
 }
 
 type GrpcConfig struct {
-	Port     int    `toml:"port"`
-	CertPath string `toml:"cert_path"`
-	KeyPath  string `toml:"key_path"`
-	CAPath   string `toml:"ca_path"`
+	Port          int    `toml:"port"`
+	CertPath      string `toml:"cert_path"`
+	KeyPath       string `toml:"key_path"`
+	CAPath        string `toml:"ca_path"`
+	AllowInsecure bool   `toml:"allow_insecure"`
 }
 
 type StorageConfig struct {
@@ -52,6 +54,7 @@ type RelayConfig struct {
 	UpstreamAddress     string   `toml:"upstream_address"`
 	GrpcServiceConfig   string   `toml:"grpc_service_config"`
 	SegmentLagThreshold int      `toml:"segment_lag_threshold"`
+	AllowInsecure       bool     `toml:"allow_insecure"`
 }
 
 type LogConfig struct {
@@ -100,28 +103,40 @@ func ParseLevelPercents(cfg LogConfig) (map[slog.Level]float64, error) {
 }
 
 func NewRelayerGRPCConn(cfg *RelayConfig) (*grpc.ClientConn, error) {
-	var creds credentials.TransportCredentials
-	var err error
+	var opts []grpc.DialOption
 
-	if cfg.CertPath != "" && cfg.KeyPath != "" {
-		creds, err = svcutils.NewMTLSCreds(cfg.CertPath, cfg.KeyPath, cfg.CAPath)
-		if err != nil {
-			return nil, err
-		}
+	if cfg.AllowInsecure {
+		slog.Warn("[unisondb.config]",
+			slog.String("event_type", "client_grpc.INSECURE.Mode"),
+			slog.Bool("allow_insecure", cfg.AllowInsecure),
+			slog.String("address", cfg.UpstreamAddress))
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	} else {
-		creds, err = svcutils.NewTLSCreds(cfg.CAPath)
-		if err != nil {
-			return nil, err
+		var creds credentials.TransportCredentials
+		var err error
+
+		if cfg.CertPath != "" && cfg.KeyPath != "" {
+			creds, err = svcutils.NewMTLSCreds(cfg.CertPath, cfg.KeyPath, cfg.CAPath)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			creds, err = svcutils.NewTLSCreds(cfg.CAPath)
+			if err != nil {
+				return nil, err
+			}
 		}
+		opts = append(opts, grpc.WithTransportCredentials(creds))
 	}
 
+	// default service config if not provided
 	if cfg.GrpcServiceConfig == "" {
 		cfg.GrpcServiceConfig = svcutils.BuildDefaultRelayerServiceConfigJSON()
 	}
+	opts = append(opts, grpc.WithDefaultServiceConfig(cfg.GrpcServiceConfig))
 
 	return grpc.NewClient(cfg.UpstreamAddress,
-		grpc.WithTransportCredentials(creds),
-		grpc.WithDefaultServiceConfig(cfg.GrpcServiceConfig))
+		opts...)
 }
 
 func HashRelayConfig(relay RelayConfig) string {
