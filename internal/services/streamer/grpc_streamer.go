@@ -262,7 +262,7 @@ func (s *GrpcStreamer) flushBatch(batch []*v1.WALRecord, g grpc.ServerStream) er
 				slog.String("id", string(reqID)),
 			),
 		)
-		
+
 		metricsStreamSendErrors.WithLabelValues(namespace, string(method), "grpc").Inc()
 		return fmt.Errorf("failed to send WAL records: %w", err)
 	}
