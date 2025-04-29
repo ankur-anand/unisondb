@@ -67,7 +67,9 @@ func main() {
 	}
 
 	if err := app.Run(os.Args); err != nil {
-		slog.Error("[unisondb.main] failed to start", "error", err)
+		slog.Error("[unisondb.main]",
+			slog.String("event_type", "service.start.errored"),
+			"error", err)
 		os.Exit(1)
 	}
 }
@@ -78,9 +80,13 @@ func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) erro
 
 	srv := cliapp.Server{}
 
-	slog.Info("[unisondb.main] initializing",
-		"mode", mode, "env", env,
-		"config-path", configPath)
+	slog.Info("[unisondb.main]",
+		slog.String("event_type", "service.initialization.started"),
+		slog.Group("service",
+			slog.String("mode", mode),
+			slog.String("env", env),
+			slog.String("config_path", configPath)),
+	)
 
 	setup := []func(context.Context) error{
 		srv.InitFromCLI(configPath, env, mode, grpcEnabled),
@@ -95,12 +101,12 @@ func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) erro
 
 	for i, fn := range setup {
 		if err := fn(ctx); err != nil {
-			slog.Error("[unisondb.main] setup failed", "step", i, "error", err)
+			slog.Error("[unisondb.main]",
+				slog.String("event_type", "service.initialization.failed"),
+				"step", i, "error", err)
 			return err
 		}
 	}
-
-	slog.Info("[unisondb.main] started", "mode", mode, "env", env)
 
 	//IMP: run all the services concurrently
 	runFns := []func(context.Context) error{
@@ -109,6 +115,7 @@ func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) erro
 		srv.StartRelayer,
 		srv.RunFuzzer,
 		srv.RunPprofServer,
+		srv.PeriodicLogEngineOffset,
 	}
 
 	g, groupCtx := errgroup.WithContext(ctx)
@@ -118,17 +125,42 @@ func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) erro
 		g.Go(func() error {
 			err := fn(groupCtx)
 			if err != nil {
-				slog.Error("[unisondb.main] run function failed", "index", i, "error", err)
+				slog.Error("[unisondb.main]",
+					slog.String("event_type", "service.initialization.failed"),
+					"index", i, "error", err)
 			}
 			return err
 		})
 	}
 
+	slog.Info("[unisondb.main]",
+		slog.String("event_type", "service.initialization.completed"),
+		slog.Group("service",
+			slog.String("mode", mode),
+			slog.String("env", env),
+			slog.String("config_path", configPath)),
+	)
+
 	err := g.Wait()
 	if err != nil && !errors.Is(err, context.Canceled) {
-		slog.Error("[unisondb.main] shutting down due to error", "error", err)
+		slog.Error("[unisondb.main]",
+			slog.String("event_type", "service.shutdown.started"),
+			slog.String("shutdown_reason", "errored"),
+			slog.Any("error", err),
+			slog.Group("service",
+				slog.String("mode", mode),
+				slog.String("env", env),
+				slog.String("config_path", configPath)),
+		)
 	} else {
-		slog.Info("[unisondb.main] context cancelled, initiating shutdown", "mode", mode, "env", env)
+		slog.Info("[unisondb.main]",
+			slog.String("event_type", "service.shutdown.started"),
+			slog.String("shutdown_reason", "context.cancelled.signal"),
+			slog.Group("service",
+				slog.String("mode", mode),
+				slog.String("env", env),
+				slog.String("config_path", configPath)),
+		)
 	}
 
 	// begin graceful shutdown
@@ -144,6 +176,12 @@ func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) erro
 		}(i, cb)
 	}
 
-	slog.Info("[unisondb.main] shutdown complete", "mode", mode)
+	slog.Info("[unisondb.main]",
+		slog.String("event_type", "service.shutdown.completed"),
+		slog.Group("service",
+			slog.String("mode", mode),
+			slog.String("env", env),
+			slog.String("config_path", configPath)),
+	)
 	return err
 }
