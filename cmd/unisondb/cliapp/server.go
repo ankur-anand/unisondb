@@ -249,7 +249,7 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 		v1.KVStoreReadService_ServiceDesc)
 
 	enabledMethodsLogs := make(map[string]bool)
-	for _, method := range grpcMethods {
+	for method := range grpcMethods {
 		enabledMethodsLogs[method] = true
 	}
 
@@ -299,7 +299,8 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 
 	ms.grpcServer = gS
 	ms.DeferCallback = append(ms.DeferCallback, func(ctx context.Context) {
-		slog.Info("[unisondb.cliapp] stopping gRPC server")
+		slog.Info("[unisondb.cliapp]",
+			slog.String("event_type", "stopping.gRPC.server"))
 		rep.Close()
 		gS.GracefulStop()
 	})
@@ -317,7 +318,8 @@ func (ms *Server) SetupHTTPServer(ctx context.Context) error {
 		Handler:      mux,
 	}
 	ms.DeferCallback = append(ms.DeferCallback, func(ctx context.Context) {
-		slog.Info("[unisondb.cliapp] stopping HTTP server")
+		slog.Info("[unisondb.cliapp]",
+			slog.String("event_type", "stopping.HTTP.server"))
 		err := ms.httpServer.Shutdown(ctx)
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("[unisondb.cliapp] SetupHTTPServer: shutdown http server failed", "error", err)
@@ -337,7 +339,10 @@ func (ms *Server) RunGrpc(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	slog.Info("[unisondb.cliapp] gRPC server started", "port", ms.cfg.Grpc.Port)
+	slog.Info("[unisondb.cliapp]",
+		slog.String("event_type", "gRPC.server.started"),
+		slog.Int("port", ms.cfg.Grpc.Port),
+	)
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- ms.grpcServer.Serve(l)
@@ -356,7 +361,10 @@ func (ms *Server) RunHTTP(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	slog.Info("[unisondb.cliapp] HTTPServer started", "port", ms.cfg.HTTPPort)
+	slog.Info("[unisondb.cliapp]",
+		slog.String("event_type", "HTTP.server.started"),
+		slog.Int("port", ms.cfg.HTTPPort),
+	)
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- ms.httpServer.Serve(l)
@@ -450,7 +458,8 @@ func (ms *Server) SetupPprofServer(ctx context.Context) error {
 	ms.pprofServer = pprofServer
 
 	ms.DeferCallback = append(ms.DeferCallback, func(ctx context.Context) {
-		slog.Info("[unisondb.cliapp] shutting down pprof HTTP server")
+		slog.Info("[unisondb.cliapp]",
+			slog.String("event_type", "stopping.pprof.HTTP.server"))
 		if err := pprofServer.Shutdown(ctx); err != nil {
 			slog.Error("[unisondb.cliapp] failed to shutdown pprof HTTP server", "err", err)
 		}
@@ -462,7 +471,11 @@ func (ms *Server) RunPprofServer(ctx context.Context) error {
 	if !ms.cfg.PProfConfig.Enabled {
 		return nil
 	}
-	slog.Info("[unisondb.cliapp] pprof HTTP server started", "port", ms.cfg.PProfConfig.Port)
+
+	slog.Info("[unisondb.cliapp]",
+		slog.String("event_type", "pprof.HTTP.server.started"),
+		slog.Int("port", ms.cfg.PProfConfig.Port),
+	)
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- ms.pprofServer.ListenAndServe()
@@ -476,6 +489,36 @@ func (ms *Server) RunPprofServer(ctx context.Context) error {
 			return err
 		}
 		return nil
+	}
+}
+
+func (ms *Server) PeriodicLogEngineOffset(ctx context.Context) error {
+	tick := time.NewTicker(1 * time.Minute)
+	defer tick.Stop()
+	for {
+		select {
+		case <-tick.C:
+			for _, engine := range ms.engines {
+				currentOffset := engine.CurrentOffset()
+				var segmentId uint32
+				var blockID uint32
+				if currentOffset != nil {
+					segmentId = currentOffset.SegmentId
+					blockID = currentOffset.BlockNumber
+				}
+
+				slog.Info("[unisondb.cliapp]",
+					slog.String("event_type", "engines.offset.report"),
+					slog.Group("engine",
+						slog.String("namespace", engine.Namespace()),
+						slog.Uint64("current_segment_id", uint64(segmentId)),
+						slog.Uint64("current_block_number", uint64(blockID)),
+					),
+				)
+			}
+		case <-ctx.Done():
+			return nil
+		}
 	}
 }
 
