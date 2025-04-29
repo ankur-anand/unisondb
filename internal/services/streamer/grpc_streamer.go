@@ -95,6 +95,16 @@ func (s *GrpcStreamer) StreamWalRecords(request *v1.StreamWalRecordsRequest, g g
 	// it can contain terrible data
 	meta, err := decodeMetadata(request.GetOffset())
 	if err != nil {
+		slog.Error("[unisondb.streamer.grpc]",
+			slog.String("event_type", "metadata.decoding.failed"),
+			slog.Any("error", err),
+			slog.Any("server_offset", engine.CurrentOffset()),
+			slog.Group("request",
+				slog.String("namespace", namespace),
+				slog.String("id", string(reqID)),
+				slog.Any("offset", request.GetOffset()),
+			),
+		)
 		return services.ToGRPCError(namespace, reqID, method, services.ErrInvalidMetadata)
 	}
 	// create a new replicator instance.
@@ -211,6 +221,15 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 			}
 		case err := <-replicatorErr:
 			if errors.Is(err, dbkernel.ErrInvalidOffset) {
+				slog.Error("[unisondb.streamer.grpc]",
+					slog.String("event_type", "replicator.offset.invalid"),
+					slog.Any("error", err),
+					slog.Group("request",
+						slog.String("namespace", namespace),
+						slog.String("id", string(reqID)),
+					),
+				)
+
 				return services.ToGRPCError(namespace, reqID, method, services.ErrInvalidMetadata)
 			}
 			return services.ToGRPCError(namespace, reqID, method, err)
@@ -234,8 +253,16 @@ func (s *GrpcStreamer) flushBatch(batch []*v1.WALRecord, g grpc.ServerStream) er
 	}()
 
 	if err := g.SendMsg(response); err != nil {
-		slog.Error("[unisondb.streamer.grpc] Stream: failed to send WAL records", "err", err,
-			"records_count", len(batch), "namespace", namespace, reqIDKey, reqID)
+		slog.Error("[unisondb.streamer.grpc]",
+			slog.String("event_type", "send.wal.records.failed"),
+			slog.Any("error", err),
+			slog.Int("records_count", len(batch)),
+			slog.Group("request",
+				slog.String("namespace", namespace),
+				slog.String("id", string(reqID)),
+			),
+		)
+		
 		metricsStreamSendErrors.WithLabelValues(namespace, string(method), "grpc").Inc()
 		return fmt.Errorf("failed to send WAL records: %w", err)
 	}

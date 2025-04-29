@@ -69,11 +69,14 @@ func main() {
 	if err := app.Run(os.Args); err != nil {
 		slog.Error("[unisondb.main]",
 			slog.String("event_type", "service.start.errored"),
-			"error", err)
+			slog.Any("error", err),
+		)
 		os.Exit(1)
 	}
 }
 
+// Run
+// nolint: funlen
 func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -103,7 +106,9 @@ func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) erro
 		if err := fn(ctx); err != nil {
 			slog.Error("[unisondb.main]",
 				slog.String("event_type", "service.initialization.failed"),
-				"step", i, "error", err)
+				slog.Any("error", err),
+				slog.Int("step", i),
+			)
 			return err
 		}
 	}
@@ -127,7 +132,9 @@ func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) erro
 			if err != nil {
 				slog.Error("[unisondb.main]",
 					slog.String("event_type", "service.initialization.failed"),
-					"index", i, "error", err)
+					slog.Any("error", err),
+					slog.Int("step", i),
+				)
 			}
 			return err
 		})

@@ -492,6 +492,8 @@ func (ms *Server) RunPprofServer(ctx context.Context) error {
 	}
 }
 
+// PeriodicLogEngineOffset log's the offset of wal entry for all the initialized namespace
+// every minute.
 func (ms *Server) PeriodicLogEngineOffset(ctx context.Context) error {
 	tick := time.NewTicker(1 * time.Minute)
 	defer tick.Stop()
@@ -500,10 +502,10 @@ func (ms *Server) PeriodicLogEngineOffset(ctx context.Context) error {
 		case <-tick.C:
 			for _, engine := range ms.engines {
 				currentOffset := engine.CurrentOffset()
-				var segmentId uint32
+				var segmentID uint32
 				var blockID uint32
 				if currentOffset != nil {
-					segmentId = currentOffset.SegmentId
+					segmentID = currentOffset.SegmentId
 					blockID = currentOffset.BlockNumber
 				}
 
@@ -511,7 +513,7 @@ func (ms *Server) PeriodicLogEngineOffset(ctx context.Context) error {
 					slog.String("event_type", "engines.offset.report"),
 					slog.Group("engine",
 						slog.String("namespace", engine.Namespace()),
-						slog.Uint64("current_segment_id", uint64(segmentId)),
+						slog.Uint64("current_segment_id", uint64(segmentID)),
 						slog.Uint64("current_block_number", uint64(blockID)),
 					),
 				)
