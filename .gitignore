@@ -14,7 +14,7 @@ vendor/
 *.idea
 *.bin
 tmp
-
+dist
 *.crt
 *.key
 .venv
