@@ -213,7 +213,6 @@ func runFuzzWorker(ctx context.Context, e Engine, workerID int, interval time.Du
 	for {
 		select {
 		case <-ctx.Done():
-			slog.Debug("[unisondb.fuzzer] Worker shutting down", "workerID", workerID, "namespace", namespace)
 			return nil
 		case <-ticker.C:
 			executeRandomOp(e, keyPool, rowKeyPool, columnPool, stats, namespace, valuePool)

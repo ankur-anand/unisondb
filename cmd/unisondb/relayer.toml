@@ -14,6 +14,8 @@ ca_path = "../../certs/ca.crt"
 base_dir = "/tmp/unisondb/relayer"   # Base directory for storage
 namespaces = ["default", "tenant_1", "tenant_2"]
 bytes_per_sync = "1MB"
+## segment_size config should be in sync with the upstream
+## else the entire sync will fail.
 segment_size = "16MB"
 arena_size = "4MB"
 
@@ -30,7 +32,7 @@ cert_path = "../../certs/client.crt"
 key_path = "../../certs/client.key"
 ca_path = "../../certs/ca.crt"
 upstream_address = "localhost:4001"
-segment_lag_threshold = 1
+segment_lag_threshold = 100
 
 [log_config]
 log_level = "info"

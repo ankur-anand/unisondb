@@ -10,6 +10,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -98,8 +99,14 @@ func (ms *Server) InitFromCLI(cfgPath, env, mode string, relayerGRPCEnabled bool
 			return err
 		}
 
+		logLevel, err := parseLogLevel(ms.cfg.LogConfig.LogLevel)
+		if err != nil {
+			return err
+		}
+
+		slog.SetLogLoggerLevel(logLevel)
 		pl := logutil.NewPercentLogger(logPercentage, slog.NewTextHandler(os.Stdout, nil),
-			slog.LevelInfo)
+			logLevel)
 		ms.pl = pl
 		return nil
 	}
@@ -545,5 +552,22 @@ func logClamped[T comparable](field string, original, clamped T) {
 			"original", original,
 			"clamped", clamped,
 		)
+	}
+}
+
+func parseLogLevel(levelStr string) (slog.Level, error) {
+	switch strings.ToLower(levelStr) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	case "":
+		return slog.LevelInfo, nil
+	default:
+		return 0, fmt.Errorf("unknown log level: %q", levelStr)
 	}
 }
