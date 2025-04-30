@@ -347,13 +347,20 @@ func (ms *Server) RunGrpc(ctx context.Context) error {
 		return nil
 	}
 
+	ip := ms.cfg.Grpc.ListenIP
+	if ip == "" {
+		ip = "0.0.0.0"
+	}
+	addr := fmt.Sprintf("%s:%d", ip, ms.cfg.Grpc.Port)
+
 	var lis net.ListenConfig
-	l, err := lis.Listen(ctx, "tcp", fmt.Sprintf("localhost:%d", ms.cfg.Grpc.Port))
+	l, err := lis.Listen(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
 	slog.Info("[unisondb.cliapp]",
 		slog.String("event_type", "gRPC.server.started"),
+		slog.String("listen_ip", ip),
 		slog.Int("port", ms.cfg.Grpc.Port),
 	)
 	errCh := make(chan error, 1)
@@ -370,12 +377,20 @@ func (ms *Server) RunGrpc(ctx context.Context) error {
 
 func (ms *Server) RunHTTP(ctx context.Context) error {
 	var lis net.ListenConfig
-	l, err := lis.Listen(ctx, "tcp", fmt.Sprintf("localhost:%d", ms.cfg.HTTPPort))
+
+	ip := ms.cfg.ListenIP
+	if ip == "" {
+		ip = "0.0.0.0"
+	}
+	addr := fmt.Sprintf("%s:%d", ip, ms.cfg.HTTPPort)
+
+	l, err := lis.Listen(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}
 	slog.Info("[unisondb.cliapp]",
 		slog.String("event_type", "HTTP.server.started"),
+		slog.String("listen_ip", ip),
 		slog.Int("port", ms.cfg.HTTPPort),
 	)
 	errCh := make(chan error, 1)

@@ -19,6 +19,7 @@ import (
 // Config : top-level configuration.
 type Config struct {
 	HTTPPort     int                    `toml:"http_port"`
+	ListenIP     string                 `toml:"listen_ip"`
 	Grpc         GrpcConfig             `toml:"grpc_config"`
 	Storage      StorageConfig          `toml:"storage_config"`
 	PProfConfig  PProfConfig            `toml:"pprof_config"`
@@ -29,6 +30,7 @@ type Config struct {
 }
 
 type GrpcConfig struct {
+	ListenIP      string `toml:"listen_ip"`
 	Port          int    `toml:"port"`
 	CertPath      string `toml:"cert_path"`
 	KeyPath       string `toml:"key_path"`
