@@ -12,6 +12,7 @@ import (
 
 	"github.com/anishathalye/porcupine"
 	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/brianvoe/gofakeit/v7"
@@ -701,4 +702,37 @@ func TestEngineBatchKV_APIs(t *testing.T) {
 			assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "failed to get kv")
 		}
 	})
+}
+
+func TestEngine_NewReaderWithStart(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_persistence"
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.Close(context.Background())
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+	var keys [][]byte
+	var values [][]byte
+
+	t.Run("put_kv", func(t *testing.T) {
+		for i := uint64(0); i < 100; i++ {
+			key := gofakeit.UUID()
+			val := gofakeit.LetterN(uint(i + 1))
+			keys = append(keys, []byte(key))
+			values = append(values, []byte(val))
+		}
+
+		err := engine.BatchPut(keys, values)
+		assert.NoError(t, err, "BatchPut operation should succeed")
+	})
+
+	offset := &wal.Offset{SegmentId: 10000, BlockNumber: 1, ChunkOffset: 9999}
+	r, err := engine.NewReaderWithStart(offset)
+	assert.ErrorIs(t, err, dbkernel.ErrInvalidOffset)
+	assert.Nil(t, r)
 }

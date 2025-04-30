@@ -516,31 +516,30 @@ func (e *Engine) NewReader() (*Reader, error) {
 
 // NewReaderWithStart return a reader that reads from provided offset, until EOF is encountered.
 // It returns io.EOF when it reaches end of file.
-func (e *Engine) NewReaderWithStart(startPos *Offset) (*Reader, error) {
-	// get current offset.
-	curOffset := e.currentOffset.Load()
+func (e *Engine) NewReaderWithStart(startPos *Offset) (r *Reader, err error) {
+	// protect against very bad client
+	defer func() {
+		if rec := recover(); rec != nil {
+			slog.Error("[unisondb.dbkernel]",
+				slog.String("event_type", "new_reader.panic.recovered"),
+				slog.Any("panic", rec),
+				slog.Any("start_offset", startPos),
+			)
+			r = nil
+			err = fmt.Errorf("%w: can't create reader from offset %s", ErrInvalidOffset, startPos.String())
+		}
+	}()
+
 	if startPos == nil {
 		return e.NewReader()
 	}
+	curOffset := e.currentOffset.Load()
+	if curOffset == nil && startPos != nil {
+		return nil, ErrInvalidOffset
+	}
 
 	if curOffset == nil {
-		return nil, ErrInvalidOffset
-	}
-
-	if startPos.SegmentId > curOffset.SegmentId {
-		return nil, ErrInvalidOffset
-	}
-
-	if startPos.SegmentId == curOffset.SegmentId {
-		if startPos.BlockNumber > curOffset.BlockNumber {
-			return nil, ErrInvalidOffset
-		}
-
-		if startPos.BlockNumber == curOffset.BlockNumber {
-			if startPos.ChunkOffset > curOffset.ChunkOffset {
-				return nil, ErrInvalidOffset
-			}
-		}
+		return e.NewReader()
 	}
 
 	return e.walIO.NewReaderWithStart(startPos)
