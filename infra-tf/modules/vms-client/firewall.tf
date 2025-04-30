@@ -2,7 +2,10 @@
 resource "digitalocean_firewall" "do_firewall" {
   name = local.firewall_name
 
-  droplet_ids = [digitalocean_droplet.do_droplets.id]
+  droplet_ids = [
+    for droplet in digitalocean_droplet.do_droplets :
+    droplet.id
+  ]
 
   inbound_rule {
     protocol         = "tcp"

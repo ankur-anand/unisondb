@@ -44,9 +44,23 @@ variable "vpc_id" {
   type        = string
 }
 
+variable "client_count" {
+  description = "Number of UnisonDB client VMs to create"
+  type        = number
+  default     = 1
+}
+
+variable "central_ip" {
+  description = "Private IP of central UnisonDB server"
+  type        = string
+}
+
 locals {
-  group         = "fuzzer.unisondb.${var.region}-${var.env}"
-  firewall_name = "firewall-fuzzer-${local.group}"
-  vm            = local.group
-  tags          = ["unisondb", "fuzzer", var.env, var.region]
+  group         = "unisondb.${var.region}-${var.env}"
+  firewall_name = "firewall-client-${local.group}"
+  clients = {
+    for i in range(1, var.client_count + 1) :
+    format("client-%02d.${local.group}", i) => i
+  }
+  tags = ["unisondb", "client", var.env, var.region]
 }
