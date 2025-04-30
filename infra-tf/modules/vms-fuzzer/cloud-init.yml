@@ -1,0 +1,132 @@
+#cloud-config
+
+hostname: ${id}
+fqdn: ${id}.internal
+
+users:
+  - default
+  - name: ${username}
+    uid: 2001
+    gecos: "UnisonDB Service User"
+    shell: /bin/bash
+    groups: [sudo]
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+package_update: true
+packages:
+  - git
+  - curl
+  - bash-completion
+  - jq
+  - build-essential
+  - liblmdb-dev
+
+write_files:
+  - path: /etc/unisondb/config.toml
+    permissions: '0644'
+    content: |
+      ## Port of the http server  
+      http_port = 4000  
+      pprof_enable = true  
+      
+      [grpc_config]  
+      port = 4001   
+      allow_insecure = true  
+      
+      [storage_config]  
+      base_dir = "/tmp/unisondb/server"  
+      namespaces = ["default", "tenant_1", "tenant_2"]  
+      bytes_per_sync = "1MB"  
+      segment_size = "16MB"  
+      arena_size = "4MB"  
+      
+      [pprof_config]  
+      enabled = true  
+      port = 6060  
+      
+      [log_config]  
+      log_level = "info"  
+      
+      [log_config.min_level_percents]  
+      debug = 100.0  
+      info  = 100.0  
+      warn  = 100.0  
+      error = 100.0  
+      
+      [fuzz_config]  
+      ops_per_namespace = 50  
+      workers_per_namespace = 10
+
+  - path: /etc/systemd/system/unisondb.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=UnisonDB Server
+      After=network.target
+
+      [Service]
+      ExecStart=/usr/local/bin/unisondb --config /etc/unisondb/config.toml fuzzer
+      WorkingDirectory=/opt/unisondb
+      Restart=on-failure
+      User=${username}
+      LimitNOFILE=65535
+      StandardOutput=journal
+      StandardError=journal
+      SyslogIdentifier=unisondb
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/sysctl.d/99-tailscale.conf
+    permissions: '0644'
+    content: |
+      net.ipv4.ip_forward = 1
+      net.ipv6.conf.all.forwarding = 1
+
+  - path: /etc/systemd/journald.conf
+    permissions: '0644'
+    content: |
+      [Journal]
+      Storage=persistent
+      Compress=yes
+      SystemMaxUse=100M
+      SystemKeepFree=10M
+
+runcmd:
+  - set -x
+  - timedatectl set-timezone Asia/Kolkata
+
+  - mkdir -p /var/log/journal
+  - systemd-tmpfiles --create --prefix /var/log/journal
+  - systemctl restart systemd-journald
+
+  - bash -c "$(curl -fsSL https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh)" > /var/log/omb-install.log 2>&1
+  - sed -i 's/OSH_THEME="font"/OSH_THEME="powerline-naked"/' /root/.bashrc
+
+  - curl -fsSL https://tailscale.com/install.sh | sh
+  - sysctl -p /etc/sysctl.d/99-tailscale.conf
+  - tailscale up --hostname=${id} --authkey=${ts_auth_key}
+
+  - wget -q https://go.dev/dl/go${go_version}.linux-amd64.tar.gz
+  - rm -rf /usr/local/go && tar -C /usr/local -xzf go${go_version}.linux-amd64.tar.gz
+  - echo "export PATH=\$PATH:/usr/local/go/bin" >> /etc/profile.d/go.sh
+
+  - mkdir -p /opt/go /opt/go/cache
+  - echo 'export PATH=$PATH:/usr/local/go/bin:/opt/go/bin' | tee /etc/profile.d/go.sh /root/.profile > /dev/null
+  - echo 'export GOPATH=/opt/go' | tee -a /etc/profile.d/go.sh /root/.profile > /dev/null
+  - echo 'export GOCACHE=/opt/go/cache' | tee -a /etc/profile.d/go.sh /root/.profile > /dev/null
+  - chmod +x /etc/profile.d/go.sh
+
+  - export PATH=$PATH:/usr/local/go/bin:/opt/go/bin
+  - export GOPATH=/opt/go
+  - export GOCACHE=/opt/go/cache
+  - git clone https://github.com/ankur-anand/unisondb.git /opt/unisondb
+  - cd /opt/unisondb/cmd/unisondb && go build -tags fuzz -o /usr/local/bin/unisondb
+  - chown ${username}:${username} /usr/local/bin/unisondb
+
+  - systemctl daemon-reload
+  - systemctl enable unisondb
+  - systemctl start unisondb
+  - echo "Bootstrapped ${username} on ${id}"

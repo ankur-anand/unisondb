@@ -1,0 +1,20 @@
+# Local .terraform directories
+.terraform/
+*.tfstate
+*.tfstate.backup
+crash.log
+crash.*.log
+
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+*.tfvars
+*.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+
+terraform.tfplan
+.terraform.lock.hcl
+scrape_targets.json
