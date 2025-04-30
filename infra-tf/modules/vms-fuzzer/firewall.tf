@@ -1,0 +1,38 @@
+# Create a firewall to allow SSH (port 22) and Salt (port 4505-4506) traffic
+resource "digitalocean_firewall" "do_firewall" {
+  name = local.firewall_name
+
+  droplet_ids = [digitalocean_droplet.do_droplets.id]
+
+  inbound_rule {
+    protocol         = "tcp"
+    port_range       = "22"
+    source_addresses = ["100.64.0.0/10", "::/0"] # Restrict to Tailscale network
+  }
+
+  inbound_rule {
+    protocol         = "tcp"
+    port_range       = "1-65535"                               # Allow tcp protocols
+    source_addresses = [data.digitalocean_vpc.do_vpc.ip_range] # Allow all traffic from the VPC
+  }
+
+  inbound_rule {
+    protocol         = "udp"
+    port_range       = "53"                                    # Allow udp protocols
+    source_addresses = [data.digitalocean_vpc.do_vpc.ip_range] # Allow all traffic from the VPC
+  }
+
+  outbound_rule {
+    protocol              = "tcp"
+    port_range            = "1-65535"
+    destination_addresses = ["0.0.0.0/0", "::/0"]
+  }
+
+  outbound_rule {
+    protocol              = "udp"
+    port_range            = "53"
+    destination_addresses = ["0.0.0.0/0", "::/0"]
+  }
+
+  tags = ["unisondb", var.env, var.region]
+}
