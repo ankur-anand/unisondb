@@ -18,6 +18,7 @@ variable "ts_auth_key" {
   description = "Tail Scale AUTH Key"
   type        = string
   sensitive   = true
+  default     = ""
 }
 
 variable "region" {
@@ -43,15 +44,55 @@ output "vpc-out" {
   value = module.vpc
 }
 
+variable "ob_token" {
+  description = "OpenObserve token"
+  type        = string
+  sensitive   = true
+}
+
+variable "ob_user" {
+  description = "Openobserve user"
+  type        = string
+  sensitive   = true
+}
+
+variable "ob_pass" {
+  description = "OpenVPN user password"
+  type        = string
+  sensitive   = true
+}
+
+variable "fuzzer_droplet_size" {
+  type        = string
+  description = "The size slug of a droplet size"
+  default     = "s-1vcpu-1gb"
+}
+
 module "fuzzer" {
-  source      = "./modules/vms-fuzzer"
-  do_token    = var.do_token
-  ts_auth_key = var.ts_auth_key
-  vpc_id      = module.vpc.vpc_id
+  source       = "./modules/vms-fuzzer"
+  do_token     = var.do_token
+  ts_auth_key  = var.ts_auth_key
+  vpc_id       = module.vpc.vpc_id
+  ob_token     = var.ob_token
+  ob_pass      = var.ob_pass
+  ob_user      = var.ob_user
+  droplet_size = var.fuzzer_droplet_size
 }
 
 output "fuzzer" {
   value = module.fuzzer
+}
+
+variable "client_count" {
+  description = "unisondb client count"
+  type        = number
+  default     = 0
+}
+
+variable "client_droplet_size" {
+  type        = string
+  description = "The size slug of a droplet size"
+  default     = "s-1vcpu-1gb"
 }
 
 module "client" {
@@ -60,7 +101,11 @@ module "client" {
   ts_auth_key  = var.ts_auth_key
   vpc_id       = module.vpc.vpc_id
   central_ip   = module.fuzzer.droplet_private_ip
-  client_count = 2
+  client_count = var.client_count
+  ob_token     = var.ob_token
+  ob_pass      = var.ob_pass
+  ob_user      = var.ob_user
+  droplet_size = var.client_droplet_size
 }
 
 output "client" {

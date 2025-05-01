@@ -18,3 +18,4 @@ override.tf.json
 terraform.tfplan
 .terraform.lock.hcl
 scrape_targets.json
+*lock.info
