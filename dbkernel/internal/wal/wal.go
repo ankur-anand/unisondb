@@ -14,17 +14,18 @@ import (
 )
 
 var (
-	walMetricsReadTotal      = append(packageKey, "wal", "read", "total")
-	walMetricsAppendTotal    = append(packageKey, "wal", "append", "total")
-	walMetricsReadLatency    = append(packageKey, "wal", "read", "durations", "seconds")
-	walMetricsAppendLatency  = append(packageKey, "wal", "append", "durations", "seconds")
-	walMetricsReadErrors     = append(packageKey, "wal", "read", "errors", "total")
-	walMetricsAppendErrors   = append(packageKey, "wal", "append", "errors", "total")
-	walMetricsReadBytes      = append(packageKey, "wal", "read", "bytes", "total")
-	walMetricsAppendBytes    = append(packageKey, "wal", "append", "bytes", "total")
-	walMetricsFSyncTotal     = append(packageKey, "wal", "fsync", "total")
-	walMetricsFSyncErrors    = append(packageKey, "wal", "fsync", "errors", "total")
-	walMetricsFSyncDurations = append(packageKey, "wal", "fsync", "durations", "seconds")
+	walMetricsReadTotal       = append(packageKey, "wal", "read", "total")
+	walMetricsReaderReadTotal = append(packageKey, "wal", "reader", "next", "read", "total")
+	walMetricsAppendTotal     = append(packageKey, "wal", "append", "total")
+	walMetricsReadLatency     = append(packageKey, "wal", "read", "durations", "seconds")
+	walMetricsAppendLatency   = append(packageKey, "wal", "append", "durations", "seconds")
+	walMetricsReadErrors      = append(packageKey, "wal", "read", "errors", "total")
+	walMetricsAppendErrors    = append(packageKey, "wal", "append", "errors", "total")
+	walMetricsReadBytes       = append(packageKey, "wal", "read", "bytes", "total")
+	walMetricsAppendBytes     = append(packageKey, "wal", "append", "bytes", "total")
+	walMetricsFSyncTotal      = append(packageKey, "wal", "fsync", "total")
+	walMetricsFSyncErrors     = append(packageKey, "wal", "fsync", "errors", "total")
+	walMetricsFSyncDurations  = append(packageKey, "wal", "fsync", "durations", "seconds")
 )
 
 // Offset is a type alias to underlying wal implementation.
@@ -126,6 +127,7 @@ type Reader struct {
 // If there is no data, io. EOF will be returned.
 // The position can be used to read the data from the segment file.
 func (r *Reader) Next() ([]byte, *Offset, error) {
+	r.metrics.IncrCounterWithLabels(walMetricsReaderReadTotal, 1, r.label)
 	startTime := time.Now()
 	defer func() {
 		r.metrics.MeasureSinceWithLabels(walMetricsReadLatency, startTime, r.label)

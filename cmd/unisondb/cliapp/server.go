@@ -164,7 +164,9 @@ func (ms *Server) InitTelemetry(ctx context.Context) error {
 	}
 
 	defaultConfig := metrics.DefaultConfig("")
+	defaultConfig.TimerGranularity = time.Second
 	defaultConfig.EnableHostname = false
+	defaultConfig.EnableRuntimeMetrics = false
 	_, err = metrics.NewGlobal(defaultConfig, sink)
 	if err != nil {
 		return err
