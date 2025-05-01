@@ -1,0 +1,37 @@
+name: Terraform Lint & Format Checks
+
+on:
+  push:
+    paths:
+      - '**.tf'
+      - '.github/workflows/tf.yml'
+  pull_request:
+    paths:
+      - '**.tf'
+      - '.github/workflows/tf.yml'
+
+jobs:
+  terraform-check:
+    name: Run terraform fmt and tflint
+    runs-on: ubuntu-latest
+
+    permissions:
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Check Terraform format
+        run: terraform fmt -check -recursive
+
+      - name: Install tflint
+        uses: terraform-linters/setup-tflint@v4
+
+      - name: tflint-version
+        run: tflint --version
+
+      - name: Run tflint
+        run: tflint --recursive
+
+      - name: Terraform Validate
+        run: terraform validate -no-color
