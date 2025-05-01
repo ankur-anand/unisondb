@@ -62,6 +62,7 @@ type RelayConfig struct {
 type LogConfig struct {
 	MinLevelPercents map[string]float64 `toml:"min_level_percents"`
 	LogLevel         string             `toml:"log_level"`
+	DisableTimestamp bool               `toml:"disable_timestamp"`
 }
 
 type Limiter struct {
