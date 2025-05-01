@@ -83,14 +83,6 @@ func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) erro
 
 	srv := cliapp.Server{}
 
-	slog.Info("[unisondb.main]",
-		slog.String("event_type", "service.initialization.started"),
-		slog.Group("service",
-			slog.String("mode", mode),
-			slog.String("env", env),
-			slog.String("config_path", configPath)),
-	)
-
 	setup := []func(context.Context) error{
 		srv.InitFromCLI(configPath, env, mode, grpcEnabled),
 		srv.InitTelemetry,

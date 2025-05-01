@@ -104,10 +104,46 @@ func (ms *Server) InitFromCLI(cfgPath, env, mode string, relayerGRPCEnabled bool
 			return err
 		}
 
-		slog.SetLogLoggerLevel(logLevel)
-		pl := logutil.NewPercentLogger(logPercentage, slog.NewTextHandler(os.Stdout, nil),
+		disableTimeStamp := ms.cfg.LogConfig.DisableTimestamp
+		pl := logutil.NewPercentLogger(logPercentage, slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: logLevel,
+			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+				if disableTimeStamp && a.Key == slog.TimeKey {
+					return slog.Attr{}
+				}
+				if a.Key == slog.MessageKey {
+					return slog.String("module", a.Value.String())
+				}
+				return a
+			},
+		}),
 			logLevel)
 		ms.pl = pl
+		slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level: logLevel,
+			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+				if disableTimeStamp && a.Key == slog.TimeKey {
+					return slog.Attr{}
+				}
+				if a.Key == slog.MessageKey {
+					return slog.String("module", a.Value.String())
+				}
+				return a
+			},
+		})))
+
+		slog.Info("[unisondb.cliapp]",
+			slog.String("event_type", "configuration.loaded"),
+			slog.Group("cliapp",
+				slog.String("mode", mode),
+				slog.String("env", env),
+				slog.String("log_level", logLevel.String()),
+				slog.String("config_path", cfgPath)),
+			slog.Group("storage",
+				slog.String("path", ms.cfg.Storage.BaseDir),
+				slog.Any("namespaces", ms.cfg.Storage.Namespaces)),
+		)
+
 		return nil
 	}
 }
