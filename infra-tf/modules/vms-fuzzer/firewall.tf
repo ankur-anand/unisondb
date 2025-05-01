@@ -5,22 +5,22 @@ resource "digitalocean_firewall" "do_firewall" {
   droplet_ids = [digitalocean_droplet.do_droplets.id]
 
   inbound_rule {
-    protocol         = "tcp"
-    port_range       = "22"
+    protocol   = "tcp"
+    port_range = "22"
     # Restrict to Tailscale network
     source_addresses = ["100.64.0.0/10", "::/0"]
   }
 
   inbound_rule {
-    protocol         = "tcp"
-    port_range       = "1-65535"
+    protocol   = "tcp"
+    port_range = "1-65535"
     # Allow all traffic from the VPC
     source_addresses = [data.digitalocean_vpc.do_vpc.ip_range]
   }
 
   inbound_rule {
-    protocol         = "udp"
-    port_range       = "53"
+    protocol   = "udp"
+    port_range = "53"
     # Allow all traffic from the VPC
     source_addresses = [data.digitalocean_vpc.do_vpc.ip_range]
   }
