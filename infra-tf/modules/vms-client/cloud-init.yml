@@ -54,6 +54,7 @@ write_files:
       
       [log_config]  
       log_level = "info"  
+      disable_timestamp = true
       
       [log_config.min_level_percents]  
       debug = 100.0  
