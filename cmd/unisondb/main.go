@@ -113,6 +113,7 @@ func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) erro
 		srv.RunFuzzer,
 		srv.RunPprofServer,
 		srv.PeriodicLogEngineOffset,
+		srv.PeriodicGrpcUpdateStreamAgeBuckets,
 	}
 
 	g, groupCtx := errgroup.WithContext(ctx)

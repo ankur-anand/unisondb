@@ -70,6 +70,7 @@ type Server struct {
 	clientGrpcConnections map[string]*grpc.ClientConn
 	relayer               []relayerWithInfo
 	fuzzStats             *fuzzer.FuzzStats
+	statsHandler          *grpcutils.GRPCStatsHandler
 
 	pprofServer *http.Server
 
@@ -162,9 +163,9 @@ func (ms *Server) InitTelemetry(ctx context.Context) error {
 		return err
 	}
 
-	defaultConfig := metrics.DefaultConfig("unisondb")
+	defaultConfig := metrics.DefaultConfig("")
 	defaultConfig.EnableHostname = false
-	_, err = metrics.New(defaultConfig, sink)
+	_, err = metrics.NewGlobal(defaultConfig, sink)
 	if err != nil {
 		return err
 	}
@@ -290,6 +291,7 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 	}
 
 	statsHandler := grpcutils.NewGRPCStatsHandler(grpcMethods)
+	ms.statsHandler = statsHandler
 
 	ir := grpcutils.NewStatefulInterceptor(ms.pl, enabledMethodsLogs)
 	var serverOpts []grpc.ServerOption
@@ -582,6 +584,22 @@ func (ms *Server) PeriodicLogEngineOffset(ctx context.Context) error {
 					),
 				)
 			}
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+func (ms *Server) PeriodicGrpcUpdateStreamAgeBuckets(ctx context.Context) error {
+	if ms.statsHandler == nil {
+		return nil
+	}
+	tick := time.NewTicker(30 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-tick.C:
+			ms.statsHandler.UpdateStreamAgeBuckets()
 		case <-ctx.Done():
 			return nil
 		}
