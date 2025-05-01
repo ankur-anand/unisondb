@@ -11,7 +11,8 @@ resource "digitalocean_firewall" "do_firewall" {
     protocol   = "tcp"
     port_range = "22"
     # Restrict to Tailscale network
-    source_addresses = ["100.64.0.0/10", "::/0"]
+    # source_addresses = ["100.64.0.0/10", "::/0"]
+    source_addresses = ["0.0.0.0/0", "::/0"]
   }
 
   inbound_rule {

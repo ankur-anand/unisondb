@@ -95,6 +95,47 @@ write_files:
       SystemMaxUse=100M
       SystemKeepFree=10M
 
+  - path: /etc/prometheus/prometheus.yml
+    permissions: '0644'
+    content: |
+      global:
+        scrape_interval: 30s
+        external_labels:
+          instance: "${id}"
+
+      scrape_configs:
+        - job_name: "unisondb"
+          static_configs:
+            - targets: ["localhost:4000"]
+              labels:
+                instance: "${id}"
+                role: "${role}"
+
+      remote_write:
+        - url: "https://api.openobserve.ai/api/${ob_token}/prometheus/api/v1/write"
+          basic_auth:
+            username: "${ob_user}"
+            password: "${ob_pass}"
+
+  - path: /etc/systemd/system/prometheus.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Prometheus
+      After=network.target
+
+      [Service]
+      ExecStart=/usr/local/bin/prometheus \
+        --config.file=/etc/prometheus/prometheus.yml \
+        --storage.tsdb.path=/opt/prometheus/data \
+        --web.listen-address=":9090"
+      Restart=on-failure
+      User=nobody
+
+      [Install]
+      WantedBy=multi-user.target
+
+
 runcmd:
   - set -x
   - timedatectl set-timezone Asia/Kolkata
@@ -106,9 +147,9 @@ runcmd:
   - bash -c "$(curl -fsSL https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh)" > /var/log/omb-install.log 2>&1
   - sed -i 's/OSH_THEME="font"/OSH_THEME="powerline-naked"/' /root/.bashrc
 
-  - curl -fsSL https://tailscale.com/install.sh | sh
-  - sysctl -p /etc/sysctl.d/99-tailscale.conf
-  - tailscale up --hostname=${id} --authkey=${ts_auth_key}
+  #- curl -fsSL https://tailscale.com/install.sh | sh
+  #- sysctl -p /etc/sysctl.d/99-tailscale.conf
+  #- tailscale up --hostname=${id} --authkey=${ts_auth_key}
 
   - wget -q https://go.dev/dl/go${go_version}.linux-amd64.tar.gz
   - rm -rf /usr/local/go && tar -C /usr/local -xzf go${go_version}.linux-amd64.tar.gz
@@ -119,6 +160,17 @@ runcmd:
   - echo 'export GOPATH=/opt/go' | tee -a /etc/profile.d/go.sh /root/.profile > /dev/null
   - echo 'export GOCACHE=/opt/go/cache' | tee -a /etc/profile.d/go.sh /root/.profile > /dev/null
   - chmod +x /etc/profile.d/go.sh
+
+  - curl -LO https://github.com/prometheus/prometheus/releases/download/v${prometheus_version}/prometheus-${prometheus_version}.linux-amd64.tar.gz
+  - tar -xzf prometheus-${prometheus_version}.linux-amd64.tar.gz -C /opt
+  - mv /opt/prometheus-${prometheus_version}.linux-amd64 /opt/prometheus
+  - ln -sf /opt/prometheus/prometheus /usr/local/bin/prometheus
+  - ln -sf /opt/prometheus/promtool /usr/local/bin/promtool
+  - mkdir -p /opt/prometheus/data
+  - chown -R nobody:nogroup /opt/prometheus
+  - systemctl daemon-reload
+  - systemctl enable prometheus
+  - systemctl start prometheus
 
   - export PATH=$PATH:/usr/local/go/bin:/opt/go/bin
   - export GOPATH=/opt/go

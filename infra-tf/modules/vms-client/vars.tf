@@ -55,6 +55,30 @@ variable "central_ip" {
   type        = string
 }
 
+variable "ob_token" {
+  description = "OpenObserve token"
+  type        = string
+  sensitive   = true
+}
+
+variable "ob_user" {
+  description = "Openobserve user"
+  type        = string
+  sensitive   = true
+}
+
+variable "ob_pass" {
+  description = "OpenVPN user password"
+  type        = string
+  sensitive   = true
+}
+
+variable "prometheus_version" {
+  description = "The Prometheus version to install"
+  type        = string
+  default     = "2.53.4"
+}
+
 locals {
   group         = "unisondb.${var.region}-${var.env}"
   firewall_name = "firewall-client-${local.group}"
