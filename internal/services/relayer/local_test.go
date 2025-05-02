@@ -2,6 +2,7 @@ package relayer
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -29,6 +30,9 @@ func TestLocalWalRelayer(t *testing.T) {
 			select {
 			case <-ticker.C:
 				err := engine.Put([]byte(gofakeit.UUID()), []byte(gofakeit.UUID()))
+				if errors.Is(err, dbkernel.ErrInCloseProcess) {
+					return
+				}
 				if err != nil {
 					panic(err)
 				}
