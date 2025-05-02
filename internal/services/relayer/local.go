@@ -76,9 +76,10 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 			}
 			n.lastOffset = dbkernel.DecodeOffset(records[len(records)-1].Offset)
 		case err := <-replicatorErrors:
-			if !errors.Is(err, context.Canceled) || !errors.Is(err, io.EOF) {
-				panic(err)
+			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
+				return nil
 			}
+			panic(err)
 		case <-ticker.C:
 			localSegmentLagGauge.WithLabelValues(namespace, n.id)
 		}
