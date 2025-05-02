@@ -508,6 +508,15 @@ func (ms *Server) RunFuzzer(ctx context.Context) error {
 		ms.fuzzStats.StartStatsMonitor(ctx, 1*time.Minute)
 		return nil
 	})
+
+	if ms.cfg.FuzzConfig.LocalRelayerCount > 0 {
+		for _, engine := range ms.engines {
+			eng := engine
+			g.Go(func() error {
+				return relayer.StartNLocalRelayer(ctx, eng, ms.cfg.FuzzConfig.LocalRelayerCount, 1*time.Minute)
+			})
+		}
+	}
 	return g.Wait()
 }
 

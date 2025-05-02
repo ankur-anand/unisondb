@@ -73,6 +73,7 @@ type Limiter struct {
 type FuzzConfig struct {
 	OpsPerNamespace     int `toml:"ops_per_namespace"`
 	WorkersPerNamespace int `toml:"workers_per_namespace"`
+	LocalRelayerCount   int `toml:"local_relayer_count"`
 }
 
 type PProfConfig struct {
