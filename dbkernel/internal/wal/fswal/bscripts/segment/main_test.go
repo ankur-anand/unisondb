@@ -20,8 +20,8 @@ var (
 	}
 )
 
-func runBenchmark(segmentSize, chunkSize int64, flushPerWrite bool) time.Duration {
-	tmpFile, err := os.CreateTemp("", fmt.Sprintf("segment-%d-", segmentSize))
+func runBenchmarkMMAP(segmentSize, chunkSize int64, flushPerWrite bool) time.Duration {
+	tmpFile, err := os.CreateTemp("", fmt.Sprintf("segment-mmap-%d-", segmentSize))
 	if err != nil {
 		panic(err)
 	}
@@ -51,9 +51,39 @@ func runBenchmark(segmentSize, chunkSize int64, flushPerWrite bool) time.Duratio
 		}
 	}
 
-	// batched
 	if !flushPerWrite {
 		if err := mmapData.Flush(); err != nil {
+			panic(err)
+		}
+	}
+	return time.Since(start)
+}
+
+func runBenchmarkFile(segmentSize, chunkSize int64, syncPerWrite bool) time.Duration {
+	tmpFile, err := os.CreateTemp("", fmt.Sprintf("segment-fd-%d-", segmentSize))
+	if err != nil {
+		panic(err)
+	}
+	defer os.Remove(tmpFile.Name())
+	defer tmpFile.Close()
+
+	data := make([]byte, chunkSize)
+	start := time.Now()
+
+	for offset := int64(0); offset+chunkSize <= segmentSize; offset += chunkSize {
+		if _, err := tmpFile.WriteAt(data, offset); err != nil {
+			panic(err)
+		}
+
+		if syncPerWrite {
+			if err := tmpFile.Sync(); err != nil {
+				panic(err)
+			}
+		}
+	}
+
+	if !syncPerWrite {
+		if err := tmpFile.Sync(); err != nil {
 			panic(err)
 		}
 	}
@@ -68,15 +98,25 @@ func BenchmarkSegments(b *testing.B) {
 
 	for _, size := range segmentSizes {
 		for _, chunk := range chunkSizes {
-			b.Run(fmt.Sprintf("%dMB_%dKB_BatchFlush", size/(1<<20), chunk/(1<<10)), func(b *testing.B) {
+			b.Run(fmt.Sprintf("MMAP_%dMB_%dKB_BatchFlush", size/(1<<20), chunk/(1<<10)), func(b *testing.B) {
 				for i := 0; i < b.N; i++ {
-					runBenchmark(size, chunk, false)
+					runBenchmarkMMAP(size, chunk, false)
 				}
 			})
-
-			b.Run(fmt.Sprintf("%dMB_%dKB_PerWriteFlush", size/(1<<20), chunk/(1<<10)), func(b *testing.B) {
+			b.Run(fmt.Sprintf("MMAP_%dMB_%dKB_PerWriteFlush", size/(1<<20), chunk/(1<<10)), func(b *testing.B) {
 				for i := 0; i < b.N; i++ {
-					runBenchmark(size, chunk, true)
+					runBenchmarkMMAP(size, chunk, true)
+				}
+			})
+			
+			b.Run(fmt.Sprintf("FD_%dMB_%dKB_BatchSync", size/(1<<20), chunk/(1<<10)), func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					runBenchmarkFile(size, chunk, false)
+				}
+			})
+			b.Run(fmt.Sprintf("FD_%dMB_%dKB_PerWriteSync", size/(1<<20), chunk/(1<<10)), func(b *testing.B) {
+				for i := 0; i < b.N; i++ {
+					runBenchmarkFile(size, chunk, true)
 				}
 			})
 		}
