@@ -13,6 +13,7 @@ require (
 	github.com/common-nighthawk/go-figure v0.0.0-20210622060536-734e95fb86be
 	github.com/dgraph-io/badger/v4 v4.6.0
 	github.com/dustin/go-humanize v1.0.1
+	github.com/edsrzf/mmap-go v1.2.0
 	github.com/fatih/color v1.18.0
 	github.com/gofrs/flock v0.12.1
 	github.com/google/flatbuffers v25.2.10+incompatible
