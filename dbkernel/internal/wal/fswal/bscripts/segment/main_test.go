@@ -108,7 +108,7 @@ func BenchmarkSegments(b *testing.B) {
 					runBenchmarkMMAP(size, chunk, true)
 				}
 			})
-			
+
 			b.Run(fmt.Sprintf("FD_%dMB_%dKB_BatchSync", size/(1<<20), chunk/(1<<10)), func(b *testing.B) {
 				for i := 0; i < b.N; i++ {
 					runBenchmarkFile(size, chunk, false)
