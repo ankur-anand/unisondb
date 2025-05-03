@@ -47,8 +47,9 @@ const (
 )
 
 var (
-	ErrClosed     = errors.New("the segment file is closed")
-	ErrInvalidCRC = errors.New("invalid crc, the data may be corrupted")
+	ErrClosed        = errors.New("the segment file is closed")
+	ErrInvalidCRC    = errors.New("invalid crc, the data may be corrupted")
+	ErrCorruptHeader = errors.New("corrupt chunk header, invalid length")
 )
 
 type segmentReader struct {
@@ -232,6 +233,9 @@ func (seg *segment) Read(offset int64) ([]byte, *ChunkPosition, error) {
 
 	header := seg.mmapData[offset : offset+chunkHeaderSize]
 	length := binary.LittleEndian.Uint32(header[4:8])
+	if length > uint32(seg.Size()-offset-chunkHeaderSize) {
+		return nil, nil, ErrCorruptHeader
+	}
 	entrySize := chunkHeaderSize + int64(length)
 	if offset+entrySize > seg.Size() {
 		return nil, nil, io.EOF

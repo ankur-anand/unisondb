@@ -267,6 +267,23 @@ func TestSegment_CorruptHeader(t *testing.T) {
 	copy(seg.mmapData[pos.Offset+4:pos.Offset+8], []byte{0xFF, 0xFF, 0xFF, 0xFF})
 
 	_, _, err = seg.Read(pos.Offset)
+	assert.ErrorIs(t, err, ErrCorruptHeader)
+}
+
+func TestSegment_CorruptData(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	data := []byte("hello")
+	pos, err := seg.Write(data)
+	assert.NoError(t, err)
+	copy(seg.mmapData[pos.Offset+chunkHeaderSize:], []byte{})
+	seg.writeOffset.Store(pos.Offset + chunkHeaderSize - 1)
+	_, _, err = seg.Read(pos.Offset)
 	assert.ErrorIs(t, err, io.EOF)
 }
 
