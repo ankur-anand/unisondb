@@ -500,3 +500,15 @@ func TestSegment_MSync_Closed(t *testing.T) {
 	err = seg.MSync()
 	assert.ErrorIs(t, err, ErrClosed)
 }
+
+func TestSegment_WillExceed(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	defer seg.Close()
+
+	assert.False(t, seg.WillExceed(1024))
+	
+	seg.writeOffset.Store(seg.mmapSize - chunkHeaderSize - 1)
+	assert.True(t, seg.WillExceed(2)) // would exceed by 1 byte
+}

@@ -283,6 +283,12 @@ func (seg *segment) MSync() error {
 	return nil
 }
 
+func (seg *segment) WillExceed(dataSize int) bool {
+	entrySize := int64(chunkHeaderSize + dataSize)
+	offset := seg.writeOffset.Load()
+	return offset+entrySize > seg.mmapSize
+}
+
 func (seg *segment) Close() error {
 	if seg.closed.Load() {
 		return nil
