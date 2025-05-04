@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestChunkPositionEncodeDecode(t *testing.T) {
@@ -221,7 +220,8 @@ func TestSegment_WriteRead_1KBTo1MB(t *testing.T) {
 	})
 
 	sizes := []int{
-		1 << 10, // 1KB
+		// 1KB
+		1 << 10,
 		2 << 10,
 		4 << 10,
 		8 << 10,
@@ -231,7 +231,8 @@ func TestSegment_WriteRead_1KBTo1MB(t *testing.T) {
 		128 << 10,
 		256 << 10,
 		512 << 10,
-		1 << 20, // 1MB
+		// 1MB
+		1 << 20,
 	}
 
 	var positions []*ChunkPosition
@@ -546,7 +547,7 @@ func TestNewSegment_MetadataInitialization(t *testing.T) {
 	tmpDir := t.TempDir()
 	seg, err := openSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, seg.Close()) })
+	t.Cleanup(func() { assert.NoError(t, seg.Close()) })
 
 	metaBuf := seg.mmapData[:segmentMetadataSize]
 	meta, err := decodeSegmentMetadata(metaBuf)
@@ -564,4 +565,93 @@ func TestNewSegment_MetadataInitialization(t *testing.T) {
 	assert.InDelta(t, now, meta.CreatedAt, float64(30*time.Second), "CreatedAt too far from now")
 	assert.InDelta(t, now, meta.LastModifiedAt, float64(30*time.Second), "LastModifiedAt too far from now")
 	assert.InDelta(t, now, seg.GetLastModifiedAt(), float64(30*time.Second), "LastModifiedAt too far from now")
+}
+
+func TestSegment_SealAndPreventWrite(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() { _ = seg.Close() })
+
+	_, err = seg.Write([]byte("hello"))
+	assert.NoError(t, err, "initial write should succeed")
+
+	err = seg.sealSegment()
+	assert.NoError(t, err, "sealing segment should not fail")
+
+	_, err = seg.Write([]byte("how are you?"))
+	assert.ErrorIs(t, err, ErrWriteToSealedSegment)
+
+	_ = seg.Close()
+	seg2, err := openSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	defer seg2.Close()
+
+	meta, err := decodeSegmentMetadata(seg2.mmapData[:segmentMetadataSize])
+	assert.NoError(t, err)
+	assert.True(t, isSealed(meta.Flags), "segment should remain sealed after reopen")
+	assert.False(t, isActive(meta.Flags), "segment should remain active after reopen")
+}
+
+func TestSegmentOffsetBehavior(t *testing.T) {
+	t.Run("new segment should start at segmentMetadataSize", func(t *testing.T) {
+		dir := t.TempDir()
+		seg, err := openSegmentFile(dir, ".wal", 1)
+		assert.NoError(t, err)
+		defer seg.Close()
+
+		assert.Equal(t, int64(segmentMetadataSize), seg.writeOffset.Load())
+	})
+
+	t.Run("sealed segment should restore write offset from metadata", func(t *testing.T) {
+		dir := t.TempDir()
+		seg, err := openSegmentFile(dir, ".wal", 1)
+		assert.NoError(t, err)
+
+		data := []byte("sealed-data")
+		_, err = seg.Write(data)
+		assert.NoError(t, err)
+		expectedOffset := seg.writeOffset.Load()
+
+		err = seg.sealSegment()
+		assert.NoError(t, err)
+		assert.NoError(t, seg.Close())
+
+		seg2, err := openSegmentFile(dir, ".wal", 1)
+		assert.NoError(t, err)
+		defer seg2.Close()
+
+		assert.Equal(t, expectedOffset, seg2.writeOffset.Load())
+	})
+
+	t.Run("active segment with crash should recover valid offset by scanning", func(t *testing.T) {
+		dir := t.TempDir()
+		seg, err := openSegmentFile(dir, ".wal", 1)
+		assert.NoError(t, err)
+
+		data := []byte("valid")
+		_, err = seg.Write(data)
+		assert.NoError(t, err)
+
+		offset := seg.writeOffset.Load()
+
+		copy(seg.mmapData[offset:], []byte{
+			// invalid checksum
+			0x00, 0x00, 0x00, 0x00,
+			// length = 5
+			0x05, 0x00, 0x00, 0x00,
+			ChunkTypeFull,
+		})
+		copy(seg.mmapData[offset+chunkHeaderSize:], "corru")
+
+		assert.NoError(t, seg.Sync())
+		assert.NoError(t, seg.Close())
+
+		seg2, err := openSegmentFile(dir, ".wal", 1)
+		assert.NoError(t, err)
+		defer seg2.Close()
+
+		assert.Equal(t, offset, seg2.writeOffset.Load())
+	})
 }

@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -110,10 +109,11 @@ const (
 )
 
 var (
-	ErrClosed          = errors.New("the segment file is closed")
-	ErrInvalidCRC      = errors.New("invalid crc, the data may be corrupted")
-	ErrCorruptHeader   = errors.New("corrupt chunk header, invalid length")
-	ErrIncompleteChunk = errors.New("incomplete or torn write detected at chunk trailer")
+	ErrClosed               = errors.New("the segment file is closed")
+	ErrInvalidCRC           = errors.New("invalid crc, the data may be corrupted")
+	ErrCorruptHeader        = errors.New("corrupt chunk header, invalid length")
+	ErrIncompleteChunk      = errors.New("incomplete or torn write detected at chunk trailer")
+	ErrWriteToSealedSegment = errors.New("cannot write to sealed segment")
 )
 
 const (
@@ -167,16 +167,15 @@ func DecodeChunkPosition(data []byte) (ChunkPosition, error) {
 }
 
 type segment struct {
-	id           SegmentID
-	fd           *os.File
-	mmapData     mmap.MMap
-	mmapSize     int64
-	writeOffset  atomic.Int64
-	activeReader atomic.Int32
-	closed       atomic.Bool
-	header       []byte
-	writeMu      sync.RWMutex
-	syncOption   MsyncOption
+	id          SegmentID
+	fd          *os.File
+	mmapData    mmap.MMap
+	mmapSize    int64
+	writeOffset atomic.Int64
+	closed      atomic.Bool
+	header      []byte
+	writeMu     sync.RWMutex
+	syncOption  MsyncOption
 }
 
 // WithSyncOption sets the sync option for the segment.
@@ -211,15 +210,63 @@ func openSegmentFile(dirPath, extName string, id uint32, opts ...func(*segment))
 		opt(s)
 	}
 
-	offset := segmentMetadataSize
+	offset := int64(segmentMetadataSize)
 	if isNew {
+		// for a new segment file we initialize it with default metadata.
 		writeInitialMetadata(mmapData)
 	} else {
-		offset = int(scanForLastOffset(path, mmapData))
+		// decode the segment metadata header
+		meta, err := decodeSegmentMetadata(mmapData[:segmentMetadataSize])
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode metadata: %w", err)
+		}
+
+		if isSealed(meta.Flags) {
+			// for the sealed segment our active offset is already saved
+			offset = meta.WriteOffset
+		} else {
+			// while we trust the write offset we are scanning the segment
+			// to find the true end of valid data for safe appends,
+			// while in most cases this would not happen but if crashed
+			// we don't know if the written header metadata offset is valid enough.
+			offset = scanForLastOffset(path, mmapData)
+		}
 	}
-	s.writeOffset.Store(int64(offset))
+	s.writeOffset.Store(offset)
 
 	return s, nil
+}
+
+func isSealed(flags uint32) bool {
+	return flags&FlagSealed != 0
+}
+
+func isActive(flags uint32) bool {
+	return flags&FlagActive != 0
+}
+
+func (seg *segment) sealSegment() error {
+	seg.writeMu.Lock()
+	defer seg.writeMu.Unlock()
+
+	if seg.closed.Load() {
+		return ErrClosed
+	}
+
+	mmapData := seg.mmapData
+
+	now := uint64(time.Now().UnixNano())
+	binary.LittleEndian.PutUint64(mmapData[16:24], now)
+	binary.LittleEndian.PutUint64(mmapData[24:32], uint64(seg.writeOffset.Load()))
+	flags := binary.LittleEndian.Uint32(mmapData[40:44])
+	flags &^= FlagActive // clear 'active' bit
+	flags |= FlagSealed  // set 'sealed' bit
+	binary.LittleEndian.PutUint32(mmapData[40:44], flags)
+
+	crc := crc32.ChecksumIEEE(mmapData[0:56])
+	binary.LittleEndian.PutUint32(mmapData[56:60], crc)
+
+	return nil
 }
 
 func isNewSegment(path string) (bool, error) {
@@ -306,6 +353,11 @@ func (seg *segment) Write(data []byte) (*ChunkPosition, error) {
 
 	seg.writeMu.Lock()
 	defer seg.writeMu.Unlock()
+
+	flags := binary.LittleEndian.Uint32(seg.mmapData[40:44])
+	if isSealed(flags) {
+		return nil, ErrWriteToSealedSegment
+	}
 
 	offset := seg.writeOffset.Load()
 	entrySize := int64(chunkHeaderSize + len(data) + chunkTrailerSize)
@@ -426,10 +478,6 @@ func (seg *segment) WillExceed(dataSize int) bool {
 func (seg *segment) Close() error {
 	if seg.closed.Load() {
 		return nil
-	}
-
-	for seg.activeReader.Load() > 0 {
-		runtime.Gosched()
 	}
 
 	if err := seg.Sync(); err != nil {
