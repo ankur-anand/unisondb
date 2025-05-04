@@ -1,6 +1,7 @@
 package walfs
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -47,9 +48,25 @@ const (
 )
 
 var (
-	ErrClosed        = errors.New("the segment file is closed")
-	ErrInvalidCRC    = errors.New("invalid crc, the data may be corrupted")
-	ErrCorruptHeader = errors.New("corrupt chunk header, invalid length")
+	ErrClosed          = errors.New("the segment file is closed")
+	ErrInvalidCRC      = errors.New("invalid crc, the data may be corrupted")
+	ErrCorruptHeader   = errors.New("corrupt chunk header, invalid length")
+	ErrIncompleteChunk = errors.New("incomplete or torn write detected at chunk trailer")
+)
+
+const (
+	// size of the trailer used to detect torn writes.
+	// We are writing this to detect torn or partial writes caused by unexpected shutdowns or disk failures.
+	// This is inspired by a real-world issue observed in etcd v2.3:
+	// SEE: https://github.com/etcd-io/etcd/issues/6191#issuecomment-240268979
+	// By adding a known trailer marker (e.g., 0xDEADBEEF), we can explicitly validate that a chunk
+	// was fully persisted, and safely stop recovery at the first missing or corrupted trailer.
+	chunkTrailerSize = 4
+)
+
+var (
+	// marker written after every WAL chunk to detect torn/incomplete writes.
+	trailerCanary = []byte{0xDE, 0xAD, 0xBE, 0xEF}
 )
 
 type segmentReader struct {
@@ -149,13 +166,14 @@ func openSegmentFile(dirPath, extName string, id uint32, opts ...func(*segment))
 		for offset+chunkHeaderSize <= segmentSize {
 			header := mmapData[offset : offset+chunkHeaderSize]
 			length := binary.LittleEndian.Uint32(header[4:8])
-			entrySize := int64(chunkHeaderSize + length)
+			entrySize := int64(chunkHeaderSize + length + chunkTrailerSize)
 
 			if offset+entrySize > segmentSize {
 				break
 			}
 
-			data := mmapData[offset+chunkHeaderSize : offset+entrySize]
+			data := mmapData[offset+chunkHeaderSize : offset+chunkHeaderSize+int64(length)]
+			trailer := mmapData[offset+chunkHeaderSize+int64(length) : offset+entrySize]
 			savedSum := binary.LittleEndian.Uint32(header[:4])
 			computedSum := crc32Checksum(header[4:], data)
 
@@ -164,7 +182,7 @@ func openSegmentFile(dirPath, extName string, id uint32, opts ...func(*segment))
 				break
 			}
 
-			if savedSum == 0 || savedSum != computedSum {
+			if savedSum == 0 || savedSum != computedSum || !bytes.Equal(trailer, trailerCanary) {
 				slog.Warn("[unisondb.fswal]",
 					slog.String("event_type", "segment.recovery.stopped.checksum.mismatch"),
 					slog.Int64("offset", offset),
@@ -192,7 +210,7 @@ func (seg *segment) Write(data []byte) (*ChunkPosition, error) {
 	defer seg.writeMu.Unlock()
 
 	offset := seg.writeOffset.Load()
-	entrySize := int64(chunkHeaderSize + len(data))
+	entrySize := int64(chunkHeaderSize + len(data) + chunkTrailerSize)
 	if offset+entrySize > seg.mmapSize {
 		return nil, errors.New("write exceeds segment size")
 	}
@@ -208,8 +226,11 @@ func (seg *segment) Write(data []byte) (*ChunkPosition, error) {
 
 	copy(seg.mmapData[offset:], seg.header[:])
 	copy(seg.mmapData[offset+chunkHeaderSize:], data)
-	seg.writeOffset.Add(entrySize)
 
+	canaryOffset := offset + chunkHeaderSize + int64(len(data))
+	copy(seg.mmapData[canaryOffset:], trailerCanary)
+
+	seg.writeOffset.Add(entrySize)
 	// MSync if option is set
 	if seg.syncOption == MsyncOnWrite {
 		if err := seg.mmapData.Flush(); err != nil {
@@ -236,17 +257,22 @@ func (seg *segment) Read(offset int64) ([]byte, *ChunkPosition, error) {
 	if length > uint32(seg.Size()-offset-chunkHeaderSize) {
 		return nil, nil, ErrCorruptHeader
 	}
-	entrySize := chunkHeaderSize + int64(length)
+	entrySize := chunkHeaderSize + int64(length) + chunkTrailerSize
 	if offset+entrySize > seg.Size() {
 		return nil, nil, io.EOF
 	}
 
 	data := seg.mmapData[offset+chunkHeaderSize : offset+chunkHeaderSize+int64(length)]
+	trailer := seg.mmapData[offset+chunkHeaderSize+int64(length) : offset+entrySize]
 
 	savedSum := binary.LittleEndian.Uint32(header[:4])
 	computedSum := crc32Checksum(header[4:], data)
 	if savedSum != computedSum {
 		return nil, nil, ErrInvalidCRC
+	}
+
+	if !bytes.Equal(trailer, trailerCanary) {
+		return nil, nil, ErrIncompleteChunk
 	}
 
 	next := &ChunkPosition{

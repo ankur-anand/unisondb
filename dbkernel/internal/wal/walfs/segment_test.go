@@ -70,7 +70,7 @@ func TestSegment_BasicOperations(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, tests[i].data, readData, "mismatch at index %d", i)
 
-		expectedNextOffset := pos.Offset + int64(len(tests[i].data)+chunkHeaderSize)
+		expectedNextOffset := pos.Offset + int64(len(tests[i].data)+chunkHeaderSize) + int64(chunkTrailerSize)
 		assert.Equal(t, expectedNextOffset, next.Offset, "wrong next offset at index %d", i)
 	}
 }
@@ -249,7 +249,7 @@ func TestSegment_WriteRead_1KBTo1MB(t *testing.T) {
 	for i, pos := range positions {
 		readData, next, err := seg.Read(pos.Offset)
 		assert.NoError(t, err, "failed at size index %d, size=%d", i, len(original[i]))
-		expectedNextOffset := pos.Offset + int64(chunkHeaderSize+len(original[i]))
+		expectedNextOffset := pos.Offset + int64(chunkHeaderSize+len(original[i])) + int64(chunkTrailerSize)
 		assert.Equal(t, expectedNextOffset, next.Offset, "unexpected next offset at index %d", i)
 		assert.Equal(t, original[i], readData, fmt.Sprintf("data mismatch at index %d", i))
 	}
@@ -344,7 +344,7 @@ func TestSegment_WriteAtExactBoundary(t *testing.T) {
 		assert.NoError(t, seg.Close())
 	})
 
-	size := segmentSize - chunkHeaderSize
+	size := segmentSize - chunkHeaderSize - chunkTrailerSize
 	data := make([]byte, size)
 	for i := range data {
 		data[i] = 'A'
@@ -511,4 +511,24 @@ func TestSegment_WillExceed(t *testing.T) {
 
 	seg.writeOffset.Store(seg.mmapSize - chunkHeaderSize - 1)
 	assert.True(t, seg.WillExceed(2)) // would exceed by 1 byte
+}
+
+func TestSegment_TrailerValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	data := []byte("trailer test")
+	pos, err := seg.Write(data)
+	assert.NoError(t, err)
+
+	trailerOffset := pos.Offset + int64(chunkHeaderSize+len(data))
+	copy(seg.mmapData[trailerOffset:], []byte{0x00, 0x00, 0x00, 0x00})
+
+	_, _, err = seg.Read(pos.Offset)
+	assert.ErrorIs(t, err, ErrIncompleteChunk)
 }

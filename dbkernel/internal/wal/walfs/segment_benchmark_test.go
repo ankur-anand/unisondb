@@ -29,7 +29,7 @@ func (r *threadSafeRand) Intn(n int) int {
 var globalRand = newThreadSafeRand()
 
 func calculateMaxEntries(dataSize int) int {
-	entrySize := int64(chunkHeaderSize + dataSize)
+	entrySize := int64(chunkHeaderSize + dataSize + chunkTrailerSize)
 	maxEntries := int(segmentSize / entrySize)
 	if maxEntries == 0 {
 		return 1
