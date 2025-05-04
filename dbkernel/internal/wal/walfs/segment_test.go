@@ -6,8 +6,10 @@ import (
 	"io"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestChunkPositionEncodeDecode(t *testing.T) {
@@ -344,7 +346,7 @@ func TestSegment_WriteAtExactBoundary(t *testing.T) {
 		assert.NoError(t, seg.Close())
 	})
 
-	size := segmentSize - chunkHeaderSize - chunkTrailerSize
+	size := segmentSize - segmentMetadataSize - chunkHeaderSize - chunkTrailerSize
 	data := make([]byte, size)
 	for i := range data {
 		data[i] = 'A'
@@ -531,4 +533,35 @@ func TestSegment_TrailerValidation(t *testing.T) {
 
 	_, _, err = seg.Read(pos.Offset)
 	assert.ErrorIs(t, err, ErrIncompleteChunk)
+	assert.NoError(t, seg.Sync())
+	assert.NoError(t, seg.Close())
+	seg2, err := openSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg2.Close())
+	})
+}
+
+func TestNewSegment_MetadataInitialization(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, seg.Close()) })
+
+	metaBuf := seg.mmapData[:segmentMetadataSize]
+	meta, err := decodeSegmentMetadata(metaBuf)
+	assert.NoError(t, err)
+
+	assert.Equal(t, uint32(segmentMagicNumber), meta.Magic, "Magic number mismatch")
+	assert.Equal(t, uint32(currentMetadataVersion), meta.Version, "Version mismatch")
+	assert.Equal(t, int64(segmentMetadataSize), meta.WriteOffset, "Initial write offset should be after metadata header")
+	assert.Equal(t, int64(0), seg.GetEntryCount(), "Entry count should start at 0")
+	assert.Equal(t, int64(0), meta.EntryCount, "Entry count should start at 0")
+	assert.Equal(t, FlagActive, meta.Flags, "Initial flags should have 'active' set")
+	assert.Equal(t, FlagActive, seg.GetFlags(), "Initial flags should have 'active' set")
+
+	now := time.Now().UnixNano()
+	assert.InDelta(t, now, meta.CreatedAt, float64(30*time.Second), "CreatedAt too far from now")
+	assert.InDelta(t, now, meta.LastModifiedAt, float64(30*time.Second), "LastModifiedAt too far from now")
+	assert.InDelta(t, now, seg.GetLastModifiedAt(), float64(30*time.Second), "LastModifiedAt too far from now")
 }

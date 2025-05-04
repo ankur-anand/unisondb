@@ -13,9 +13,71 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/edsrzf/mmap-go"
 )
+
+const (
+	FlagActive uint32 = 1 << iota
+	FlagSealed uint32 = 1 << 1
+)
+
+const (
+	segmentMetadataSize = 64
+	// just a string of "UWAL"
+	// 'U' = 0x55 and so on. Unison Write ahead log.
+	segmentMagicNumber     = 0x5557414C
+	currentMetadataVersion = 1
+)
+
+type SegmentMetadata struct {
+	// at 0
+	Magic uint32
+	// at 4
+	Version uint32
+	// at 8
+	CreatedAt int64
+	// at 16
+	LastModifiedAt int64
+	// at 24
+	WriteOffset int64
+	// at 32
+	EntryCount int64
+	// at 40
+	Flags uint32
+
+	// at 44–55
+	// - Reserved for future use
+	_ [12]byte
+	// at 56 byte: - CRC32 of first 56 bytes
+	CRC uint32
+	// at 60 - padding to align to 64B
+	_ uint32
+}
+
+func decodeSegmentMetadata(buf []byte) (*SegmentMetadata, error) {
+	if len(buf) < 64 {
+		return nil, io.ErrUnexpectedEOF
+	}
+
+	crc := binary.LittleEndian.Uint32(buf[56:60])
+	computed := crc32.ChecksumIEEE(buf[0:56])
+	if crc != computed {
+		return nil, fmt.Errorf("segment metadata CRC mismatch: expected %08x, got %08x", crc, computed)
+	}
+
+	meta := &SegmentMetadata{
+		Magic:          binary.LittleEndian.Uint32(buf[0:4]),
+		Version:        binary.LittleEndian.Uint32(buf[4:8]),
+		CreatedAt:      int64(binary.LittleEndian.Uint64(buf[8:16])),
+		LastModifiedAt: int64(binary.LittleEndian.Uint64(buf[16:24])),
+		WriteOffset:    int64(binary.LittleEndian.Uint64(buf[24:32])),
+		EntryCount:     int64(binary.LittleEndian.Uint64(buf[32:40])),
+		Flags:          binary.LittleEndian.Uint32(buf[40:44]),
+	}
+	return meta, nil
+}
 
 // For now each value is not chunked into smaller blocks, but we will benchmark and see later
 // if this improves things we can decide.
@@ -113,7 +175,7 @@ type segment struct {
 	activeReader atomic.Int32
 	closed       atomic.Bool
 	header       []byte
-	writeMu      sync.Mutex
+	writeMu      sync.RWMutex
 	syncOption   MsyncOption
 }
 
@@ -126,25 +188,14 @@ func WithSyncOption(opt MsyncOption) func(*segment) {
 
 func openSegmentFile(dirPath, extName string, id uint32, opts ...func(*segment)) (*segment, error) {
 	path := SegmentFileName(dirPath, extName, id)
-	var isNew bool
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		isNew = true
-	}
-
-	fd, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, fileModePerm)
+	isNew, err := isNewSegment(path)
 	if err != nil {
 		return nil, err
 	}
-	if err := fd.Truncate(segmentSize); err != nil {
-		fd.Close()
-		return nil, fmt.Errorf("truncate error: %w", err)
-	}
 
-	// Use mmap-go to create memory mapping
-	mmapData, err := mmap.Map(fd, mmap.RDWR, 0)
+	fd, mmapData, err := prepareSegmentFile(path)
 	if err != nil {
-		fd.Close()
-		return nil, fmt.Errorf("mmap error: %w", err)
+		return nil, err
 	}
 
 	s := &segment{
@@ -160,45 +211,92 @@ func openSegmentFile(dirPath, extName string, id uint32, opts ...func(*segment))
 		opt(s)
 	}
 
-	var offset int64 = 0
-	if !isNew {
-		// recovering scan to find the correct write offset
-		for offset+chunkHeaderSize <= segmentSize {
-			header := mmapData[offset : offset+chunkHeaderSize]
-			length := binary.LittleEndian.Uint32(header[4:8])
-			entrySize := int64(chunkHeaderSize + length + chunkTrailerSize)
-
-			if offset+entrySize > segmentSize {
-				break
-			}
-
-			data := mmapData[offset+chunkHeaderSize : offset+chunkHeaderSize+int64(length)]
-			trailer := mmapData[offset+chunkHeaderSize+int64(length) : offset+entrySize]
-			savedSum := binary.LittleEndian.Uint32(header[:4])
-			computedSum := crc32Checksum(header[4:], data)
-
-			// clean unused region no more entries ahead
-			if savedSum == 0 && length == 0 {
-				break
-			}
-
-			if savedSum == 0 || savedSum != computedSum || !bytes.Equal(trailer, trailerCanary) {
-				slog.Warn("[unisondb.fswal]",
-					slog.String("event_type", "segment.recovery.stopped.checksum.mismatch"),
-					slog.Int64("offset", offset),
-					slog.Uint64("saved", uint64(savedSum)),
-					slog.Uint64("computed", uint64(computedSum)),
-					slog.String("segment", path),
-				)
-				break
-			}
-
-			offset += entrySize
-		}
+	offset := segmentMetadataSize
+	if isNew {
+		writeInitialMetadata(mmapData)
+	} else {
+		offset = int(scanForLastOffset(path, mmapData))
 	}
-	s.writeOffset.Store(offset)
+	s.writeOffset.Store(int64(offset))
 
 	return s, nil
+}
+
+func isNewSegment(path string) (bool, error) {
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return true, nil
+	} else if err != nil {
+		return false, fmt.Errorf("stat error: %w", err)
+	}
+	return false, nil
+}
+
+func prepareSegmentFile(path string) (*os.File, mmap.MMap, error) {
+	fd, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, fileModePerm)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := fd.Truncate(segmentSize); err != nil {
+		fd.Close()
+		return nil, nil, fmt.Errorf("truncate error: %w", err)
+	}
+	mmapData, err := mmap.Map(fd, mmap.RDWR, 0)
+	if err != nil {
+		fd.Close()
+		return nil, nil, fmt.Errorf("mmap error: %w", err)
+	}
+	return fd, mmapData, nil
+}
+
+func writeInitialMetadata(mmapData mmap.MMap) {
+	binary.LittleEndian.PutUint32(mmapData[0:4], segmentMagicNumber)
+	binary.LittleEndian.PutUint32(mmapData[4:8], currentMetadataVersion)
+	now := uint64(time.Now().UnixNano())
+	binary.LittleEndian.PutUint64(mmapData[8:16], now)
+	binary.LittleEndian.PutUint64(mmapData[16:24], now)
+	binary.LittleEndian.PutUint64(mmapData[24:32], segmentMetadataSize)
+	binary.LittleEndian.PutUint64(mmapData[32:40], 0)
+	binary.LittleEndian.PutUint32(mmapData[40:44], FlagActive)
+	crc := crc32.ChecksumIEEE(mmapData[0:56])
+	binary.LittleEndian.PutUint32(mmapData[56:60], crc)
+}
+
+func scanForLastOffset(path string, mmapData mmap.MMap) int64 {
+	var offset int64 = segmentMetadataSize
+
+	for offset+chunkHeaderSize <= segmentSize {
+		header := mmapData[offset : offset+chunkHeaderSize]
+		length := binary.LittleEndian.Uint32(header[4:8])
+		entrySize := int64(chunkHeaderSize + length + chunkTrailerSize)
+
+		if offset+entrySize > segmentSize {
+			break
+		}
+
+		data := mmapData[offset+chunkHeaderSize : offset+chunkHeaderSize+int64(length)]
+		trailer := mmapData[offset+chunkHeaderSize+int64(length) : offset+entrySize]
+		savedSum := binary.LittleEndian.Uint32(header[:4])
+		computedSum := crc32Checksum(header[4:], data)
+
+		if savedSum == 0 && length == 0 {
+			break
+		}
+		if savedSum == 0 || savedSum != computedSum || !bytes.Equal(trailer, trailerCanary) {
+			slog.Warn("[unisondb.fswal]",
+				slog.String("event_type", "segment.recovery.stopped.checksum.mismatch"),
+				slog.Int64("offset", offset),
+				slog.Uint64("saved", uint64(savedSum)),
+				slog.Uint64("computed", uint64(computedSum)),
+				slog.String("segment", path),
+				slog.Bool("trailer_corrupted", !bytes.Equal(trailer, trailerCanary)),
+			)
+			break
+		}
+
+		offset += entrySize
+	}
+
+	return offset
 }
 
 func (seg *segment) Write(data []byte) (*ChunkPosition, error) {
@@ -230,7 +328,17 @@ func (seg *segment) Write(data []byte) (*ChunkPosition, error) {
 	canaryOffset := offset + chunkHeaderSize + int64(len(data))
 	copy(seg.mmapData[canaryOffset:], trailerCanary)
 
-	seg.writeOffset.Add(entrySize)
+	newOffset := offset + entrySize
+	seg.writeOffset.Store(newOffset)
+
+	binary.LittleEndian.PutUint32(seg.mmapData[24:32], uint32(newOffset))
+	prevCount := binary.LittleEndian.Uint64(seg.mmapData[32:40])
+	binary.LittleEndian.PutUint64(seg.mmapData[32:40], prevCount+1)
+	binary.LittleEndian.PutUint64(seg.mmapData[16:24], uint64(time.Now().UnixNano()))
+
+	crc := crc32.ChecksumIEEE(seg.mmapData[0:56])
+	binary.LittleEndian.PutUint32(seg.mmapData[56:60], crc)
+
 	// MSync if option is set
 	if seg.syncOption == MsyncOnWrite {
 		if err := seg.mmapData.Flush(); err != nil {
@@ -349,10 +457,40 @@ func (seg *segment) Size() int64 {
 	return seg.writeOffset.Load()
 }
 
+func (seg *segment) GetLastModifiedAt() int64 {
+	seg.writeMu.RLock()
+	defer seg.writeMu.RUnlock()
+	meta, err := decodeSegmentMetadata(seg.mmapData[:segmentMetadataSize])
+	if err != nil {
+		return 0 // or panic/log if you want to enforce integrity
+	}
+	return meta.LastModifiedAt
+}
+
+func (seg *segment) GetEntryCount() int64 {
+	seg.writeMu.RLock()
+	defer seg.writeMu.RUnlock()
+	meta, err := decodeSegmentMetadata(seg.mmapData[:segmentMetadataSize])
+	if err != nil {
+		return 0
+	}
+	return meta.EntryCount
+}
+
+func (seg *segment) GetFlags() uint32 {
+	seg.writeMu.RLock()
+	defer seg.writeMu.RUnlock()
+	meta, err := decodeSegmentMetadata(seg.mmapData[:segmentMetadataSize])
+	if err != nil {
+		return 0
+	}
+	return meta.Flags
+}
+
 func (seg *segment) NewReader() *segmentReader {
 	return &segmentReader{
 		segment:    seg,
-		readOffset: 0,
+		readOffset: segmentMetadataSize,
 	}
 }
 
