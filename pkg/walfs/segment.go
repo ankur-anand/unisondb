@@ -443,17 +443,21 @@ func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
 		return nil, nil, io.EOF
 	}
 
+	// validating  the trailer before reading data
+	// we are ensuring no oob access even if length is corrupted.
+	trailerOffset := offset + recordHeaderSize + dataSize
+	trailer := seg.mmapData[trailerOffset : trailerOffset+recordTrailerMarkerSize]
+
+	if !bytes.Equal(trailer, trailerMarker) {
+		return nil, nil, ErrIncompleteChunk
+	}
+
 	data := seg.mmapData[offset+recordHeaderSize : offset+recordHeaderSize+dataSize]
-	trailer := seg.mmapData[offset+recordHeaderSize+dataSize : offset+recordHeaderSize+dataSize+recordTrailerMarkerSize]
 
 	savedSum := binary.LittleEndian.Uint32(header[:4])
 	computedSum := crc32Checksum(header[4:], data)
 	if savedSum != computedSum {
 		return nil, nil, ErrInvalidCRC
-	}
-
-	if !bytes.Equal(trailer, trailerMarker) {
-		return nil, nil, ErrIncompleteChunk
 	}
 
 	next := &RecordPosition{
