@@ -510,7 +510,7 @@ func TestSegment_WillExceed(t *testing.T) {
 	assert.False(t, seg.WillExceed(1024))
 
 	seg.writeOffset.Store(seg.mmapSize - recordHeaderSize - 1)
-	assert.True(t, seg.WillExceed(2)) // would exceed by 1 byte
+	assert.True(t, seg.WillExceed(2))
 }
 
 func TestSegment_TrailerValidation(t *testing.T) {

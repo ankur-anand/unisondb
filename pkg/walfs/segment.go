@@ -491,7 +491,8 @@ func (seg *Segment) MSync() error {
 }
 
 func (seg *Segment) WillExceed(dataSize int) bool {
-	entrySize := int64(recordHeaderSize + dataSize)
+	rawSize := int64(recordHeaderSize + dataSize + recordTrailerMarkerSize)
+	entrySize := alignUp(rawSize)
 	offset := seg.writeOffset.Load()
 	return offset+entrySize > seg.mmapSize
 }
