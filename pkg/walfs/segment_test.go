@@ -783,6 +783,42 @@ func TestSegment_ScanStopsAt_Trailer_Corruption(t *testing.T) {
 	assert.Equal(t, expectedRecoveryOffset, actualOffset, "scanForLastOffset should stop before corrupted entry")
 }
 
+func TestSegment_ParallelStreamReaders(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, seg.Close()) })
+
+	payload := []byte("concurrent-read-entry")
+	var positions []*RecordPosition
+	for i := 0; i < 500; i++ {
+		pos, err := seg.Write(payload)
+		assert.NoError(t, err)
+		positions = append(positions, pos)
+	}
+
+	var wg sync.WaitGroup
+	for r := 0; r < 1000; r++ {
+		wg.Add(1)
+		go func(readerID int) {
+			defer wg.Done()
+			reader := seg.NewReader()
+			var count int
+			for {
+				data, _, err := reader.Next()
+				if err == io.EOF {
+					break
+				}
+				assert.NoError(t, err)
+				assert.Equal(t, payload, data)
+				count++
+			}
+			assert.Equal(t, len(positions), count)
+		}(r)
+	}
+	wg.Wait()
+}
+
 func calculateAlignedFrameSize(dataLen int) int64 {
 	raw := int64(recordHeaderSize + dataLen + recordTrailerMarkerSize)
 	return alignUp(raw)
