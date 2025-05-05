@@ -46,8 +46,8 @@ func TestSegment_BasicOperations(t *testing.T) {
 		{"large data", bytes.Repeat([]byte("large"), 5000)},
 	}
 
-	// Step 1: Open segment and write all entries
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	// Step 1: Open Segment and write all entries
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
 	var positions []*ChunkPosition
@@ -60,7 +60,7 @@ func TestSegment_BasicOperations(t *testing.T) {
 	assert.NoError(t, seg.Close())
 
 	// Step 2: Reopen and verify all entries
-	seg2, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg2, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, seg2.Close())
@@ -79,7 +79,7 @@ func TestSegment_BasicOperations(t *testing.T) {
 func TestSegment_SequentialWrites(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg.Close())
@@ -113,7 +113,7 @@ func TestSegment_SequentialWrites(t *testing.T) {
 func TestSegment_ConcurrentReads(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg.Close())
@@ -157,7 +157,7 @@ func TestSegment_ConcurrentReads(t *testing.T) {
 func TestSegment_InvalidCRC(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
 	data := []byte("corrupt me")
@@ -172,7 +172,7 @@ func TestSegment_InvalidCRC(t *testing.T) {
 func TestSegment_CloseAndReopen(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	seg1, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg1, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
 	testData := []byte("persist this")
@@ -181,7 +181,7 @@ func TestSegment_CloseAndReopen(t *testing.T) {
 
 	assert.NoError(t, seg1.Close())
 
-	seg2, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg2, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestSegment_CloseAndReopen(t *testing.T) {
 
 func TestLargeWriteBoundary(t *testing.T) {
 	dir := t.TempDir()
-	seg, err := openSegmentFile(dir, ".wal", 1)
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
 	assert.NoError(t, err)
 
 	seg.writeOffset.Store(segmentSize - 64*1024 + 1)
@@ -213,7 +213,7 @@ func TestLargeWriteBoundary(t *testing.T) {
 func TestSegment_WriteRead_1KBTo1MB(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg.Close())
@@ -260,7 +260,7 @@ func TestSegment_WriteRead_1KBTo1MB(t *testing.T) {
 
 func TestSegment_CorruptHeader(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
 	data := []byte("hello")
@@ -275,7 +275,7 @@ func TestSegment_CorruptHeader(t *testing.T) {
 
 func TestSegment_CorruptData(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg.Close())
@@ -292,7 +292,7 @@ func TestSegment_CorruptData(t *testing.T) {
 
 func TestSegment_ReadAfterClose(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
 	data := []byte("data")
@@ -307,7 +307,7 @@ func TestSegment_ReadAfterClose(t *testing.T) {
 
 func TestSegment_WriteAfterClose(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
 	assert.NoError(t, seg.Close())
@@ -318,36 +318,36 @@ func TestSegment_WriteAfterClose(t *testing.T) {
 
 func TestSegment_TruncatedRecovery(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg1, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg1, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
 	data := []byte("valid")
 	_, err = seg1.Write(data)
 	assert.NoError(t, err)
 
-	offset := seg1.Size()
+	offset := seg1.WriteOffset()
 	copy(seg1.mmapData[offset:], "garbage")
 	assert.NoError(t, seg1.Sync())
 	assert.NoError(t, seg1.Close())
 
-	seg2, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg2, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg2.Close())
 	})
 
-	assert.Equal(t, offset, seg2.Size(), "recovered write offset should skip invalid data")
+	assert.Equal(t, offset, seg2.WriteOffset(), "recovered write offset should skip invalid data")
 }
 
 func TestSegment_WriteAtExactBoundary(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg.Close())
 	})
 
-	size := segmentSize - segmentMetadataSize - chunkHeaderSize - chunkTrailerSize
+	size := segmentSize - segmentHeaderSize - chunkHeaderSize - chunkTrailerSize
 	data := make([]byte, size)
 	for i := range data {
 		data[i] = 'A'
@@ -356,7 +356,7 @@ func TestSegment_WriteAtExactBoundary(t *testing.T) {
 	_, err = seg.Write(data)
 	assert.NoError(t, err)
 
-	assert.Equal(t, int64(segmentSize), seg.Size())
+	assert.Equal(t, int64(segmentSize), seg.WriteOffset())
 
 	_, err = seg.Write([]byte("extra"))
 	assert.Error(t, err)
@@ -364,7 +364,7 @@ func TestSegment_WriteAtExactBoundary(t *testing.T) {
 
 func TestSegment_ConcurrentReadWhileWriting(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg.Close())
@@ -403,7 +403,7 @@ func TestSegment_ConcurrentReadWhileWriting(t *testing.T) {
 
 func TestSegment_SyncOnWriteOption(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1, WithSyncOption(MsyncOnWrite))
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSyncOption(MsyncOnWrite))
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg.Close())
@@ -415,7 +415,7 @@ func TestSegment_SyncOnWriteOption(t *testing.T) {
 
 func TestSegment_EmptyReaderEOF(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg.Close())
@@ -428,7 +428,7 @@ func TestSegment_EmptyReaderEOF(t *testing.T) {
 
 func TestSegment_MSync(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg.Close())
@@ -440,7 +440,7 @@ func TestSegment_MSync(t *testing.T) {
 
 func TestSegment_Sync_ErrorPaths(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
 	seg.closed.Store(true)
@@ -450,7 +450,7 @@ func TestSegment_Sync_ErrorPaths(t *testing.T) {
 
 func TestSegment_Close_Twice(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
 	assert.NoError(t, seg.Close())
@@ -460,31 +460,30 @@ func TestSegment_Close_Twice(t *testing.T) {
 func TestOpenSegmentFile_BadChecksum(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
 	_, err = seg.Write([]byte("valid"))
 	assert.NoError(t, err)
 
-	offset := seg.Size()
+	offset := seg.WriteOffset()
 
 	copy(seg.mmapData[offset:], []byte{
 		0x00, 0x00, 0x00, 0x00, // checksum
 		0x05, 0x00, 0x00, 0x00, // length = 5
-		ChunkTypeFull,
 	})
 	copy(seg.mmapData[offset+chunkHeaderSize:], "corru")
 
 	assert.NoError(t, seg.Sync())
 	assert.NoError(t, seg.Close())
 
-	seg2, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg2, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg2.Close())
 	})
 
-	assert.Equal(t, offset, seg2.Size())
+	assert.Equal(t, offset, seg2.WriteOffset())
 }
 
 func TestChunkPosition_String(t *testing.T) {
@@ -496,7 +495,7 @@ func TestChunkPosition_String(t *testing.T) {
 
 func TestSegment_MSync_Closed(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	seg.closed.Store(true)
 
@@ -506,7 +505,7 @@ func TestSegment_MSync_Closed(t *testing.T) {
 
 func TestSegment_WillExceed(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	defer seg.Close()
 
@@ -519,7 +518,7 @@ func TestSegment_WillExceed(t *testing.T) {
 func TestSegment_TrailerValidation(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg.Close())
@@ -536,7 +535,7 @@ func TestSegment_TrailerValidation(t *testing.T) {
 	assert.ErrorIs(t, err, ErrIncompleteChunk)
 	assert.NoError(t, seg.Sync())
 	assert.NoError(t, seg.Close())
-	seg2, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg2, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg2.Close())
@@ -545,17 +544,17 @@ func TestSegment_TrailerValidation(t *testing.T) {
 
 func TestNewSegment_MetadataInitialization(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, seg.Close()) })
 
-	metaBuf := seg.mmapData[:segmentMetadataSize]
+	metaBuf := seg.mmapData[:segmentHeaderSize]
 	meta, err := decodeSegmentMetadata(metaBuf)
 	assert.NoError(t, err)
 
 	assert.Equal(t, uint32(segmentMagicNumber), meta.Magic, "Magic number mismatch")
-	assert.Equal(t, uint32(currentMetadataVersion), meta.Version, "Version mismatch")
-	assert.Equal(t, int64(segmentMetadataSize), meta.WriteOffset, "Initial write offset should be after metadata header")
+	assert.Equal(t, uint32(segmentHeaderVersion), meta.Version, "Version mismatch")
+	assert.Equal(t, int64(segmentHeaderSize), meta.WriteOffset, "Initial write offset should be after metadata header")
 	assert.Equal(t, int64(0), seg.GetEntryCount(), "Entry count should start at 0")
 	assert.Equal(t, int64(0), meta.EntryCount, "Entry count should start at 0")
 	assert.Equal(t, FlagActive, meta.Flags, "Initial flags should have 'active' set")
@@ -570,43 +569,43 @@ func TestNewSegment_MetadataInitialization(t *testing.T) {
 func TestSegment_SealAndPreventWrite(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	seg, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	t.Cleanup(func() { _ = seg.Close() })
 
 	_, err = seg.Write([]byte("hello"))
 	assert.NoError(t, err, "initial write should succeed")
 
-	err = seg.sealSegment()
-	assert.NoError(t, err, "sealing segment should not fail")
+	err = seg.SealSegment()
+	assert.NoError(t, err, "sealing Segment should not fail")
 
 	_, err = seg.Write([]byte("how are you?"))
 	assert.ErrorIs(t, err, ErrWriteToSealedSegment)
 
 	_ = seg.Close()
-	seg2, err := openSegmentFile(tmpDir, ".wal", 1)
+	seg2, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	defer seg2.Close()
 
-	meta, err := decodeSegmentMetadata(seg2.mmapData[:segmentMetadataSize])
+	meta, err := decodeSegmentMetadata(seg2.mmapData[:segmentHeaderSize])
 	assert.NoError(t, err)
-	assert.True(t, isSealed(meta.Flags), "segment should remain sealed after reopen")
-	assert.False(t, isActive(meta.Flags), "segment should remain active after reopen")
+	assert.True(t, IsSealed(meta.Flags), "Segment should remain sealed after reopen")
+	assert.False(t, IsActive(meta.Flags), "Segment should remain active after reopen")
 }
 
 func TestSegmentOffsetBehavior(t *testing.T) {
-	t.Run("new segment should start at segmentMetadataSize", func(t *testing.T) {
+	t.Run("new Segment should start at segmentHeaderSize", func(t *testing.T) {
 		dir := t.TempDir()
-		seg, err := openSegmentFile(dir, ".wal", 1)
+		seg, err := OpenSegmentFile(dir, ".wal", 1)
 		assert.NoError(t, err)
 		defer seg.Close()
 
-		assert.Equal(t, int64(segmentMetadataSize), seg.writeOffset.Load())
+		assert.Equal(t, int64(segmentHeaderSize), seg.writeOffset.Load())
 	})
 
-	t.Run("sealed segment should restore write offset from metadata", func(t *testing.T) {
+	t.Run("sealed Segment should restore write offset from metadata", func(t *testing.T) {
 		dir := t.TempDir()
-		seg, err := openSegmentFile(dir, ".wal", 1)
+		seg, err := OpenSegmentFile(dir, ".wal", 1)
 		assert.NoError(t, err)
 
 		data := []byte("sealed-data")
@@ -614,20 +613,20 @@ func TestSegmentOffsetBehavior(t *testing.T) {
 		assert.NoError(t, err)
 		expectedOffset := seg.writeOffset.Load()
 
-		err = seg.sealSegment()
+		err = seg.SealSegment()
 		assert.NoError(t, err)
 		assert.NoError(t, seg.Close())
 
-		seg2, err := openSegmentFile(dir, ".wal", 1)
+		seg2, err := OpenSegmentFile(dir, ".wal", 1)
 		assert.NoError(t, err)
 		defer seg2.Close()
 
 		assert.Equal(t, expectedOffset, seg2.writeOffset.Load())
 	})
 
-	t.Run("active segment with crash should recover valid offset by scanning", func(t *testing.T) {
+	t.Run("active Segment with crash should recover valid offset by scanning", func(t *testing.T) {
 		dir := t.TempDir()
-		seg, err := openSegmentFile(dir, ".wal", 1)
+		seg, err := OpenSegmentFile(dir, ".wal", 1)
 		assert.NoError(t, err)
 
 		data := []byte("valid")
@@ -641,17 +640,30 @@ func TestSegmentOffsetBehavior(t *testing.T) {
 			0x00, 0x00, 0x00, 0x00,
 			// length = 5
 			0x05, 0x00, 0x00, 0x00,
-			ChunkTypeFull,
 		})
 		copy(seg.mmapData[offset+chunkHeaderSize:], "corru")
 
 		assert.NoError(t, seg.Sync())
 		assert.NoError(t, seg.Close())
 
-		seg2, err := openSegmentFile(dir, ".wal", 1)
+		seg2, err := OpenSegmentFile(dir, ".wal", 1)
 		assert.NoError(t, err)
 		defer seg2.Close()
 
 		assert.Equal(t, offset, seg2.writeOffset.Load())
 	})
+}
+
+func TestWithSegmentSize(t *testing.T) {
+	tmpDir := t.TempDir()
+	const customSize int64 = 8 * 1024 * 1024
+
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(customSize))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	assert.Equal(t, int64(64), seg.WriteOffset(), "initial write size should 64 bytes")
+	assert.Equal(t, customSize, seg.GetSegmentSize(), "initial write offset should match")
 }

@@ -29,7 +29,7 @@ func (r *threadSafeRand) Intn(n int) int {
 var globalRand = newThreadSafeRand()
 
 func calculateMaxEntries(dataSize int) int {
-	entrySize := int64(chunkHeaderSize + segmentMetadataSize + dataSize + chunkTrailerSize)
+	entrySize := int64(chunkHeaderSize + segmentHeaderSize + dataSize + chunkTrailerSize)
 	maxEntries := int(segmentSize / entrySize)
 	if maxEntries == 0 {
 		return 1
@@ -91,7 +91,7 @@ func BenchmarkSegment(b *testing.B) {
 
 				b.Run(fmt.Sprintf("%s/%s/Write/%s", syncOpt.name, pattern.name, bc.name), func(b *testing.B) {
 					dir := b.TempDir()
-					seg, err := openSegmentFile(dir, ".wal", 1, WithSyncOption(syncOpt.opt))
+					seg, err := OpenSegmentFile(dir, ".wal", 1, WithSyncOption(syncOpt.opt))
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -104,7 +104,7 @@ func BenchmarkSegment(b *testing.B) {
 						if (i%maxWrites) == 0 && i > 0 {
 							b.StopTimer()
 							seg.Close()
-							seg, err = openSegmentFile(dir, ".wal", uint32(i/maxWrites+1), WithSyncOption(syncOpt.opt))
+							seg, err = OpenSegmentFile(dir, ".wal", uint32(i/maxWrites+1), WithSyncOption(syncOpt.opt))
 							if err != nil {
 								b.Fatal(err)
 							}
@@ -118,7 +118,7 @@ func BenchmarkSegment(b *testing.B) {
 
 				b.Run(fmt.Sprintf("%s/%s/Read/%s", syncOpt.name, pattern.name, bc.name), func(b *testing.B) {
 					dir := b.TempDir()
-					seg, err := openSegmentFile(dir, ".wal", 1, WithSyncOption(syncOpt.opt))
+					seg, err := OpenSegmentFile(dir, ".wal", 1, WithSyncOption(syncOpt.opt))
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -145,7 +145,7 @@ func BenchmarkSegment(b *testing.B) {
 
 				b.Run(fmt.Sprintf("%s/%s/SequentialRead/%s", syncOpt.name, pattern.name, bc.name), func(b *testing.B) {
 					dir := b.TempDir()
-					seg, err := openSegmentFile(dir, ".wal", 1, WithSyncOption(syncOpt.opt))
+					seg, err := OpenSegmentFile(dir, ".wal", 1, WithSyncOption(syncOpt.opt))
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -201,8 +201,8 @@ func BenchmarkConcurrent(b *testing.B) {
 			b.Run(fmt.Sprintf("%s/ConcurrentWrite_%dGoroutines", syncOpt.name, numGoroutines), func(b *testing.B) {
 				dir := b.TempDir()
 
-				var currentSeg atomic.Pointer[segment]
-				seg, err := openSegmentFile(dir, ".wal", 1, WithSyncOption(syncOpt.opt))
+				var currentSeg atomic.Pointer[Segment]
+				seg, err := OpenSegmentFile(dir, ".wal", 1, WithSyncOption(syncOpt.opt))
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -230,7 +230,7 @@ func BenchmarkConcurrent(b *testing.B) {
 						for {
 							seg := currentSeg.Load()
 							if seg == nil {
-								b.Fatal("segment is nil")
+								b.Fatal("Segment is nil")
 							}
 
 							_, err := seg.Write(data)
@@ -241,7 +241,7 @@ func BenchmarkConcurrent(b *testing.B) {
 							mu.Lock()
 							if currentSeg.Load() == seg {
 								nextID := segmentID.Add(1)
-								newSeg, err := openSegmentFile(dir, ".wal", nextID, WithSyncOption(syncOpt.opt))
+								newSeg, err := OpenSegmentFile(dir, ".wal", nextID, WithSyncOption(syncOpt.opt))
 								if err != nil {
 									mu.Unlock()
 									b.Fatal(err)
@@ -259,7 +259,7 @@ func BenchmarkConcurrent(b *testing.B) {
 
 			b.Run(fmt.Sprintf("%s/ConcurrentReadWrite_%dGoroutines", syncOpt.name, numGoroutines), func(b *testing.B) {
 				dir := b.TempDir()
-				seg, err := openSegmentFile(dir, ".wal", 1, WithSyncOption(syncOpt.opt))
+				seg, err := OpenSegmentFile(dir, ".wal", 1, WithSyncOption(syncOpt.opt))
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -329,7 +329,7 @@ func BenchmarkSyncLatency(b *testing.B) {
 		for _, size := range sizes {
 			b.Run(fmt.Sprintf("%s/Write_%dB", syncOpt.name, size), func(b *testing.B) {
 				dir := b.TempDir()
-				seg, err := openSegmentFile(dir, ".wal", 1, WithSyncOption(syncOpt.opt))
+				seg, err := OpenSegmentFile(dir, ".wal", 1, WithSyncOption(syncOpt.opt))
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -348,7 +348,7 @@ func BenchmarkSyncLatency(b *testing.B) {
 					if (i%maxWrites) == 0 && i > 0 {
 						b.StopTimer()
 						seg.Close()
-						seg, err = openSegmentFile(dir, ".wal", uint32(i/maxWrites+1), WithSyncOption(syncOpt.opt))
+						seg, err = OpenSegmentFile(dir, ".wal", uint32(i/maxWrites+1), WithSyncOption(syncOpt.opt))
 						if err != nil {
 							b.Fatal(err)
 						}

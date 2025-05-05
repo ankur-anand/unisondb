@@ -23,14 +23,14 @@ const (
 )
 
 const (
-	segmentMetadataSize = 64
+	segmentHeaderSize = 64
 	// just a string of "UWAL"
 	// 'U' = 0x55 and so on. Unison Write ahead log.
-	segmentMagicNumber     = 0x5557414C
-	currentMetadataVersion = 1
+	segmentMagicNumber   = 0x5557414C
+	segmentHeaderVersion = 1
 )
 
-type SegmentMetadata struct {
+type SegmentHeader struct {
 	// at 0
 	Magic uint32
 	// at 4
@@ -55,7 +55,7 @@ type SegmentMetadata struct {
 	_ uint32
 }
 
-func decodeSegmentMetadata(buf []byte) (*SegmentMetadata, error) {
+func decodeSegmentMetadata(buf []byte) (*SegmentHeader, error) {
 	if len(buf) < 64 {
 		return nil, io.ErrUnexpectedEOF
 	}
@@ -66,7 +66,7 @@ func decodeSegmentMetadata(buf []byte) (*SegmentMetadata, error) {
 		return nil, fmt.Errorf("segment metadata CRC mismatch: expected %08x, got %08x", crc, computed)
 	}
 
-	meta := &SegmentMetadata{
+	meta := &SegmentHeader{
 		Magic:          binary.LittleEndian.Uint32(buf[0:4]),
 		Version:        binary.LittleEndian.Uint32(buf[4:8]),
 		CreatedAt:      int64(binary.LittleEndian.Uint64(buf[8:16])),
@@ -77,16 +77,6 @@ func decodeSegmentMetadata(buf []byte) (*SegmentMetadata, error) {
 	}
 	return meta, nil
 }
-
-// For now each value is not chunked into smaller blocks, but we will benchmark and see later
-// if this improves things we can decide.
-// For Now every entry will be of type full.
-const (
-	ChunkTypeFull   = 1
-	ChunkTypeFirst  = 2
-	ChunkTypeMiddle = 3
-	ChunkTypeLast   = 4
-)
 
 type MsyncOption int
 
@@ -101,19 +91,19 @@ const (
 type SegmentID = uint32
 
 const (
-	// layout: 4 (checksum) + 4 (length) + 1 (type) (if we decide to divide into block) = 9 bytes
-	chunkHeaderSize = 9
-	// fixed segment size of 16MB to avoid accidental different segment in different nodes.
+	// layout: 4 (checksum) + 4 (length) = 8 bytes
+	chunkHeaderSize = 8
+	// default Segment size of 16MB.
 	segmentSize  = 16 * 1024 * 1024
 	fileModePerm = 0644
 )
 
 var (
-	ErrClosed               = errors.New("the segment file is closed")
+	ErrClosed               = errors.New("the Segment file is closed")
 	ErrInvalidCRC           = errors.New("invalid crc, the data may be corrupted")
 	ErrCorruptHeader        = errors.New("corrupt chunk header, invalid length")
 	ErrIncompleteChunk      = errors.New("incomplete or torn write detected at chunk trailer")
-	ErrWriteToSealedSegment = errors.New("cannot write to sealed segment")
+	ErrWriteToSealedSegment = errors.New("cannot write to sealed Segment")
 )
 
 const (
@@ -131,12 +121,12 @@ var (
 	trailerCanary = []byte{0xDE, 0xAD, 0xBE, 0xEF}
 )
 
-type segmentReader struct {
-	segment    *segment
+type SegmentReader struct {
+	segment    *Segment
 	readOffset int64
 }
 
-// ChunkPosition is the logical location of a chunk within a WAL segment.
+// ChunkPosition is the logical location of a chunk within a WAL Segment.
 type ChunkPosition struct {
 	SegmentID SegmentID
 	Offset    int64
@@ -166,7 +156,8 @@ func DecodeChunkPosition(data []byte) (ChunkPosition, error) {
 	return cp, nil
 }
 
-type segment struct {
+// Segment represents a single WAL segment backed by a memory-mapped file.
+type Segment struct {
 	id          SegmentID
 	fd          *os.File
 	mmapData    mmap.MMap
@@ -178,14 +169,21 @@ type segment struct {
 	syncOption  MsyncOption
 }
 
-// WithSyncOption sets the sync option for the segment.
-func WithSyncOption(opt MsyncOption) func(*segment) {
-	return func(s *segment) {
+// WithSyncOption sets the sync option for the Segment.
+func WithSyncOption(opt MsyncOption) func(*Segment) {
+	return func(s *Segment) {
 		s.syncOption = opt
 	}
 }
 
-func openSegmentFile(dirPath, extName string, id uint32, opts ...func(*segment)) (*segment, error) {
+// WithSegmentSize sets the size for the Segment.
+func WithSegmentSize(size int64) func(*Segment) {
+	return func(s *Segment) {
+		s.mmapSize = size
+	}
+}
+
+func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment)) (*Segment, error) {
 	path := SegmentFileName(dirPath, extName, id)
 	isNew, err := isNewSegment(path)
 	if err != nil {
@@ -197,7 +195,7 @@ func openSegmentFile(dirPath, extName string, id uint32, opts ...func(*segment))
 		return nil, err
 	}
 
-	s := &segment{
+	s := &Segment{
 		id:         id,
 		fd:         fd,
 		header:     make([]byte, chunkHeaderSize),
@@ -210,22 +208,22 @@ func openSegmentFile(dirPath, extName string, id uint32, opts ...func(*segment))
 		opt(s)
 	}
 
-	offset := int64(segmentMetadataSize)
+	offset := int64(segmentHeaderSize)
 	if isNew {
-		// for a new segment file we initialize it with default metadata.
+		// for a new Segment file we initialize it with default metadata.
 		writeInitialMetadata(mmapData)
 	} else {
-		// decode the segment metadata header
-		meta, err := decodeSegmentMetadata(mmapData[:segmentMetadataSize])
+		// decode the Segment metadata header
+		meta, err := decodeSegmentMetadata(mmapData[:segmentHeaderSize])
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode metadata: %w", err)
 		}
 
-		if isSealed(meta.Flags) {
-			// for the sealed segment our active offset is already saved
+		if IsSealed(meta.Flags) {
+			// for the sealed Segment our active offset is already saved
 			offset = meta.WriteOffset
 		} else {
-			// while we trust the write offset we are scanning the segment
+			// while we trust the write offset we are scanning the Segment
 			// to find the true end of valid data for safe appends,
 			// while in most cases this would not happen but if crashed
 			// we don't know if the written header metadata offset is valid enough.
@@ -237,15 +235,15 @@ func openSegmentFile(dirPath, extName string, id uint32, opts ...func(*segment))
 	return s, nil
 }
 
-func isSealed(flags uint32) bool {
+func IsSealed(flags uint32) bool {
 	return flags&FlagSealed != 0
 }
 
-func isActive(flags uint32) bool {
+func IsActive(flags uint32) bool {
 	return flags&FlagActive != 0
 }
 
-func (seg *segment) sealSegment() error {
+func (seg *Segment) SealSegment() error {
 	seg.writeMu.Lock()
 	defer seg.writeMu.Unlock()
 
@@ -297,11 +295,11 @@ func prepareSegmentFile(path string) (*os.File, mmap.MMap, error) {
 
 func writeInitialMetadata(mmapData mmap.MMap) {
 	binary.LittleEndian.PutUint32(mmapData[0:4], segmentMagicNumber)
-	binary.LittleEndian.PutUint32(mmapData[4:8], currentMetadataVersion)
+	binary.LittleEndian.PutUint32(mmapData[4:8], segmentHeaderVersion)
 	now := uint64(time.Now().UnixNano())
 	binary.LittleEndian.PutUint64(mmapData[8:16], now)
 	binary.LittleEndian.PutUint64(mmapData[16:24], now)
-	binary.LittleEndian.PutUint64(mmapData[24:32], segmentMetadataSize)
+	binary.LittleEndian.PutUint64(mmapData[24:32], segmentHeaderSize)
 	binary.LittleEndian.PutUint64(mmapData[32:40], 0)
 	binary.LittleEndian.PutUint32(mmapData[40:44], FlagActive)
 	crc := crc32.ChecksumIEEE(mmapData[0:56])
@@ -309,7 +307,7 @@ func writeInitialMetadata(mmapData mmap.MMap) {
 }
 
 func scanForLastOffset(path string, mmapData mmap.MMap) int64 {
-	var offset int64 = segmentMetadataSize
+	var offset int64 = segmentHeaderSize
 
 	for offset+chunkHeaderSize <= segmentSize {
 		header := mmapData[offset : offset+chunkHeaderSize]
@@ -330,11 +328,11 @@ func scanForLastOffset(path string, mmapData mmap.MMap) int64 {
 		}
 		if savedSum == 0 || savedSum != computedSum || !bytes.Equal(trailer, trailerCanary) {
 			slog.Warn("[unisondb.fswal]",
-				slog.String("event_type", "segment.recovery.stopped.checksum.mismatch"),
+				slog.String("event_type", "Segment.recovery.stopped.checksum.mismatch"),
 				slog.Int64("offset", offset),
 				slog.Uint64("saved", uint64(savedSum)),
 				slog.Uint64("computed", uint64(computedSum)),
-				slog.String("segment", path),
+				slog.String("Segment", path),
 				slog.Bool("trailer_corrupted", !bytes.Equal(trailer, trailerCanary)),
 			)
 			break
@@ -346,7 +344,7 @@ func scanForLastOffset(path string, mmapData mmap.MMap) int64 {
 	return offset
 }
 
-func (seg *segment) Write(data []byte) (*ChunkPosition, error) {
+func (seg *Segment) Write(data []byte) (*ChunkPosition, error) {
 	if seg.closed.Load() {
 		return nil, ErrClosed
 	}
@@ -355,23 +353,22 @@ func (seg *segment) Write(data []byte) (*ChunkPosition, error) {
 	defer seg.writeMu.Unlock()
 
 	flags := binary.LittleEndian.Uint32(seg.mmapData[40:44])
-	if isSealed(flags) {
+	if IsSealed(flags) {
 		return nil, ErrWriteToSealedSegment
 	}
 
 	offset := seg.writeOffset.Load()
 	entrySize := int64(chunkHeaderSize + len(data) + chunkTrailerSize)
 	if offset+entrySize > seg.mmapSize {
-		return nil, errors.New("write exceeds segment size")
+		return nil, errors.New("write exceeds Segment size")
 	}
 
 	binary.LittleEndian.PutUint32(seg.header[4:8], uint32(len(data)))
-	seg.header[8] = ChunkTypeFull
 	sum := crc32Checksum(seg.header[4:], data)
 	binary.LittleEndian.PutUint32(seg.header[:4], sum)
 
 	if offset+entrySize > seg.mmapSize {
-		return nil, errors.New("write exceeds segment size")
+		return nil, errors.New("write exceeds Segment size")
 	}
 
 	copy(seg.mmapData[offset:], seg.header[:])
@@ -404,7 +401,7 @@ func (seg *segment) Write(data []byte) (*ChunkPosition, error) {
 	}, nil
 }
 
-func (seg *segment) Read(offset int64) ([]byte, *ChunkPosition, error) {
+func (seg *Segment) Read(offset int64) ([]byte, *ChunkPosition, error) {
 	if seg.closed.Load() {
 		return nil, nil, ErrClosed
 	}
@@ -414,11 +411,11 @@ func (seg *segment) Read(offset int64) ([]byte, *ChunkPosition, error) {
 
 	header := seg.mmapData[offset : offset+chunkHeaderSize]
 	length := binary.LittleEndian.Uint32(header[4:8])
-	if length > uint32(seg.Size()-offset-chunkHeaderSize) {
+	if length > uint32(seg.WriteOffset()-offset-chunkHeaderSize) {
 		return nil, nil, ErrCorruptHeader
 	}
 	entrySize := chunkHeaderSize + int64(length) + chunkTrailerSize
-	if offset+entrySize > seg.Size() {
+	if offset+entrySize > seg.WriteOffset() {
 		return nil, nil, io.EOF
 	}
 
@@ -442,7 +439,7 @@ func (seg *segment) Read(offset int64) ([]byte, *ChunkPosition, error) {
 	return data, next, nil
 }
 
-func (seg *segment) Sync() error {
+func (seg *Segment) Sync() error {
 	if seg.closed.Load() {
 		return ErrClosed
 	}
@@ -458,7 +455,7 @@ func (seg *segment) Sync() error {
 	return nil
 }
 
-func (seg *segment) MSync() error {
+func (seg *Segment) MSync() error {
 	if seg.closed.Load() {
 		return ErrClosed
 	}
@@ -469,13 +466,13 @@ func (seg *segment) MSync() error {
 	return nil
 }
 
-func (seg *segment) WillExceed(dataSize int) bool {
+func (seg *Segment) WillExceed(dataSize int) bool {
 	entrySize := int64(chunkHeaderSize + dataSize)
 	offset := seg.writeOffset.Load()
 	return offset+entrySize > seg.mmapSize
 }
 
-func (seg *segment) Close() error {
+func (seg *Segment) Close() error {
 	if seg.closed.Load() {
 		return nil
 	}
@@ -501,49 +498,53 @@ func (seg *segment) Close() error {
 	return nil
 }
 
-func (seg *segment) Size() int64 {
+func (seg *Segment) WriteOffset() int64 {
 	return seg.writeOffset.Load()
 }
 
-func (seg *segment) GetLastModifiedAt() int64 {
+func (seg *Segment) GetLastModifiedAt() int64 {
 	seg.writeMu.RLock()
 	defer seg.writeMu.RUnlock()
-	meta, err := decodeSegmentMetadata(seg.mmapData[:segmentMetadataSize])
+	meta, err := decodeSegmentMetadata(seg.mmapData[:segmentHeaderSize])
 	if err != nil {
 		return 0 // or panic/log if you want to enforce integrity
 	}
 	return meta.LastModifiedAt
 }
 
-func (seg *segment) GetEntryCount() int64 {
+func (seg *Segment) GetEntryCount() int64 {
 	seg.writeMu.RLock()
 	defer seg.writeMu.RUnlock()
-	meta, err := decodeSegmentMetadata(seg.mmapData[:segmentMetadataSize])
+	meta, err := decodeSegmentMetadata(seg.mmapData[:segmentHeaderSize])
 	if err != nil {
 		return 0
 	}
 	return meta.EntryCount
 }
 
-func (seg *segment) GetFlags() uint32 {
+func (seg *Segment) GetFlags() uint32 {
 	seg.writeMu.RLock()
 	defer seg.writeMu.RUnlock()
-	meta, err := decodeSegmentMetadata(seg.mmapData[:segmentMetadataSize])
+	meta, err := decodeSegmentMetadata(seg.mmapData[:segmentHeaderSize])
 	if err != nil {
 		return 0
 	}
 	return meta.Flags
 }
 
-func (seg *segment) NewReader() *segmentReader {
-	return &segmentReader{
+func (seg *Segment) GetSegmentSize() int64 {
+	return seg.mmapSize
+}
+
+func (seg *Segment) NewReader() *SegmentReader {
+	return &SegmentReader{
 		segment:    seg,
-		readOffset: segmentMetadataSize,
+		readOffset: segmentHeaderSize,
 	}
 }
 
-func (r *segmentReader) Next() ([]byte, *ChunkPosition, error) {
-	if r.readOffset >= r.segment.Size() {
+func (r *SegmentReader) Next() ([]byte, *ChunkPosition, error) {
+	if r.readOffset >= r.segment.WriteOffset() {
 		return nil, nil, io.EOF
 	}
 	data, next, err := r.segment.Read(r.readOffset)
@@ -559,7 +560,7 @@ func crc32Checksum(header []byte, data []byte) uint32 {
 	return crc32.Update(sum, crc32.IEEETable, data)
 }
 
-// SegmentFileName returns the file name of a segment file.
+// SegmentFileName returns the file name of a Segment file.
 func SegmentFileName(dirPath string, extName string, id SegmentID) string {
 	return filepath.Join(dirPath, fmt.Sprintf("%09d"+extName, id))
 }
