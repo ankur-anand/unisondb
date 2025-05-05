@@ -55,7 +55,7 @@ type SegmentHeader struct {
 	_ uint32
 }
 
-func decodeSegmentMetadata(buf []byte) (*SegmentHeader, error) {
+func decodeSegmentHeader(buf []byte) (*SegmentHeader, error) {
 	if len(buf) < 64 {
 		return nil, io.ErrUnexpectedEOF
 	}
@@ -90,66 +90,64 @@ const (
 
 type SegmentID = uint32
 
-const (
-	// layout: 4 (checksum) + 4 (length) = 8 bytes
-	chunkHeaderSize = 8
-	// default Segment size of 16MB.
-	segmentSize  = 16 * 1024 * 1024
-	fileModePerm = 0644
-)
-
 var (
 	ErrClosed               = errors.New("the Segment file is closed")
 	ErrInvalidCRC           = errors.New("invalid crc, the data may be corrupted")
-	ErrCorruptHeader        = errors.New("corrupt chunk header, invalid length")
-	ErrIncompleteChunk      = errors.New("incomplete or torn write detected at chunk trailer")
+	ErrCorruptHeader        = errors.New("corrupt record header, invalid length")
+	ErrIncompleteChunk      = errors.New("incomplete or torn write detected at record trailer")
 	ErrWriteToSealedSegment = errors.New("cannot write to sealed Segment")
 )
 
 const (
+	// layout: 4 (checksum) + 4 (length) = 8 bytes
+	recordHeaderSize = 8
+	// default Segment size of 16MB.
+	segmentSize  = 16 * 1024 * 1024
+	fileModePerm = 0644
+
 	// size of the trailer used to detect torn writes.
 	// We are writing this to detect torn or partial writes caused by unexpected shutdowns or disk failures.
 	// This is inspired by a real-world issue observed in etcd v2.3:
 	// SEE: https://github.com/etcd-io/etcd/issues/6191#issuecomment-240268979
-	// By adding a known trailer marker (e.g., 0xDEADBEEF), we can explicitly validate that a chunk
+	// By adding a known trailer marker (e.g., 0xDEADBEEF), we can explicitly validate that a record entry.
 	// was fully persisted, and safely stop recovery at the first missing or corrupted trailer.
-	chunkTrailerSize = 4
+	recordTrailerMarkerSize = 8
+	// alignSize defines the boundary (in bytes) to which all WAL entries (headers, payloads, trailers) are aligned.
+	// helps us reduce the chance of partially written headers/trailers across page boundaries during crashes.
+	// atomic sector writes are not used for the correctness but gives us better chance for recovery.
+	// SEE: https://github.com/boltdb/bolt/issues/548
+	alignSize int64 = 8
 )
 
 var (
-	// marker written after every WAL chunk to detect torn/incomplete writes.
-	trailerCanary = []byte{0xDE, 0xAD, 0xBE, 0xEF}
+	// marker written after every WAL record to detect torn/incomplete writes.
+	trailerMarker = []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED, 0xFA, 0xCE}
 )
 
-type SegmentReader struct {
-	segment    *Segment
-	readOffset int64
-}
-
-// ChunkPosition is the logical location of a chunk within a WAL Segment.
-type ChunkPosition struct {
+// RecordPosition is the logical location of a record entry within a WAL Segment.
+type RecordPosition struct {
 	SegmentID SegmentID
 	Offset    int64
 }
 
-func (cp ChunkPosition) String() string {
+func (cp RecordPosition) String() string {
 	return fmt.Sprintf("SegmentID=%d, Offset=%d", cp.SegmentID, cp.Offset)
 }
 
-// Encode serializes the ChunkPosition into a fixed-length byte slice.
-func (cp ChunkPosition) Encode() []byte {
+// Encode serializes the RecordPosition into a fixed-length byte slice.
+func (cp RecordPosition) Encode() []byte {
 	buf := make([]byte, 12)
 	binary.LittleEndian.PutUint32(buf[0:4], cp.SegmentID)
 	binary.LittleEndian.PutUint64(buf[4:12], uint64(cp.Offset))
 	return buf
 }
 
-// DecodeChunkPosition deserializes a byte slice into a ChunkPosition.
-func DecodeChunkPosition(data []byte) (ChunkPosition, error) {
+// DecodeChunkPosition deserializes a byte slice into a RecordPosition.
+func DecodeChunkPosition(data []byte) (RecordPosition, error) {
 	if len(data) < 12 {
-		return ChunkPosition{}, io.ErrUnexpectedEOF
+		return RecordPosition{}, io.ErrUnexpectedEOF
 	}
-	cp := ChunkPosition{
+	cp := RecordPosition{
 		SegmentID: binary.LittleEndian.Uint32(data[0:4]),
 		Offset:    int64(binary.LittleEndian.Uint64(data[4:12])),
 	}
@@ -198,7 +196,7 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 	s := &Segment{
 		id:         id,
 		fd:         fd,
-		header:     make([]byte, chunkHeaderSize),
+		header:     make([]byte, recordHeaderSize),
 		mmapData:   mmapData,
 		mmapSize:   segmentSize,
 		syncOption: MsyncNone,
@@ -214,7 +212,7 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		writeInitialMetadata(mmapData)
 	} else {
 		// decode the Segment metadata header
-		meta, err := decodeSegmentMetadata(mmapData[:segmentHeaderSize])
+		meta, err := decodeSegmentHeader(mmapData[:segmentHeaderSize])
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode metadata: %w", err)
 		}
@@ -309,31 +307,31 @@ func writeInitialMetadata(mmapData mmap.MMap) {
 func scanForLastOffset(path string, mmapData mmap.MMap) int64 {
 	var offset int64 = segmentHeaderSize
 
-	for offset+chunkHeaderSize <= segmentSize {
-		header := mmapData[offset : offset+chunkHeaderSize]
+	for offset+recordHeaderSize <= segmentSize {
+		header := mmapData[offset : offset+recordHeaderSize]
 		length := binary.LittleEndian.Uint32(header[4:8])
-		entrySize := int64(chunkHeaderSize + length + chunkTrailerSize)
+		entrySize := int64(recordHeaderSize + length + recordTrailerMarkerSize)
 
 		if offset+entrySize > segmentSize {
 			break
 		}
 
-		data := mmapData[offset+chunkHeaderSize : offset+chunkHeaderSize+int64(length)]
-		trailer := mmapData[offset+chunkHeaderSize+int64(length) : offset+entrySize]
+		data := mmapData[offset+recordHeaderSize : offset+recordHeaderSize+int64(length)]
+		trailer := mmapData[offset+recordHeaderSize+int64(length) : offset+entrySize]
 		savedSum := binary.LittleEndian.Uint32(header[:4])
 		computedSum := crc32Checksum(header[4:], data)
 
 		if savedSum == 0 && length == 0 {
 			break
 		}
-		if savedSum == 0 || savedSum != computedSum || !bytes.Equal(trailer, trailerCanary) {
+		if savedSum == 0 || savedSum != computedSum || !bytes.Equal(trailer, trailerMarker) {
 			slog.Warn("[unisondb.fswal]",
 				slog.String("event_type", "Segment.recovery.stopped.checksum.mismatch"),
 				slog.Int64("offset", offset),
 				slog.Uint64("saved", uint64(savedSum)),
 				slog.Uint64("computed", uint64(computedSum)),
 				slog.String("Segment", path),
-				slog.Bool("trailer_corrupted", !bytes.Equal(trailer, trailerCanary)),
+				slog.Bool("trailer_corrupted", !bytes.Equal(trailer, trailerMarker)),
 			)
 			break
 		}
@@ -344,7 +342,7 @@ func scanForLastOffset(path string, mmapData mmap.MMap) int64 {
 	return offset
 }
 
-func (seg *Segment) Write(data []byte) (*ChunkPosition, error) {
+func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
 	if seg.closed.Load() {
 		return nil, ErrClosed
 	}
@@ -358,7 +356,7 @@ func (seg *Segment) Write(data []byte) (*ChunkPosition, error) {
 	}
 
 	offset := seg.writeOffset.Load()
-	entrySize := int64(chunkHeaderSize + len(data) + chunkTrailerSize)
+	entrySize := int64(recordHeaderSize + len(data) + recordTrailerMarkerSize)
 	if offset+entrySize > seg.mmapSize {
 		return nil, errors.New("write exceeds Segment size")
 	}
@@ -372,10 +370,10 @@ func (seg *Segment) Write(data []byte) (*ChunkPosition, error) {
 	}
 
 	copy(seg.mmapData[offset:], seg.header[:])
-	copy(seg.mmapData[offset+chunkHeaderSize:], data)
+	copy(seg.mmapData[offset+recordHeaderSize:], data)
 
-	canaryOffset := offset + chunkHeaderSize + int64(len(data))
-	copy(seg.mmapData[canaryOffset:], trailerCanary)
+	canaryOffset := offset + recordHeaderSize + int64(len(data))
+	copy(seg.mmapData[canaryOffset:], trailerMarker)
 
 	newOffset := offset + entrySize
 	seg.writeOffset.Store(newOffset)
@@ -395,32 +393,32 @@ func (seg *Segment) Write(data []byte) (*ChunkPosition, error) {
 		}
 	}
 
-	return &ChunkPosition{
+	return &RecordPosition{
 		SegmentID: seg.id,
 		Offset:    offset,
 	}, nil
 }
 
-func (seg *Segment) Read(offset int64) ([]byte, *ChunkPosition, error) {
+func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
 	if seg.closed.Load() {
 		return nil, nil, ErrClosed
 	}
-	if offset+chunkHeaderSize > seg.mmapSize {
+	if offset+recordHeaderSize > seg.mmapSize {
 		return nil, nil, io.EOF
 	}
 
-	header := seg.mmapData[offset : offset+chunkHeaderSize]
+	header := seg.mmapData[offset : offset+recordHeaderSize]
 	length := binary.LittleEndian.Uint32(header[4:8])
-	if length > uint32(seg.WriteOffset()-offset-chunkHeaderSize) {
+	if length > uint32(seg.WriteOffset()-offset-recordHeaderSize) {
 		return nil, nil, ErrCorruptHeader
 	}
-	entrySize := chunkHeaderSize + int64(length) + chunkTrailerSize
+	entrySize := recordHeaderSize + int64(length) + recordTrailerMarkerSize
 	if offset+entrySize > seg.WriteOffset() {
 		return nil, nil, io.EOF
 	}
 
-	data := seg.mmapData[offset+chunkHeaderSize : offset+chunkHeaderSize+int64(length)]
-	trailer := seg.mmapData[offset+chunkHeaderSize+int64(length) : offset+entrySize]
+	data := seg.mmapData[offset+recordHeaderSize : offset+recordHeaderSize+int64(length)]
+	trailer := seg.mmapData[offset+recordHeaderSize+int64(length) : offset+entrySize]
 
 	savedSum := binary.LittleEndian.Uint32(header[:4])
 	computedSum := crc32Checksum(header[4:], data)
@@ -428,11 +426,11 @@ func (seg *Segment) Read(offset int64) ([]byte, *ChunkPosition, error) {
 		return nil, nil, ErrInvalidCRC
 	}
 
-	if !bytes.Equal(trailer, trailerCanary) {
+	if !bytes.Equal(trailer, trailerMarker) {
 		return nil, nil, ErrIncompleteChunk
 	}
 
-	next := &ChunkPosition{
+	next := &RecordPosition{
 		SegmentID: seg.id,
 		Offset:    offset + entrySize,
 	}
@@ -467,7 +465,7 @@ func (seg *Segment) MSync() error {
 }
 
 func (seg *Segment) WillExceed(dataSize int) bool {
-	entrySize := int64(chunkHeaderSize + dataSize)
+	entrySize := int64(recordHeaderSize + dataSize)
 	offset := seg.writeOffset.Load()
 	return offset+entrySize > seg.mmapSize
 }
@@ -505,7 +503,7 @@ func (seg *Segment) WriteOffset() int64 {
 func (seg *Segment) GetLastModifiedAt() int64 {
 	seg.writeMu.RLock()
 	defer seg.writeMu.RUnlock()
-	meta, err := decodeSegmentMetadata(seg.mmapData[:segmentHeaderSize])
+	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
 	if err != nil {
 		return 0 // or panic/log if you want to enforce integrity
 	}
@@ -515,7 +513,7 @@ func (seg *Segment) GetLastModifiedAt() int64 {
 func (seg *Segment) GetEntryCount() int64 {
 	seg.writeMu.RLock()
 	defer seg.writeMu.RUnlock()
-	meta, err := decodeSegmentMetadata(seg.mmapData[:segmentHeaderSize])
+	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
 	if err != nil {
 		return 0
 	}
@@ -525,7 +523,7 @@ func (seg *Segment) GetEntryCount() int64 {
 func (seg *Segment) GetFlags() uint32 {
 	seg.writeMu.RLock()
 	defer seg.writeMu.RUnlock()
-	meta, err := decodeSegmentMetadata(seg.mmapData[:segmentHeaderSize])
+	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
 	if err != nil {
 		return 0
 	}
@@ -536,6 +534,11 @@ func (seg *Segment) GetSegmentSize() int64 {
 	return seg.mmapSize
 }
 
+type SegmentReader struct {
+	segment    *Segment
+	readOffset int64
+}
+
 func (seg *Segment) NewReader() *SegmentReader {
 	return &SegmentReader{
 		segment:    seg,
@@ -543,7 +546,7 @@ func (seg *Segment) NewReader() *SegmentReader {
 	}
 }
 
-func (r *SegmentReader) Next() ([]byte, *ChunkPosition, error) {
+func (r *SegmentReader) Next() ([]byte, *RecordPosition, error) {
 	if r.readOffset >= r.segment.WriteOffset() {
 		return nil, nil, io.EOF
 	}

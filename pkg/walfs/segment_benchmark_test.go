@@ -29,7 +29,7 @@ func (r *threadSafeRand) Intn(n int) int {
 var globalRand = newThreadSafeRand()
 
 func calculateMaxEntries(dataSize int) int {
-	entrySize := int64(chunkHeaderSize + segmentHeaderSize + dataSize + chunkTrailerSize)
+	entrySize := int64(recordHeaderSize + segmentHeaderSize + dataSize + recordTrailerMarkerSize)
 	maxEntries := int(segmentSize / entrySize)
 	if maxEntries == 0 {
 		return 1
@@ -292,7 +292,7 @@ func BenchmarkConcurrent(b *testing.B) {
 					for pb.Next() {
 						if globalRand.Intn(2) == 0 {
 							if v, ok := positions.Load(globalRand.Intn(numbRewrites)); ok {
-								pos := v.(*ChunkPosition)
+								pos := v.(*RecordPosition)
 								if _, _, err := seg.Read(pos.Offset); err != nil {
 									b.Fatal(err)
 								}
