@@ -46,7 +46,6 @@ func TestSegment_BasicOperations(t *testing.T) {
 		{"large data", bytes.Repeat([]byte("large"), 5000)},
 	}
 
-	// Step 1: Open Segment and write all entries
 	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
@@ -59,7 +58,6 @@ func TestSegment_BasicOperations(t *testing.T) {
 
 	assert.NoError(t, seg.Close())
 
-	// Step 2: Reopen and verify all entries
 	seg2, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 	defer func() {
@@ -71,7 +69,7 @@ func TestSegment_BasicOperations(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, tests[i].data, readData, "mismatch at index %d", i)
 
-		expectedNextOffset := pos.Offset + int64(len(tests[i].data)+recordHeaderSize) + int64(recordTrailerMarkerSize)
+		expectedNextOffset := pos.Offset + calculateAlignedFrameSize(len(tests[i].data))
 		assert.Equal(t, expectedNextOffset, next.Offset, "wrong next offset at index %d", i)
 	}
 }
@@ -666,4 +664,126 @@ func TestWithSegmentSize(t *testing.T) {
 
 	assert.Equal(t, int64(64), seg.WriteOffset(), "initial write size should 64 bytes")
 	assert.Equal(t, customSize, seg.GetSegmentSize(), "initial write offset should match")
+}
+
+func TestSegment_Align_Uo(t *testing.T) {
+	testCases := []int64{
+		8,
+		9,
+	}
+
+	for i, n := range testCases {
+		aligned := alignUp(n)
+		assert.Equal(t, int64(i+1)*8, aligned, "aligned segment should align up")
+	}
+}
+
+func TestSegment_WriteRead_UnalignedEntriesAlignedOffsets(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	inputs := [][]byte{
+		[]byte("abc"),
+		[]byte("1234567"),
+		bytes.Repeat([]byte("X"), 15),
+		bytes.Repeat([]byte("Y"), 33),
+		bytes.Repeat([]byte("Z"), 127),
+		bytes.Repeat([]byte("P"), 1023),
+	}
+
+	var positions []*RecordPosition
+
+	for _, data := range inputs {
+		pos, err := seg.Write(data)
+		assert.NoError(t, err)
+		positions = append(positions, pos)
+	}
+
+	for i, pos := range positions {
+		data, next, err := seg.Read(pos.Offset)
+		assert.NoError(t, err, "failed to read record at index %d", i)
+		assert.Equal(t, inputs[i], data, "data mismatch at index %d", i)
+
+		assert.Equal(t, int64(0), next.Offset%8,
+			"next offset not 8-byte aligned at index %d: got %d", i, next.Offset)
+	}
+}
+
+func TestSegmentReader_Next_AlignedOffsets(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, seg.Close()) })
+
+	inputs := [][]byte{
+		[]byte("x"),
+		[]byte("hello"),
+		bytes.Repeat([]byte("A"), 29),
+		bytes.Repeat([]byte("B"), 123),
+		bytes.Repeat([]byte("C"), 509),
+	}
+
+	for _, data := range inputs {
+		_, err := seg.Write(data)
+		assert.NoError(t, err)
+	}
+
+	reader := seg.NewReader()
+	var i int
+	for {
+		data, pos, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		assert.NoError(t, err)
+		assert.Equal(t, inputs[i], data, "mismatch at index %d", i)
+		assert.Equal(t, int64(0), pos.Offset%8, "unaligned offset at index %d: %d", i, pos.Offset)
+		i++
+	}
+}
+
+func TestSegment_ScanStopsAt_Trailer_Corruption(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+
+	t.Cleanup(func() { assert.NoError(t, seg.Close()) })
+
+	data1 := []byte("hello")
+	data2 := []byte("world")
+
+	pos1, err := seg.Write(data1)
+	assert.NoError(t, err)
+
+	pos2, err := seg.Write(data2)
+	assert.NoError(t, err)
+
+	headerSize := int64(recordHeaderSize)
+	dataSize := int64(len(data2))
+	trailerOffset := pos2.Offset + headerSize + dataSize
+	// corrupting
+	seg.mmapData[trailerOffset] = 0x00
+	assert.NoError(t, seg.mmapData.Flush())
+	assert.NoError(t, seg.Close())
+
+	seg2, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, seg2.Close()) })
+
+	actualOffset := seg2.WriteOffset()
+	entrySize1 := alignUp(int64(recordHeaderSize + len(data1) + recordTrailerMarkerSize))
+	expectedRecoveryOffset := pos1.Offset + entrySize1
+	assert.Equal(t, expectedRecoveryOffset, actualOffset, "scanForLastOffset should stop before corrupted entry")
+}
+
+func calculateAlignedFrameSize(dataLen int) int64 {
+	raw := int64(recordHeaderSize + dataLen + recordTrailerMarkerSize)
+	return alignUp(raw)
 }

@@ -117,6 +117,7 @@ const (
 	// atomic sector writes are not used for the correctness but gives us better chance for recovery.
 	// SEE: https://github.com/boltdb/bolt/issues/548
 	alignSize int64 = 8
+	alignMask int64 = alignSize - 1
 )
 
 var (
@@ -188,16 +189,9 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		return nil, err
 	}
 
-	fd, mmapData, err := prepareSegmentFile(path)
-	if err != nil {
-		return nil, err
-	}
-
 	s := &Segment{
 		id:         id,
-		fd:         fd,
 		header:     make([]byte, recordHeaderSize),
-		mmapData:   mmapData,
 		mmapSize:   segmentSize,
 		syncOption: MsyncNone,
 	}
@@ -205,6 +199,13 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 	for _, opt := range opts {
 		opt(s)
 	}
+
+	fd, mmapData, err := s.prepareSegmentFile(path)
+	if err != nil {
+		return nil, err
+	}
+	s.fd = fd
+	s.mmapData = mmapData
 
 	offset := int64(segmentHeaderSize)
 	if isNew {
@@ -225,7 +226,7 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 			// to find the true end of valid data for safe appends,
 			// while in most cases this would not happen but if crashed
 			// we don't know if the written header metadata offset is valid enough.
-			offset = scanForLastOffset(path, mmapData)
+			offset = s.scanForLastOffset(path, mmapData)
 		}
 	}
 	s.writeOffset.Store(offset)
@@ -274,12 +275,12 @@ func isNewSegment(path string) (bool, error) {
 	return false, nil
 }
 
-func prepareSegmentFile(path string) (*os.File, mmap.MMap, error) {
+func (seg *Segment) prepareSegmentFile(path string) (*os.File, mmap.MMap, error) {
 	fd, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, fileModePerm)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := fd.Truncate(segmentSize); err != nil {
+	if err := fd.Truncate(seg.mmapSize); err != nil {
 		fd.Close()
 		return nil, nil, fmt.Errorf("truncate error: %w", err)
 	}
@@ -304,20 +305,26 @@ func writeInitialMetadata(mmapData mmap.MMap) {
 	binary.LittleEndian.PutUint32(mmapData[56:60], crc)
 }
 
-func scanForLastOffset(path string, mmapData mmap.MMap) int64 {
+func (seg *Segment) scanForLastOffset(path string, mmapData mmap.MMap) int64 {
 	var offset int64 = segmentHeaderSize
 
-	for offset+recordHeaderSize <= segmentSize {
+	for offset+recordHeaderSize <= seg.mmapSize {
+		offset = alignUp(offset)
+		if offset+recordHeaderSize > seg.mmapSize {
+			break
+		}
+
 		header := mmapData[offset : offset+recordHeaderSize]
 		length := binary.LittleEndian.Uint32(header[4:8])
-		entrySize := int64(recordHeaderSize + length + recordTrailerMarkerSize)
+		entrySize := alignUp(int64(recordHeaderSize + length + recordTrailerMarkerSize))
 
-		if offset+entrySize > segmentSize {
+		if offset+entrySize > seg.mmapSize {
 			break
 		}
 
 		data := mmapData[offset+recordHeaderSize : offset+recordHeaderSize+int64(length)]
-		trailer := mmapData[offset+recordHeaderSize+int64(length) : offset+entrySize]
+		trailer := mmapData[offset+recordHeaderSize+int64(length) : offset+recordHeaderSize+int64(length)+recordTrailerMarkerSize]
+
 		savedSum := binary.LittleEndian.Uint32(header[:4])
 		computedSum := crc32Checksum(header[4:], data)
 
@@ -342,6 +349,11 @@ func scanForLastOffset(path string, mmapData mmap.MMap) int64 {
 	return offset
 }
 
+// alignUp returns the next multiple of alignSize greater than or equal to n.
+func alignUp(n int64) int64 {
+	return (n + alignMask) & ^alignMask
+}
+
 func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
 	if seg.closed.Load() {
 		return nil, ErrClosed
@@ -356,7 +368,13 @@ func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
 	}
 
 	offset := seg.writeOffset.Load()
-	entrySize := int64(recordHeaderSize + len(data) + recordTrailerMarkerSize)
+
+	headerSize := int64(recordHeaderSize)
+	dataSize := int64(len(data))
+	trailerSize := int64(recordTrailerMarkerSize)
+	rawSize := headerSize + dataSize + trailerSize
+	entrySize := alignUp(rawSize)
+
 	if offset+entrySize > seg.mmapSize {
 		return nil, errors.New("write exceeds Segment size")
 	}
@@ -365,15 +383,18 @@ func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
 	sum := crc32Checksum(seg.header[4:], data)
 	binary.LittleEndian.PutUint32(seg.header[:4], sum)
 
-	if offset+entrySize > seg.mmapSize {
-		return nil, errors.New("write exceeds Segment size")
-	}
-
 	copy(seg.mmapData[offset:], seg.header[:])
 	copy(seg.mmapData[offset+recordHeaderSize:], data)
 
-	canaryOffset := offset + recordHeaderSize + int64(len(data))
+	canaryOffset := offset + headerSize + dataSize
 	copy(seg.mmapData[canaryOffset:], trailerMarker)
+
+	paddingStart := offset + rawSize
+	paddingEnd := offset + entrySize
+	// ensuring alignment to 8 bytes
+	for i := paddingStart; i < paddingEnd; i++ {
+		seg.mmapData[i] = 0
+	}
 
 	newOffset := offset + entrySize
 	seg.writeOffset.Store(newOffset)
@@ -409,16 +430,21 @@ func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
 
 	header := seg.mmapData[offset : offset+recordHeaderSize]
 	length := binary.LittleEndian.Uint32(header[4:8])
+	dataSize := int64(length)
+
+	rawSize := int64(recordHeaderSize) + dataSize + recordTrailerMarkerSize
+	entrySize := alignUp(rawSize)
+
 	if length > uint32(seg.WriteOffset()-offset-recordHeaderSize) {
 		return nil, nil, ErrCorruptHeader
 	}
-	entrySize := recordHeaderSize + int64(length) + recordTrailerMarkerSize
+
 	if offset+entrySize > seg.WriteOffset() {
 		return nil, nil, io.EOF
 	}
 
-	data := seg.mmapData[offset+recordHeaderSize : offset+recordHeaderSize+int64(length)]
-	trailer := seg.mmapData[offset+recordHeaderSize+int64(length) : offset+entrySize]
+	data := seg.mmapData[offset+recordHeaderSize : offset+recordHeaderSize+dataSize]
+	trailer := seg.mmapData[offset+recordHeaderSize+dataSize : offset+recordHeaderSize+dataSize+recordTrailerMarkerSize]
 
 	savedSum := binary.LittleEndian.Uint32(header[:4])
 	computedSum := crc32Checksum(header[4:], data)
@@ -505,7 +531,7 @@ func (seg *Segment) GetLastModifiedAt() int64 {
 	defer seg.writeMu.RUnlock()
 	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
 	if err != nil {
-		return 0 // or panic/log if you want to enforce integrity
+		panic(err)
 	}
 	return meta.LastModifiedAt
 }
@@ -515,7 +541,7 @@ func (seg *Segment) GetEntryCount() int64 {
 	defer seg.writeMu.RUnlock()
 	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
 	if err != nil {
-		return 0
+		panic(err)
 	}
 	return meta.EntryCount
 }
@@ -525,7 +551,7 @@ func (seg *Segment) GetFlags() uint32 {
 	defer seg.writeMu.RUnlock()
 	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
 	if err != nil {
-		return 0
+		panic(err)
 	}
 	return meta.Flags
 }
