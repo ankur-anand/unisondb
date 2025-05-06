@@ -24,7 +24,7 @@ func TestChunkPositionEncodeDecode(t *testing.T) {
 	for _, original := range tests {
 		encoded := original.Encode()
 
-		decoded, err := DecodeChunkPosition(encoded)
+		decoded, err := DecodeRecordPosition(encoded)
 		assert.NoError(t, err)
 		assert.Equal(t, original, decoded)
 	}
@@ -32,7 +32,7 @@ func TestChunkPositionEncodeDecode(t *testing.T) {
 
 func TestDecodeChunkPosition_InvalidData(t *testing.T) {
 	shortData := []byte{1, 2, 3, 4, 5}
-	_, err := DecodeChunkPosition(shortData)
+	_, err := DecodeRecordPosition(shortData)
 	assert.Error(t, err)
 }
 

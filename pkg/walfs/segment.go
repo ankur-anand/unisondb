@@ -145,8 +145,8 @@ func (cp RecordPosition) Encode() []byte {
 	return buf
 }
 
-// DecodeChunkPosition deserializes a byte slice into a RecordPosition.
-func DecodeChunkPosition(data []byte) (RecordPosition, error) {
+// DecodeRecordPosition deserializes a byte slice into a RecordPosition.
+func DecodeRecordPosition(data []byte) (RecordPosition, error) {
 	if len(data) < 12 {
 		return RecordPosition{}, io.ErrUnexpectedEOF
 	}
@@ -612,6 +612,10 @@ func (seg *Segment) cleanup() {
 	if err := os.Remove(seg.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		slog.Error("[unisondb.walfs] segment file delete failed", slog.String("path", seg.path), slog.Any("err", err))
 	}
+}
+
+func (seg *Segment) ID() SegmentID {
+	return seg.id
 }
 
 type SegmentReader struct {
