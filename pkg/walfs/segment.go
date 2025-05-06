@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -91,11 +92,12 @@ const (
 type SegmentID = uint32
 
 var (
-	ErrClosed               = errors.New("the Segment file is closed")
-	ErrInvalidCRC           = errors.New("invalid crc, the data may be corrupted")
-	ErrCorruptHeader        = errors.New("corrupt record header, invalid length")
-	ErrIncompleteChunk      = errors.New("incomplete or torn write detected at record trailer")
-	ErrWriteToSealedSegment = errors.New("cannot write to sealed Segment")
+	ErrClosed              = errors.New("the Segment file is closed")
+	ErrInvalidCRC          = errors.New("invalid crc, the data may be corrupted")
+	ErrCorruptHeader       = errors.New("corrupt record header, invalid length")
+	ErrIncompleteChunk     = errors.New("incomplete or torn write detected at record trailer")
+	ErrSegmentSealed       = errors.New("cannot write to sealed segment")
+	ErrSegmentReaderClosed = errors.New("segment reader is closed")
 )
 
 const (
@@ -157,6 +159,7 @@ func DecodeChunkPosition(data []byte) (RecordPosition, error) {
 
 // Segment represents a single WAL segment backed by a memory-mapped file.
 type Segment struct {
+	path        string
 	id          SegmentID
 	fd          *os.File
 	mmapData    mmap.MMap
@@ -164,8 +167,12 @@ type Segment struct {
 	writeOffset atomic.Int64
 	closed      atomic.Bool
 	header      []byte
-	writeMu     sync.RWMutex
-	syncOption  MsyncOption
+
+	refCount          atomic.Int64
+	markedForDeletion atomic.Bool
+
+	writeMu    sync.RWMutex
+	syncOption MsyncOption
 }
 
 // WithSyncOption sets the sync option for the Segment.
@@ -190,6 +197,7 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 	}
 
 	s := &Segment{
+		path:       path,
 		id:         id,
 		header:     make([]byte, recordHeaderSize),
 		mmapSize:   segmentSize,
@@ -364,7 +372,7 @@ func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
 
 	flags := binary.LittleEndian.Uint32(seg.mmapData[40:44])
 	if IsSealed(flags) {
-		return nil, ErrWriteToSealedSegment
+		return nil, ErrSegmentSealed
 	}
 
 	offset := seg.writeOffset.Load()
@@ -420,6 +428,10 @@ func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
 	}, nil
 }
 
+// Read reads the record data at the specified offset within the segment.
+// IMP: Don't retain any data.
+// This method returns a slice of the mmap'd file content corresponding to the record payload.
+// so slice becomes invalid immediately after the segment is closed or unmapped.
 func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
 	if seg.closed.Load() {
 		return nil, nil, ErrClosed
@@ -464,6 +476,7 @@ func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
 		SegmentID: seg.id,
 		Offset:    offset + entrySize,
 	}
+
 	return data, next, nil
 }
 
@@ -565,19 +578,78 @@ func (seg *Segment) GetSegmentSize() int64 {
 	return seg.mmapSize
 }
 
-type SegmentReader struct {
-	segment    *Segment
-	readOffset int64
+func (seg *Segment) incrRef() {
+	seg.refCount.Add(1)
 }
 
-func (seg *Segment) NewReader() *SegmentReader {
-	return &SegmentReader{
-		segment:    seg,
-		readOffset: segmentHeaderSize,
+func (seg *Segment) decrRef() {
+	for {
+		old := seg.refCount.Load()
+		if old == 0 {
+			return
+		}
+		if seg.refCount.CompareAndSwap(old, old-1) {
+			if old-1 == 0 && seg.markedForDeletion.Load() {
+				seg.cleanup()
+			}
+			return
+		}
 	}
 }
 
+func (seg *Segment) MarkForDeletion() {
+	if seg.markedForDeletion.CompareAndSwap(false, true) {
+		if seg.refCount.Load() == 0 {
+			seg.cleanup()
+		}
+	}
+}
+
+func (seg *Segment) cleanup() {
+	if err := seg.Close(); err != nil {
+		slog.Error("[unisondb.walfs] segment close failed", slog.String("path", seg.path), slog.Any("err", err))
+	}
+	if err := os.Remove(seg.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		slog.Error("[unisondb.walfs] segment file delete failed", slog.String("path", seg.path), slog.Any("err", err))
+	}
+}
+
+type SegmentReader struct {
+	segment    *Segment
+	readOffset int64
+	closed     atomic.Bool
+}
+
+func (r *SegmentReader) Close() {
+	if r.closed.CompareAndSwap(false, true) {
+		r.segment.decrRef()
+	}
+}
+
+func (seg *Segment) NewReader() *SegmentReader {
+	// prevent new readers to segments marked for deletion
+	if seg.markedForDeletion.Load() {
+		return nil
+	}
+
+	seg.incrRef()
+	reader := &SegmentReader{
+		segment:    seg,
+		readOffset: segmentHeaderSize,
+	}
+
+	// safety net in case caller doesn't call Close()
+	runtime.AddCleanup(reader, func(seg *Segment) {
+		seg.decrRef()
+	}, seg)
+
+	return reader
+}
+
 func (r *SegmentReader) Next() ([]byte, *RecordPosition, error) {
+	if r.closed.Load() {
+		return nil, nil, ErrSegmentReaderClosed
+	}
 	if r.readOffset >= r.segment.WriteOffset() {
 		return nil, nil, io.EOF
 	}

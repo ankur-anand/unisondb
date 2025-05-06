@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"os"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -578,7 +580,7 @@ func TestSegment_SealAndPreventWrite(t *testing.T) {
 	assert.NoError(t, err, "sealing Segment should not fail")
 
 	_, err = seg.Write([]byte("how are you?"))
-	assert.ErrorIs(t, err, ErrWriteToSealedSegment)
+	assert.ErrorIs(t, err, ErrSegmentSealed)
 
 	_ = seg.Close()
 	seg2, err := OpenSegmentFile(tmpDir, ".wal", 1)
@@ -817,6 +819,101 @@ func TestSegment_ParallelStreamReaders(t *testing.T) {
 		}(r)
 	}
 	wg.Wait()
+}
+
+func TestSegmentReader_ReferenceCountingAndDeletion(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+
+	_, err = seg.Write([]byte("hello"))
+	assert.NoError(t, err)
+
+	reader1 := seg.NewReader()
+	assert.NotNil(t, reader1)
+	assert.Equal(t, int64(1), seg.refCount.Load())
+
+	reader2 := seg.NewReader()
+	assert.NotNil(t, reader2)
+	assert.Equal(t, int64(2), seg.refCount.Load())
+
+	seg.MarkForDeletion()
+	assert.True(t, seg.markedForDeletion.Load())
+
+	assert.FileExists(t, seg.path)
+
+	reader1.Close()
+	assert.Equal(t, int64(1), seg.refCount.Load())
+	assert.FileExists(t, seg.path)
+
+	reader2.Close()
+	time.Sleep(100 * time.Millisecond)
+	assert.Equal(t, int64(0), seg.refCount.Load())
+
+	_, statErr := os.Stat(seg.path)
+	assert.True(t, os.IsNotExist(statErr), "segment file should be deleted")
+}
+
+func TestSegmentReader_CleanupFallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 2)
+	assert.NoError(t, err)
+
+	_, err = seg.Write([]byte("world"))
+	assert.NoError(t, err)
+
+	reader := seg.NewReader()
+	assert.NotNil(t, reader)
+
+	reader2 := seg.NewReader()
+	assert.NotNil(t, reader2)
+	defer reader2.Close()
+
+	seg.MarkForDeletion()
+	assert.True(t, seg.markedForDeletion.Load())
+
+	// dropping reader reference, with-out close
+	reader = nil
+	// forcing two gc cycle.
+	// https://go.dev/blog/cleanups-and-weak
+	// runtime.Finalizer takes at a minimum two full garbage collection cycles to reclaim the memory
+	// so we are just being safe.
+	runtime.GC()
+	runtime.GC()
+	time.Sleep(50 * time.Millisecond)
+
+	assert.Greater(t, seg.refCount.Load(), int64(0), "segment should still have active references")
+	_, statErr := os.Stat(seg.path)
+	assert.NoError(t, statErr, "segment file should NOT be deleted yet")
+
+	reader2.Close()
+
+	runtime.GC()
+	runtime.GC()
+	time.Sleep(50 * time.Millisecond)
+
+	assert.Equal(t, int64(0), seg.refCount.Load())
+	_, statErr = os.Stat(seg.path)
+	assert.True(t, os.IsNotExist(statErr), "segment file should be deleted after all readers are gone")
+}
+
+func TestSegmentReader_PreventAccessAfterClose(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 3)
+	assert.NoError(t, err)
+
+	_, err = seg.Write([]byte("data"))
+	assert.NoError(t, err)
+
+	reader := seg.NewReader()
+	assert.NotNil(t, reader)
+
+	_, _, err = reader.Next()
+	assert.NoError(t, err)
+
+	reader.Close()
+	_, _, err = reader.Next()
+	assert.ErrorIs(t, err, ErrSegmentReaderClosed)
 }
 
 func calculateAlignedFrameSize(dataLen int) int64 {
