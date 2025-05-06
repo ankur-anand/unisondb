@@ -1,0 +1,354 @@
+package walfs
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"os"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+)
+
+var (
+	ErrSegmentNotFound    = errors.New("segment not found")
+	ErrOffsetOutOfBounds  = errors.New("start offset is beyond segment size")
+	ErrOffsetBeforeHeader = errors.New("start offset is within reserved segment header")
+)
+
+type SegmentManagerOption func(*SegmentManager)
+
+func WithMaxSegmentSize(size int64) SegmentManagerOption {
+	return func(sm *SegmentManager) {
+		sm.maxSegmentSize = size
+	}
+}
+
+func WithBytesPerSync(bytes int64) SegmentManagerOption {
+	return func(sm *SegmentManager) {
+		sm.bytesPerSync = bytes
+	}
+}
+
+// WithMSyncEveryWrite enables msync() after every write operation.
+func WithMSyncEveryWrite(opt MsyncOption) SegmentManagerOption {
+	return func(sm *SegmentManager) {
+		sm.forceSyncEveryWrite = opt
+	}
+}
+
+type SegmentManager struct {
+	dir            string
+	ext            string
+	maxSegmentSize int64
+
+	// number of bytes to write before calling msync in write path
+	bytesPerSync        int64
+	unSynced            int64
+	forceSyncEveryWrite MsyncOption
+
+	mu             sync.RWMutex
+	currentSegment *Segment
+	segments       map[SegmentID]*Segment
+}
+
+func NewSegmentManager(dir string, ext string, opts ...SegmentManagerOption) (*SegmentManager, error) {
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create WAL directory: %w", err)
+	}
+
+	manager := &SegmentManager{
+		dir:                 dir,
+		ext:                 ext,
+		maxSegmentSize:      segmentSize,
+		segments:            make(map[SegmentID]*Segment),
+		forceSyncEveryWrite: MsyncNone,
+		bytesPerSync:        0,
+	}
+
+	for _, opt := range opts {
+		opt(manager)
+	}
+
+	// recover existing segments
+	if err := manager.recoverSegments(); err != nil {
+		return nil, fmt.Errorf("segment recovery failed: %w", err)
+	}
+
+	return manager, nil
+}
+
+func (sm *SegmentManager) recoverSegments() error {
+	files, err := os.ReadDir(sm.dir)
+	if err != nil {
+		return fmt.Errorf("failed to read segment directory: %w", err)
+	}
+
+	var segmentIDs []SegmentID
+
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), sm.ext) {
+			continue
+		}
+		// e.g. "000000001.wal" -> 1
+		base := strings.TrimSuffix(file.Name(), sm.ext)
+		id, err := strconv.ParseUint(base, 10, 32)
+		if err != nil {
+			// skip non-numeric segment files
+			continue
+		}
+		segID := SegmentID(id)
+		segmentIDs = append(segmentIDs, segID)
+	}
+
+	// 000000001.wal
+	// 000000002.wal
+	// 000000003.wal
+	sort.Slice(segmentIDs, func(i, j int) bool {
+		return segmentIDs[i] < segmentIDs[j]
+	})
+
+	if len(segmentIDs) == 0 {
+		seg, err := OpenSegmentFile(sm.dir, sm.ext, 1, WithSegmentSize(sm.maxSegmentSize), WithSyncOption(sm.forceSyncEveryWrite))
+		if err != nil {
+			return fmt.Errorf("failed to create initial segment: %w", err)
+		}
+
+		sm.segments[1] = seg
+		sm.currentSegment = seg
+		return nil
+	}
+
+	for i, id := range segmentIDs {
+		seg, err := OpenSegmentFile(sm.dir, sm.ext, id, WithSegmentSize(sm.maxSegmentSize), WithSyncOption(sm.forceSyncEveryWrite))
+		if err != nil {
+			return fmt.Errorf("failed to open segment %d: %w", id, err)
+		}
+		if i < len(segmentIDs)-1 && !IsSealed(seg.GetFlags()) {
+			err := seg.SealSegment()
+			if err != nil {
+				return err
+			}
+		}
+		sm.segments[id] = seg
+		sm.currentSegment = seg
+	}
+
+	return nil
+}
+
+func (sm *SegmentManager) Write(data []byte) (RecordPosition, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// Check if current segment needs rotation
+	if sm.currentSegment == nil {
+		return RecordPosition{}, fmt.Errorf("no active segment")
+	}
+
+	if sm.currentSegment.WillExceed(len(data)) {
+		if err := sm.rotateSegment(); err != nil {
+			return RecordPosition{}, fmt.Errorf("failed to rotate segment: %w", err)
+		}
+	}
+
+	pos, err := sm.currentSegment.Write(data)
+	if err != nil {
+		return RecordPosition{}, fmt.Errorf("write failed: %w", err)
+	}
+
+	sm.unSynced += recordOverhead(int64(len(data)))
+
+	if sm.bytesPerSync > 0 && sm.unSynced >= sm.bytesPerSync {
+		if err := sm.currentSegment.MSync(); err != nil {
+			return RecordPosition{}, err
+		}
+		sm.unSynced = 0
+	}
+
+	return *pos, nil
+}
+
+func recordOverhead(dataLen int64) int64 {
+	return alignUp(dataLen) + recordHeaderSize + recordTrailerMarkerSize
+}
+
+func (sm *SegmentManager) Read(pos RecordPosition) ([]byte, error) {
+	sm.mu.RLock()
+	seg, ok := sm.segments[pos.SegmentID]
+	sm.mu.RUnlock()
+
+	if !ok {
+		return nil, ErrSegmentNotFound
+	}
+
+	if pos.Offset < segmentHeaderSize {
+		fmt.Println("this is called")
+		return nil, ErrOffsetBeforeHeader
+	}
+
+	fmt.Println(seg.GetSegmentSize(), "Set size")
+	if pos.Offset > seg.GetSegmentSize() {
+		return nil, ErrOffsetOutOfBounds
+	}
+
+	data, _, err := seg.Read(pos.Offset)
+	if err != nil {
+		return nil, fmt.Errorf("read failed at segment %d offset %d: %w", pos.SegmentID, pos.Offset, err)
+	}
+
+	return data, nil
+}
+
+func (sm *SegmentManager) Segments() map[SegmentID]*Segment {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+
+	// Return a shallow copy to avoid external modification
+	segmentsCopy := make(map[SegmentID]*Segment, len(sm.segments))
+	for id, seg := range sm.segments {
+		segmentsCopy[id] = seg
+	}
+	return segmentsCopy
+}
+
+func (sm *SegmentManager) Current() *Segment {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	return sm.currentSegment
+}
+
+func (sm *SegmentManager) RotateSegment() error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	return sm.rotateSegment()
+}
+
+func (sm *SegmentManager) rotateSegment() error {
+	if sm.currentSegment != nil && !IsSealed(sm.currentSegment.GetFlags()) {
+		if err := sm.currentSegment.SealSegment(); err != nil {
+			return fmt.Errorf("failed to seal current segment: %w", err)
+		}
+		err := sm.currentSegment.Sync()
+		if err != nil {
+			return err
+		}
+	}
+
+	var newID SegmentID = 1
+	if sm.currentSegment != nil {
+		newID = sm.currentSegment.ID() + 1
+	}
+
+	newSegment, err := OpenSegmentFile(sm.dir, sm.ext, newID, WithSegmentSize(sm.maxSegmentSize), WithSyncOption(sm.forceSyncEveryWrite))
+	if err != nil {
+		return fmt.Errorf("failed to create new segment: %w", err)
+	}
+
+	sm.segments[newID] = newSegment
+	sm.currentSegment = newSegment
+
+	return nil
+}
+
+type Reader struct {
+	segmentReaders []*SegmentReader
+	currentReader  int
+}
+
+func (sm *SegmentManager) NewReader() *Reader {
+	sm.mu.RLock()
+	segments := maps.Clone(sm.segments)
+	sm.mu.RUnlock()
+
+	var ids []SegmentID
+	for id := range segments {
+		ids = append(ids, id)
+	}
+
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i] < ids[j]
+	})
+
+	var readers []*SegmentReader
+	for _, id := range ids {
+		if reader := segments[id].NewReader(); reader != nil {
+			readers = append(readers, reader)
+		}
+	}
+
+	return &Reader{
+		segmentReaders: readers,
+		currentReader:  0,
+	}
+}
+
+func (r *Reader) Next() ([]byte, *RecordPosition, error) {
+	for r.currentReader < len(r.segmentReaders) {
+		data, pos, err := r.segmentReaders[r.currentReader].Next()
+		if err == nil {
+			return data, pos, nil
+		}
+		if errors.Is(err, io.EOF) {
+			r.segmentReaders[r.currentReader].Close()
+			r.currentReader++
+			continue
+		}
+		return nil, nil, err
+	}
+	return nil, nil, io.EOF
+}
+
+func (sm *SegmentManager) NewReaderWithStart(startOffset RecordPosition) (*Reader, error) {
+	sm.mu.RLock()
+	segments := make([]*Segment, 0, len(sm.segments))
+	for _, seg := range sm.segments {
+		segments = append(segments, seg)
+	}
+	sm.mu.RUnlock()
+
+	sort.Slice(segments, func(i, j int) bool {
+		return segments[i].ID() < segments[j].ID()
+	})
+
+	var (
+		readers      []*SegmentReader
+		segmentFound bool
+	)
+
+	for _, seg := range segments {
+		if seg.ID() < startOffset.SegmentID {
+			continue
+		}
+		reader := seg.NewReader()
+		if reader == nil {
+			continue
+		}
+
+		if seg.ID() == startOffset.SegmentID {
+			segmentFound = true
+			size := seg.GetSegmentSize()
+			if startOffset.Offset > size {
+				return nil, ErrOffsetOutOfBounds
+			}
+
+			reader.readOffset = startOffset.Offset
+			if reader.readOffset <= segmentHeaderSize {
+				reader.readOffset = segmentHeaderSize
+			}
+		}
+
+		readers = append(readers, reader)
+	}
+
+	if !segmentFound {
+		return nil, ErrSegmentNotFound
+	}
+
+	return &Reader{
+		segmentReaders: readers,
+		currentReader:  0,
+	}, nil
+}
