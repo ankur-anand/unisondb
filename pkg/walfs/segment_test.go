@@ -916,6 +916,48 @@ func TestSegmentReader_PreventAccessAfterClose(t *testing.T) {
 	assert.ErrorIs(t, err, ErrSegmentReaderClosed)
 }
 
+func TestSegmentReader_LastRecordPosition(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	assert.NoError(t, err)
+	defer seg.Close()
+
+	records := [][]byte{
+		[]byte("entry1"),
+		[]byte("entry2-longer"),
+		[]byte("entry3-even-longer-than-before"),
+	}
+
+	var expectedOffsets []int64
+	for _, rec := range records {
+		pos, err := seg.Write(rec)
+		assert.NoError(t, err)
+		expectedOffsets = append(expectedOffsets, pos.Offset)
+	}
+
+	reader := seg.NewReader()
+	defer reader.Close()
+
+	for i, expected := range expectedOffsets {
+		data, pos, err := reader.Next()
+		assert.NoError(t, err)
+		assert.Equal(t, records[i], data)
+
+		last := reader.LastRecordPosition()
+		assert.NotNil(t, last)
+		assert.Equal(t, seg.ID(), last.SegmentID)
+		assert.Equal(t, expected, last.Offset)
+
+		assert.True(t, last.Offset < pos.Offset)
+	}
+
+	data, pos, err := reader.Next()
+	assert.Nil(t, data)
+	assert.Nil(t, pos)
+	assert.ErrorIs(t, err, io.EOF)
+}
+
 func calculateAlignedFrameSize(dataLen int) int64 {
 	raw := int64(recordHeaderSize + dataLen + recordTrailerMarkerSize)
 	return alignUp(raw)

@@ -13,7 +13,6 @@ import (
 
 	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 func TestSegmentManager_RecoverSegments_Sealing(t *testing.T) {
@@ -430,7 +429,7 @@ func TestWALog_ConcurrentWriteRead_WithSegmentRotation(t *testing.T) {
 		walfs.WithMaxSegmentSize(1<<18),
 		walfs.WithBytesPerSync(16*1024),
 	)
-	require.NoError(t, err)
+	assert.NoError(t, err)
 
 	const totalRecords = 50000
 	dataTemplate := "entry-%05d"
@@ -442,7 +441,7 @@ func TestWALog_ConcurrentWriteRead_WithSegmentRotation(t *testing.T) {
 		for i := 0; i < totalRecords; i++ {
 			payload := []byte(fmt.Sprintf(dataTemplate, i))
 			_, err := manager.Write(payload)
-			require.NoError(t, err)
+			assert.NoError(t, err)
 
 			writtenMu.Lock()
 			written = append(written, string(payload))
@@ -468,7 +467,7 @@ retryRead:
 		} else {
 			var err error
 			reader, err = manager.NewReaderWithStart(*lastPosition)
-			require.NoError(t, err)
+			assert.NoError(t, err)
 		}
 
 		for {
@@ -478,7 +477,7 @@ retryRead:
 				time.Sleep(10 * time.Millisecond)
 				continue retryRead
 			}
-			require.NoError(t, err)
+			assert.NoError(t, err)
 			readEntries = append(readEntries, string(data))
 			lastPosition = next
 			if len(readEntries) >= totalRecords {
@@ -490,7 +489,7 @@ retryRead:
 	writtenMu.Lock()
 	defer writtenMu.Unlock()
 
-	require.Equal(t, written, readEntries, "read data should match written in order")
+	assert.Equal(t, written, readEntries, "read data should match written in order")
 
 	singleRecordSize := recordOverhead(int64(len([]byte(fmt.Sprintf(dataTemplate, totalRecords)))))
 	totalSize := singleRecordSize * totalRecords
@@ -498,6 +497,59 @@ retryRead:
 
 	assert.Equal(t, rotationExpected, manager.SegmentRotatedCount())
 	assert.GreaterOrEqual(t, retries, int(rotationExpected))
+}
+
+func TestManagerReader_LastRecordPosition(t *testing.T) {
+	dir := t.TempDir()
+
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(512))
+	assert.NoError(t, err)
+	defer manager.Close()
+
+	entriesSeg1 := [][]byte{
+		[]byte("s1-record1"),
+		[]byte("s1-record2"),
+	}
+
+	entriesSeg2 := [][]byte{
+		[]byte("s2-record1"),
+		[]byte("s2-record2"),
+	}
+
+	for _, entry := range entriesSeg1 {
+		_, err := manager.Write(entry)
+		assert.NoError(t, err)
+	}
+
+	assert.NoError(t, manager.RotateSegment())
+
+	for _, entry := range entriesSeg2 {
+		_, err := manager.Write(entry)
+		assert.NoError(t, err)
+	}
+
+	reader := manager.NewReader()
+
+	var allEntries [][]byte
+	allEntries = append(allEntries, entriesSeg1...)
+	allEntries = append(allEntries, entriesSeg2...)
+
+	for i := 0; i < len(allEntries); i++ {
+		data, pos, err := reader.Next()
+		assert.NoError(t, err)
+		assert.Equal(t, allEntries[i], data)
+
+		last := reader.LastRecordPosition()
+		assert.NotNil(t, last)
+
+		assert.Equal(t, pos.SegmentID, last.SegmentID)
+		assert.LessOrEqual(t, last.Offset, pos.Offset)
+	}
+
+	data, pos, err := reader.Next()
+	assert.Nil(t, data)
+	assert.Nil(t, pos)
+	assert.ErrorIs(t, err, io.EOF)
 }
 
 func BenchmarkSegmentManager_Write_NoSync(b *testing.B) {

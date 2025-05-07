@@ -629,9 +629,10 @@ func (seg *Segment) ID() SegmentID {
 }
 
 type SegmentReader struct {
-	segment    *Segment
-	readOffset int64
-	closed     atomic.Bool
+	segment          *Segment
+	readOffset       int64
+	lastRecordOffset int64
+	closed           atomic.Bool
 }
 
 func (r *SegmentReader) Close() {
@@ -671,8 +672,16 @@ func (r *SegmentReader) Next() ([]byte, *RecordPosition, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	r.lastRecordOffset = r.readOffset
 	r.readOffset = next.Offset
 	return data, next, nil
+}
+
+func (r *SegmentReader) LastRecordPosition() *RecordPosition {
+	return &RecordPosition{
+		SegmentID: r.segment.ID(),
+		Offset:    r.lastRecordOffset,
+	}
 }
 
 func crc32Checksum(header []byte, data []byte) uint32 {

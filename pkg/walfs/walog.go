@@ -318,6 +318,7 @@ func (sm *WALog) rotateSegment() error {
 type Reader struct {
 	segmentReaders []*SegmentReader
 	currentReader  int
+	lastPos        *RecordPosition
 }
 
 func (sm *WALog) NewReader() *Reader {
@@ -351,6 +352,7 @@ func (r *Reader) Next() ([]byte, *RecordPosition, error) {
 	for r.currentReader < len(r.segmentReaders) {
 		data, pos, err := r.segmentReaders[r.currentReader].Next()
 		if err == nil {
+			r.lastPos = r.segmentReaders[r.currentReader].LastRecordPosition()
 			return data, pos, nil
 		}
 		if errors.Is(err, io.EOF) {
@@ -361,6 +363,10 @@ func (r *Reader) Next() ([]byte, *RecordPosition, error) {
 		return nil, nil, err
 	}
 	return nil, nil, io.EOF
+}
+
+func (r *Reader) LastRecordPosition() *RecordPosition {
+	return r.lastPos
 }
 
 func (sm *WALog) NewReaderWithStart(startOffset RecordPosition) (*Reader, error) {
