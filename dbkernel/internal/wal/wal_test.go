@@ -244,12 +244,7 @@ func TestWalIO_Suite(t *testing.T) {
 
 		encodedKV := logcodec.SerializeKVEntry([]byte(key), []byte(data))
 
-		prevOffset := &wal.Offset{
-			SegmentId:   32,
-			BlockNumber: 10,
-			ChunkOffset: 1239,
-			ChunkSize:   98,
-		}
+		prevOffset := &wal.Offset{}
 
 		record := &logcodec.LogRecord{
 			LSN:             123456789,
