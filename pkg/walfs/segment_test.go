@@ -958,6 +958,23 @@ func TestSegmentReader_LastRecordPosition(t *testing.T) {
 	assert.ErrorIs(t, err, io.EOF)
 }
 
+func TestSegment_Reader_MarkForDeletion(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	assert.NoError(t, err)
+	defer seg.Close()
+	seg.MarkForDeletion()
+	reader := seg.NewReader()
+	assert.Nil(t, reader)
+
+	seg2, err := OpenSegmentFile(dir, ".wal", 2)
+	assert.NoError(t, err)
+	assert.NoError(t, seg2.Close())
+	reader = seg2.NewReader()
+	assert.Nil(t, reader)
+}
+
 func calculateAlignedFrameSize(dataLen int) int64 {
 	raw := int64(recordHeaderSize + dataLen + recordTrailerMarkerSize)
 	return alignUp(raw)

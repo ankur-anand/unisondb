@@ -642,8 +642,8 @@ func (r *SegmentReader) Close() {
 }
 
 func (seg *Segment) NewReader() *SegmentReader {
-	// prevent new readers to segments marked for deletion
-	if seg.markedForDeletion.Load() {
+	// prevent new readers to segments marked for deletion or closed
+	if seg.markedForDeletion.Load() || seg.closed.Load() {
 		return nil
 	}
 
