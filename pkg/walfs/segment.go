@@ -617,10 +617,10 @@ func (seg *Segment) MarkForDeletion() {
 
 func (seg *Segment) cleanup() {
 	if err := seg.Close(); err != nil {
-		slog.Error("[unisondb.walfs] segment close failed", slog.String("path", seg.path), slog.Any("err", err))
+		slog.Error("segment close failed", slog.String("path", seg.path), slog.Any("err", err))
 	}
 	if err := os.Remove(seg.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Error("[unisondb.walfs] segment file delete failed", slog.String("path", seg.path), slog.Any("err", err))
+		slog.Error("segment file delete failed", slog.String("path", seg.path), slog.Any("err", err))
 	}
 }
 
