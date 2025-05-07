@@ -4,13 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSegmentManager_RecoverSegments_Sealing(t *testing.T) {
@@ -419,6 +422,84 @@ func TestSegmentManager_ConcurrentReadWrite(t *testing.T) {
 	wg.Wait()
 }
 
+func TestWALog_ConcurrentWriteRead_WithSegmentRotation(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	manager, err := walfs.NewWALog(
+		tmpDir, ".wal",
+		walfs.WithMaxSegmentSize(1<<18),
+		walfs.WithBytesPerSync(16*1024),
+	)
+	require.NoError(t, err)
+
+	const totalRecords = 50000
+	dataTemplate := "entry-%05d"
+
+	var written []string
+	var writtenMu sync.Mutex
+
+	go func() {
+		for i := 0; i < totalRecords; i++ {
+			payload := []byte(fmt.Sprintf(dataTemplate, i))
+			_, err := manager.Write(payload)
+			require.NoError(t, err)
+
+			writtenMu.Lock()
+			written = append(written, string(payload))
+			writtenMu.Unlock()
+
+			if i%200 == 0 {
+				time.Sleep(time.Duration(rand.Intn(5)) * time.Millisecond)
+			}
+		}
+	}()
+
+	var (
+		readEntries  []string
+		lastPosition *walfs.RecordPosition
+		retries      int
+	)
+
+retryRead:
+	for {
+		var reader *walfs.Reader
+		if lastPosition == nil {
+			reader = manager.NewReader()
+		} else {
+			var err error
+			reader, err = manager.NewReaderWithStart(*lastPosition)
+			require.NoError(t, err)
+		}
+
+		for {
+			data, next, err := reader.Next()
+			if errors.Is(err, io.EOF) {
+				retries++
+				time.Sleep(10 * time.Millisecond)
+				continue retryRead
+			}
+			require.NoError(t, err)
+			readEntries = append(readEntries, string(data))
+			lastPosition = next
+			if len(readEntries) >= totalRecords {
+				break retryRead
+			}
+		}
+	}
+
+	writtenMu.Lock()
+	defer writtenMu.Unlock()
+
+	require.Equal(t, written, readEntries, "read data should match written in order")
+
+	singleRecordSize := recordOverhead(int64(len([]byte(fmt.Sprintf(dataTemplate, totalRecords)))))
+	totalSize := singleRecordSize * totalRecords
+	rotationExpected := totalSize / (1 << 18)
+
+	assert.Equal(t, rotationExpected, manager.SegmentRotatedCount())
+	assert.GreaterOrEqual(t, retries, int(rotationExpected))
+}
+
 func BenchmarkSegmentManager_Write_NoSync(b *testing.B) {
 	tmpDir := b.TempDir()
 	manager, err := walfs.NewWALog(tmpDir, ".wal",
@@ -495,4 +576,12 @@ func BenchmarkSegmentManager_Read(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func recordOverhead(dataLen int64) int64 {
+	return alignUp(dataLen) + 8 + 8
+}
+
+func alignUp(n int64) int64 {
+	return (n + 8) & ^7
 }

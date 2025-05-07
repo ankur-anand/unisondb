@@ -60,6 +60,7 @@ type WALog struct {
 	unSynced            int64
 	forceSyncEveryWrite MsyncOption
 	bytesPerSyncCalled  atomic.Int64
+	segmentRotated      atomic.Int64
 
 	mu             sync.RWMutex
 	currentSegment *Segment
@@ -234,6 +235,10 @@ func (sm *WALog) BytesPerSyncCallCount() int64 {
 	return sm.bytesPerSyncCalled.Load()
 }
 
+func (sm *WALog) SegmentRotatedCount() int64 {
+	return sm.segmentRotated.Load()
+}
+
 func (sm *WALog) Read(pos RecordPosition) ([]byte, error) {
 	sm.mu.RLock()
 	seg, ok := sm.segments[pos.SegmentID]
@@ -306,7 +311,7 @@ func (sm *WALog) rotateSegment() error {
 	sm.segments[newID] = newSegment
 	sm.currentSegment = newSegment
 	sm.bytesPerSyncCalled.Store(0)
-
+	sm.segmentRotated.Add(1)
 	return nil
 }
 
