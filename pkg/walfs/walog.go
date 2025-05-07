@@ -10,12 +10,15 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 var (
 	ErrSegmentNotFound    = errors.New("segment not found")
 	ErrOffsetOutOfBounds  = errors.New("start offset is beyond segment size")
 	ErrOffsetBeforeHeader = errors.New("start offset is within reserved segment header")
+	ErrFsync              = errors.New("fsync error")
+	ErrRecordTooLarge     = errors.New("record size exceeds maximum segment capacity")
 )
 
 type WALogOptions func(*WALog)
@@ -56,6 +59,7 @@ type WALog struct {
 	bytesPerSync        int64
 	unSynced            int64
 	forceSyncEveryWrite MsyncOption
+	bytesPerSyncCalled  atomic.Int64
 
 	mu             sync.RWMutex
 	currentSegment *Segment
@@ -153,13 +157,47 @@ func (sm *WALog) recoverSegments() error {
 	return nil
 }
 
+func (sm *WALog) Sync() error {
+	sm.mu.Lock()
+	activeSegment := sm.currentSegment
+	sm.mu.Unlock()
+	if activeSegment == nil {
+		return errors.New("no active segment")
+	}
+	if activeSegment.closed.Load() {
+		return nil
+	}
+	if err := activeSegment.Sync(); err != nil {
+		return fmt.Errorf("%w: %v", ErrFsync, err)
+	}
+	return nil
+}
+
+func (sm *WALog) Close() error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	var cErr error
+	for _, seg := range sm.segments {
+		err := seg.Close()
+		if err != nil {
+			cErr = errors.Join(cErr, err)
+		}
+	}
+	return cErr
+}
+
 // Write appends the given data as a new record to the active segment.
 func (sm *WALog) Write(data []byte) (RecordPosition, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if sm.currentSegment == nil {
-		return RecordPosition{}, fmt.Errorf("no active segment")
+		return RecordPosition{}, errors.New("no active segment")
+	}
+
+	estimatedSize := recordOverhead(int64(len(data)))
+	if estimatedSize > sm.maxSegmentSize {
+		return RecordPosition{}, ErrRecordTooLarge
 	}
 
 	// if current segment needs rotation rotate it.
@@ -174,13 +212,14 @@ func (sm *WALog) Write(data []byte) (RecordPosition, error) {
 		return RecordPosition{}, fmt.Errorf("write failed: %w", err)
 	}
 
-	sm.unSynced += recordOverhead(int64(len(data)))
+	sm.unSynced += estimatedSize
 
 	if sm.bytesPerSync > 0 && sm.unSynced >= sm.bytesPerSync {
 		if err := sm.currentSegment.MSync(); err != nil {
 			return RecordPosition{}, err
 		}
 		sm.unSynced = 0
+		sm.bytesPerSyncCalled.Add(1)
 	}
 
 	return *pos, nil
@@ -188,6 +227,11 @@ func (sm *WALog) Write(data []byte) (RecordPosition, error) {
 
 func recordOverhead(dataLen int64) int64 {
 	return alignUp(dataLen) + recordHeaderSize + recordTrailerMarkerSize
+}
+
+// BytesPerSyncCallCount how many times this was called on current active segment.
+func (sm *WALog) BytesPerSyncCallCount() int64 {
+	return sm.bytesPerSyncCalled.Load()
 }
 
 func (sm *WALog) Read(pos RecordPosition) ([]byte, error) {
@@ -261,6 +305,7 @@ func (sm *WALog) rotateSegment() error {
 
 	sm.segments[newID] = newSegment
 	sm.currentSegment = newSegment
+	sm.bytesPerSyncCalled.Store(0)
 
 	return nil
 }
@@ -314,6 +359,11 @@ func (r *Reader) Next() ([]byte, *RecordPosition, error) {
 }
 
 func (sm *WALog) NewReaderWithStart(startOffset RecordPosition) (*Reader, error) {
+	if startOffset.SegmentID == 0 {
+		// interpreting SegmentID == 0 as: read from the beginning
+		return sm.NewReader(), nil
+	}
+
 	sm.mu.RLock()
 	segments := make([]*Segment, 0, len(sm.segments))
 	for _, seg := range sm.segments {
