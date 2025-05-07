@@ -18,30 +18,36 @@ var (
 	ErrOffsetBeforeHeader = errors.New("start offset is within reserved segment header")
 )
 
-type SegmentManagerOption func(*SegmentManager)
+type WALogOptions func(*WALog)
 
-func WithMaxSegmentSize(size int64) SegmentManagerOption {
-	return func(sm *SegmentManager) {
+// WithMaxSegmentSize options sets the MaxSize of the Segment file.
+func WithMaxSegmentSize(size int64) WALogOptions {
+	return func(sm *WALog) {
 		sm.maxSegmentSize = size
 	}
 }
 
-func WithBytesPerSync(bytes int64) SegmentManagerOption {
-	return func(sm *SegmentManager) {
+// WithBytesPerSync sets the threshold in bytes after which a msync is triggered.
+// Useful for batching writes.
+// 0 disable this feature.
+func WithBytesPerSync(bytes int64) WALogOptions {
+	return func(sm *WALog) {
 		sm.bytesPerSync = bytes
 	}
 }
 
 // WithMSyncEveryWrite enables msync() after every write operation.
-func WithMSyncEveryWrite(enabled bool) SegmentManagerOption {
-	return func(sm *SegmentManager) {
+func WithMSyncEveryWrite(enabled bool) WALogOptions {
+	return func(sm *WALog) {
 		if enabled {
 			sm.forceSyncEveryWrite = MsyncOnWrite
 		}
 	}
 }
 
-type SegmentManager struct {
+// WALog manages the lifecycle of each individual segments, including creation, rotation,
+// recovery, and read/write operations.
+type WALog struct {
 	dir            string
 	ext            string
 	maxSegmentSize int64
@@ -56,12 +62,13 @@ type SegmentManager struct {
 	segments       map[SegmentID]*Segment
 }
 
-func NewSegmentManager(dir string, ext string, opts ...SegmentManagerOption) (*SegmentManager, error) {
+// NewWALog returns an initialized WALog that manages the segments in the provided dir with the given ext.
+func NewWALog(dir string, ext string, opts ...WALogOptions) (*WALog, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create WAL directory: %w", err)
 	}
 
-	manager := &SegmentManager{
+	manager := &WALog{
 		dir:                 dir,
 		ext:                 ext,
 		maxSegmentSize:      segmentSize,
@@ -82,12 +89,12 @@ func NewSegmentManager(dir string, ext string, opts ...SegmentManagerOption) (*S
 	return manager, nil
 }
 
-// openSegment opens segments
-func (sm *SegmentManager) openSegment(id uint32) (*Segment, error) {
+// openSegment opens segment with the provided ID.
+func (sm *WALog) openSegment(id uint32) (*Segment, error) {
 	return OpenSegmentFile(sm.dir, sm.ext, id, WithSegmentSize(sm.maxSegmentSize), WithSyncOption(sm.forceSyncEveryWrite))
 }
 
-func (sm *SegmentManager) recoverSegments() error {
+func (sm *WALog) recoverSegments() error {
 	files, err := os.ReadDir(sm.dir)
 	if err != nil {
 		return fmt.Errorf("failed to read segment directory: %w", err)
@@ -146,15 +153,16 @@ func (sm *SegmentManager) recoverSegments() error {
 	return nil
 }
 
-func (sm *SegmentManager) Write(data []byte) (RecordPosition, error) {
+// Write appends the given data as a new record to the active segment.
+func (sm *WALog) Write(data []byte) (RecordPosition, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Check if current segment needs rotation
 	if sm.currentSegment == nil {
 		return RecordPosition{}, fmt.Errorf("no active segment")
 	}
 
+	// if current segment needs rotation rotate it.
 	if sm.currentSegment.WillExceed(len(data)) {
 		if err := sm.rotateSegment(); err != nil {
 			return RecordPosition{}, fmt.Errorf("failed to rotate segment: %w", err)
@@ -182,7 +190,7 @@ func recordOverhead(dataLen int64) int64 {
 	return alignUp(dataLen) + recordHeaderSize + recordTrailerMarkerSize
 }
 
-func (sm *SegmentManager) Read(pos RecordPosition) ([]byte, error) {
+func (sm *WALog) Read(pos RecordPosition) ([]byte, error) {
 	sm.mu.RLock()
 	seg, ok := sm.segments[pos.SegmentID]
 	sm.mu.RUnlock()
@@ -192,11 +200,9 @@ func (sm *SegmentManager) Read(pos RecordPosition) ([]byte, error) {
 	}
 
 	if pos.Offset < segmentHeaderSize {
-		fmt.Println("this is called")
 		return nil, ErrOffsetBeforeHeader
 	}
 
-	fmt.Println(seg.GetSegmentSize(), "Set size")
 	if pos.Offset > seg.GetSegmentSize() {
 		return nil, ErrOffsetOutOfBounds
 	}
@@ -209,11 +215,10 @@ func (sm *SegmentManager) Read(pos RecordPosition) ([]byte, error) {
 	return data, nil
 }
 
-func (sm *SegmentManager) Segments() map[SegmentID]*Segment {
+func (sm *WALog) Segments() map[SegmentID]*Segment {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	// Return a shallow copy to avoid external modification
 	segmentsCopy := make(map[SegmentID]*Segment, len(sm.segments))
 	for id, seg := range sm.segments {
 		segmentsCopy[id] = seg
@@ -221,19 +226,19 @@ func (sm *SegmentManager) Segments() map[SegmentID]*Segment {
 	return segmentsCopy
 }
 
-func (sm *SegmentManager) Current() *Segment {
+func (sm *WALog) Current() *Segment {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 	return sm.currentSegment
 }
 
-func (sm *SegmentManager) RotateSegment() error {
+func (sm *WALog) RotateSegment() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	return sm.rotateSegment()
 }
 
-func (sm *SegmentManager) rotateSegment() error {
+func (sm *WALog) rotateSegment() error {
 	if sm.currentSegment != nil && !IsSealed(sm.currentSegment.GetFlags()) {
 		if err := sm.currentSegment.SealSegment(); err != nil {
 			return fmt.Errorf("failed to seal current segment: %w", err)
@@ -265,7 +270,7 @@ type Reader struct {
 	currentReader  int
 }
 
-func (sm *SegmentManager) NewReader() *Reader {
+func (sm *WALog) NewReader() *Reader {
 	sm.mu.RLock()
 	segments := maps.Clone(sm.segments)
 	sm.mu.RUnlock()
@@ -308,7 +313,7 @@ func (r *Reader) Next() ([]byte, *RecordPosition, error) {
 	return nil, nil, io.EOF
 }
 
-func (sm *SegmentManager) NewReaderWithStart(startOffset RecordPosition) (*Reader, error) {
+func (sm *WALog) NewReaderWithStart(startOffset RecordPosition) (*Reader, error) {
 	sm.mu.RLock()
 	segments := make([]*Segment, 0, len(sm.segments))
 	for _, seg := range sm.segments {
