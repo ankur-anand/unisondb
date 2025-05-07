@@ -33,9 +33,11 @@ func WithBytesPerSync(bytes int64) SegmentManagerOption {
 }
 
 // WithMSyncEveryWrite enables msync() after every write operation.
-func WithMSyncEveryWrite(opt MsyncOption) SegmentManagerOption {
+func WithMSyncEveryWrite(enabled bool) SegmentManagerOption {
 	return func(sm *SegmentManager) {
-		sm.forceSyncEveryWrite = opt
+		if enabled {
+			sm.forceSyncEveryWrite = MsyncOnWrite
+		}
 	}
 }
 
@@ -80,6 +82,11 @@ func NewSegmentManager(dir string, ext string, opts ...SegmentManagerOption) (*S
 	return manager, nil
 }
 
+// openSegment opens segments
+func (sm *SegmentManager) openSegment(id uint32) (*Segment, error) {
+	return OpenSegmentFile(sm.dir, sm.ext, id, WithSegmentSize(sm.maxSegmentSize), WithSyncOption(sm.forceSyncEveryWrite))
+}
+
 func (sm *SegmentManager) recoverSegments() error {
 	files, err := os.ReadDir(sm.dir)
 	if err != nil {
@@ -111,7 +118,7 @@ func (sm *SegmentManager) recoverSegments() error {
 	})
 
 	if len(segmentIDs) == 0 {
-		seg, err := OpenSegmentFile(sm.dir, sm.ext, 1, WithSegmentSize(sm.maxSegmentSize), WithSyncOption(sm.forceSyncEveryWrite))
+		seg, err := sm.openSegment(1)
 		if err != nil {
 			return fmt.Errorf("failed to create initial segment: %w", err)
 		}
@@ -122,7 +129,7 @@ func (sm *SegmentManager) recoverSegments() error {
 	}
 
 	for i, id := range segmentIDs {
-		seg, err := OpenSegmentFile(sm.dir, sm.ext, id, WithSegmentSize(sm.maxSegmentSize), WithSyncOption(sm.forceSyncEveryWrite))
+		seg, err := sm.openSegment(id)
 		if err != nil {
 			return fmt.Errorf("failed to open segment %d: %w", id, err)
 		}
@@ -242,7 +249,7 @@ func (sm *SegmentManager) rotateSegment() error {
 		newID = sm.currentSegment.ID() + 1
 	}
 
-	newSegment, err := OpenSegmentFile(sm.dir, sm.ext, newID, WithSegmentSize(sm.maxSegmentSize), WithSyncOption(sm.forceSyncEveryWrite))
+	newSegment, err := sm.openSegment(newID)
 	if err != nil {
 		return fmt.Errorf("failed to create new segment: %w", err)
 	}

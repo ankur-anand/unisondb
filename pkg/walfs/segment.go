@@ -31,6 +31,8 @@ const (
 	segmentHeaderVersion = 1
 )
 
+// SegmentHeader encodes all the necessary information about the segment file at the top of the file.
+// Its Size is 64 byte once encoded.
 type SegmentHeader struct {
 	// at 0
 	Magic uint32
@@ -189,6 +191,8 @@ func WithSegmentSize(size int64) func(*Segment) {
 	}
 }
 
+// OpenSegmentFile opens an existing segment file or create a new one if not present.
+// If SegmentFile is sealed it doesn't scan its content while opening.
 func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment)) (*Segment, error) {
 	path := SegmentFileName(dirPath, extName, id)
 	isNew, err := isNewSegment(path)
@@ -242,6 +246,7 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 	return s, nil
 }
 
+// IsSealed returns if teh provided flag has sealed bit set.
 func IsSealed(flags uint32) bool {
 	return flags&FlagSealed != 0
 }
@@ -250,6 +255,7 @@ func IsActive(flags uint32) bool {
 	return flags&FlagActive != 0
 }
 
+// SealSegment seals the given segment.
 func (seg *Segment) SealSegment() error {
 	seg.writeMu.Lock()
 	defer seg.writeMu.Unlock()
@@ -264,8 +270,10 @@ func (seg *Segment) SealSegment() error {
 	binary.LittleEndian.PutUint64(mmapData[16:24], now)
 	binary.LittleEndian.PutUint64(mmapData[24:32], uint64(seg.writeOffset.Load()))
 	flags := binary.LittleEndian.Uint32(mmapData[40:44])
-	flags &^= FlagActive // clear 'active' bit
-	flags |= FlagSealed  // set 'sealed' bit
+	// clear 'active' bit
+	flags &^= FlagActive
+	// set 'sealed' bit
+	flags |= FlagSealed
 	binary.LittleEndian.PutUint32(mmapData[40:44], flags)
 
 	crc := crc32.ChecksumIEEE(mmapData[0:56])
@@ -362,6 +370,7 @@ func alignUp(n int64) int64 {
 	return (n + alignMask) & ^alignMask
 }
 
+// Write writes the provided slice of bytes to the open mmap file.
 func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
 	if seg.closed.Load() {
 		return nil, ErrClosed
@@ -480,6 +489,7 @@ func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
 	return data, next, nil
 }
 
+// Sync Msync the Memory mapped file and the FSync the underlying file.
 func (seg *Segment) Sync() error {
 	if seg.closed.Load() {
 		return ErrClosed
