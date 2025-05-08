@@ -972,6 +972,73 @@ func TestSegment_Reader_MarkForDeletion(t *testing.T) {
 	assert.Nil(t, reader)
 }
 
+func TestSegmentReader_CloseOnlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	assert.NoError(t, err)
+
+	initialRef := seg.refCount.Load()
+	reader := seg.NewReader()
+	assert.NotNil(t, reader)
+
+	id := reader.id
+	assert.Equal(t, initialRef+1, seg.refCount.Load(), "refCount should increase by 1 after NewReader")
+
+	reader.Close()
+
+	afterClose := seg.refCount.Load()
+	assert.Equal(t, initialRef, afterClose, "refCount should decrement after Close()")
+
+	runtime.GC()
+	time.Sleep(50 * time.Millisecond)
+
+	finalRef := seg.refCount.Load()
+	assert.Equal(t, afterClose, finalRef, "refCount should not decrement again after GC")
+
+	_, ok := seg.activeReaders.Load(id)
+	assert.False(t, ok, "reader ID should be removed from activeReaders after Close()")
+}
+
+func TestSegmentReader_GCDecrementsRefOnlyOnce(t *testing.T) {
+	dir := t.TempDir()
+	seg, err := OpenSegmentFile(dir, ".wal", 2)
+	assert.NoError(t, err)
+
+	initialRef := seg.refCount.Load()
+
+	func() {
+		reader := seg.NewReader()
+		assert.NotNil(t, reader)
+
+		assert.Equal(t, initialRef+1, seg.refCount.Load())
+
+		reader = nil
+	}()
+
+	runtime.GC()
+	time.Sleep(100 * time.Millisecond)
+
+	finalRef := seg.refCount.Load()
+
+	assert.Equal(t, initialRef, finalRef, "refCount should return to initial after GC cleanup")
+
+	assert.False(t, seg.HasActiveReaders(), "activeReaders should be empty after GC cleanup")
+}
+
+func TestSegmentReader_ActiveReader(t *testing.T) {
+	dir := t.TempDir()
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	assert.NoError(t, err)
+	defer seg.Close()
+	reader := seg.NewReader()
+	assert.NotNil(t, reader)
+	hasReader := seg.HasActiveReaders()
+	assert.True(t, hasReader)
+	reader.Close()
+	hasReader = seg.HasActiveReaders()
+	assert.False(t, hasReader)
+}
+
 func calculateAlignedFrameSize(dataLen int) int64 {
 	raw := int64(recordHeaderSize + dataLen + recordTrailerMarkerSize)
 	return alignUp(raw)

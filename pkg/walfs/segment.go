@@ -178,6 +178,8 @@ type Segment struct {
 	refCount          atomic.Int64
 	state             atomic.Int64
 	markedForDeletion atomic.Bool
+	readerIDCounter   atomic.Uint64
+	activeReaders     sync.Map
 
 	writeMu    sync.RWMutex
 	syncOption MsyncOption
@@ -207,11 +209,12 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 	}
 
 	s := &Segment{
-		path:       path,
-		id:         id,
-		header:     make([]byte, recordHeaderSize),
-		mmapSize:   segmentSize,
-		syncOption: MsyncNone,
+		path:          path,
+		id:            id,
+		header:        make([]byte, recordHeaderSize),
+		mmapSize:      segmentSize,
+		syncOption:    MsyncNone,
+		activeReaders: sync.Map{},
 	}
 	s.state.Store(StateOpen)
 
@@ -557,6 +560,15 @@ func (seg *Segment) Close() error {
 	return nil
 }
 
+func (seg *Segment) HasActiveReaders() bool {
+	hasReaders := false
+	seg.activeReaders.Range(func(_, _ any) bool {
+		hasReaders = true
+		return false
+	})
+	return hasReaders
+}
+
 func (seg *Segment) WriteOffset() int64 {
 	return seg.writeOffset.Load()
 }
@@ -599,17 +611,12 @@ func (seg *Segment) incrRef() {
 	seg.refCount.Add(1)
 }
 
-func (seg *Segment) decrRef() {
-	for {
-		old := seg.refCount.Load()
-		if old == 0 {
-			return
-		}
-		if seg.refCount.CompareAndSwap(old, old-1) {
-			if old-1 == 0 && seg.markedForDeletion.Load() {
-				seg.cleanup()
-			}
-			return
+func (seg *Segment) decrRef(id uint64) {
+	_, ok := seg.activeReaders.LoadAndDelete(id)
+	if ok {
+		count := seg.refCount.Add(-1)
+		if count == 0 && seg.markedForDeletion.Load() {
+			seg.cleanup()
 		}
 	}
 }
@@ -636,6 +643,7 @@ func (seg *Segment) ID() SegmentID {
 }
 
 type SegmentReader struct {
+	id               uint64
 	segment          *Segment
 	readOffset       int64
 	lastRecordOffset int64
@@ -644,7 +652,7 @@ type SegmentReader struct {
 
 func (r *SegmentReader) Close() {
 	if r.closed.CompareAndSwap(false, true) {
-		r.segment.decrRef()
+		r.segment.decrRef(r.id)
 	}
 }
 
@@ -654,15 +662,19 @@ func (seg *Segment) NewReader() *SegmentReader {
 		return nil
 	}
 
+	id := seg.readerIDCounter.Add(1)
+	seg.activeReaders.Store(id, struct{}{})
 	seg.incrRef()
+
 	reader := &SegmentReader{
 		segment:    seg,
 		readOffset: segmentHeaderSize,
+		id:         id,
 	}
 
 	// safety net in case caller doesn't call Close()
 	runtime.AddCleanup(reader, func(seg *Segment) {
-		seg.decrRef()
+		seg.decrRef(id)
 	}, seg)
 
 	return reader
