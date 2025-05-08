@@ -68,6 +68,20 @@ variable "prometheus_version" {
   default     = "2.53.4"
 }
 
+variable "ops_per_namespace" {
+  default = 50
+  type    = number
+}
+
+variable "workers_per_namespace" {
+  default = 10
+  type    = number
+}
+
+variable "local_relayer_count" {
+  type = number
+}
+
 locals {
   group         = "fuzzer.unisondb.${var.region}-${var.env}"
   firewall_name = "firewall-fuzzer-${local.group}"

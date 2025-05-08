@@ -68,15 +68,20 @@ variable "fuzzer_droplet_size" {
   default     = "s-1vcpu-1gb"
 }
 
+variable "local_relayer_count" {
+  type = number
+}
+
 module "fuzzer" {
-  source       = "./modules/vms-fuzzer"
-  do_token     = var.do_token
-  ts_auth_key  = var.ts_auth_key
-  vpc_id       = module.vpc.vpc_id
-  ob_token     = var.ob_token
-  ob_pass      = var.ob_pass
-  ob_user      = var.ob_user
-  droplet_size = var.fuzzer_droplet_size
+  source              = "./modules/vms-fuzzer"
+  do_token            = var.do_token
+  ts_auth_key         = var.ts_auth_key
+  vpc_id              = module.vpc.vpc_id
+  ob_token            = var.ob_token
+  ob_pass             = var.ob_pass
+  ob_user             = var.ob_user
+  droplet_size        = var.fuzzer_droplet_size
+  local_relayer_count = var.local_relayer_count
 }
 
 output "fuzzer" {

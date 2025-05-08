@@ -17,6 +17,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
+const segmentLagEmitThreshold = 3
+
 var (
 	localSegmentLagGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "unisondb",
@@ -31,8 +33,8 @@ var (
 		Namespace: "unisondb",
 		Subsystem: "local_relayer",
 		Name:      "wal_records_replicated_total",
-		Help:      "Cumulative count of WAL records successfully replicated locally, labeled by namespace and replication stream ID.",
-	}, []string{"namespace", "id"})
+		Help:      "Cumulative count of WAL records successfully replicated locally.",
+	}, []string{"namespace"})
 )
 
 // LocalWalRelayer encodes all the parameter needed to start local relayer and used for testing purpose only.
@@ -68,11 +70,16 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 	for {
 		select {
 		case <-ctx.Done():
-			segmentLag := int(engine.CurrentOffset().SegmentID) - int(n.lastOffset.SegmentID)
+			var segmentLag int
+			segment := -1
+			if n.lastOffset != nil {
+				segmentLag = int(engine.CurrentOffset().SegmentID) - int(n.lastOffset.SegmentID)
+				segment = int(n.lastOffset.SegmentID)
+			}
 			slog.Debug("[unisondb.relayer]",
 				slog.String("event_type", "local.relayer.sync.stats"),
 				slog.String("namespace", namespace),
-				slog.Int("segment", int(n.lastOffset.SegmentID)),
+				slog.Int("segment", segment),
 				slog.Int("segment_lag", segmentLag),
 				slog.Int("replicated", n.replicatedCount),
 			)
@@ -82,7 +89,7 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 				continue
 			}
 			for _, record := range records {
-				localWALReplicatedTotal.WithLabelValues(namespace, n.id).Inc()
+				localWALReplicatedTotal.WithLabelValues(namespace).Inc()
 				fbRecord := logrecord.GetRootAsLogRecord(record.Record, 0)
 				receivedLSN := fbRecord.Lsn()
 				if receivedLSN != n.lsn+1 {
@@ -98,18 +105,21 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 			}
 			panic(err)
 		case <-ticker.C:
-			var segmentLag int
 			if n.lastOffset != nil {
-				segmentLag = int(engine.CurrentOffset().SegmentID) - int(n.lastOffset.SegmentID)
+				segmentLag := int(engine.CurrentOffset().SegmentID) - int(n.lastOffset.SegmentID)
+				if segmentLag >= segmentLagEmitThreshold {
+					localSegmentLagGauge.WithLabelValues(namespace, n.id).Set(float64(segmentLag))
+					slog.Info("[unisondb.relayer]",
+						slog.String("event_type", "local.relayer.sync.stats"),
+						slog.String("namespace", namespace),
+						slog.Int("segment", int(n.lastOffset.SegmentID)),
+						slog.Int("segment_lag", segmentLag),
+						slog.Int("replicated", n.replicatedCount),
+					)
+				} else {
+					localSegmentLagGauge.DeleteLabelValues(namespace, n.id)
+				}
 			}
-			slog.Debug("[unisondb.relayer]",
-				slog.String("event_type", "local.relayer.sync.stats"),
-				slog.String("namespace", namespace),
-				slog.Int("segment", int(n.lastOffset.SegmentID)),
-				slog.Int("segment_lag", segmentLag),
-				slog.Int("replicated", n.replicatedCount),
-			)
-			localSegmentLagGauge.WithLabelValues(namespace, n.id).Set(float64(segmentLag))
 		}
 	}
 }
