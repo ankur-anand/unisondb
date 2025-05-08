@@ -95,12 +95,12 @@ func NewWALog(dir string, ext string, opts ...WALogOptions) (*WALog, error) {
 }
 
 // openSegment opens segment with the provided ID.
-func (sm *WALog) openSegment(id uint32) (*Segment, error) {
-	return OpenSegmentFile(sm.dir, sm.ext, id, WithSegmentSize(sm.maxSegmentSize), WithSyncOption(sm.forceSyncEveryWrite))
+func (wl *WALog) openSegment(id uint32) (*Segment, error) {
+	return OpenSegmentFile(wl.dir, wl.ext, id, WithSegmentSize(wl.maxSegmentSize), WithSyncOption(wl.forceSyncEveryWrite))
 }
 
-func (sm *WALog) recoverSegments() error {
-	files, err := os.ReadDir(sm.dir)
+func (wl *WALog) recoverSegments() error {
+	files, err := os.ReadDir(wl.dir)
 	if err != nil {
 		return fmt.Errorf("failed to read segment directory: %w", err)
 	}
@@ -108,11 +108,11 @@ func (sm *WALog) recoverSegments() error {
 	var segmentIDs []SegmentID
 
 	for _, file := range files {
-		if file.IsDir() || !strings.HasSuffix(file.Name(), sm.ext) {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), wl.ext) {
 			continue
 		}
 		// e.g. "000000001.wal" -> 1
-		base := strings.TrimSuffix(file.Name(), sm.ext)
+		base := strings.TrimSuffix(file.Name(), wl.ext)
 		id, err := strconv.ParseUint(base, 10, 32)
 		if err != nil {
 			// skip non-numeric segment files
@@ -130,18 +130,18 @@ func (sm *WALog) recoverSegments() error {
 	})
 
 	if len(segmentIDs) == 0 {
-		seg, err := sm.openSegment(1)
+		seg, err := wl.openSegment(1)
 		if err != nil {
 			return fmt.Errorf("failed to create initial segment: %w", err)
 		}
 
-		sm.segments[1] = seg
-		sm.currentSegment = seg
+		wl.segments[1] = seg
+		wl.currentSegment = seg
 		return nil
 	}
 
 	for i, id := range segmentIDs {
-		seg, err := sm.openSegment(id)
+		seg, err := wl.openSegment(id)
 		if err != nil {
 			return fmt.Errorf("failed to open segment %d: %w", id, err)
 		}
@@ -151,17 +151,17 @@ func (sm *WALog) recoverSegments() error {
 				return err
 			}
 		}
-		sm.segments[id] = seg
-		sm.currentSegment = seg
+		wl.segments[id] = seg
+		wl.currentSegment = seg
 	}
 
 	return nil
 }
 
-func (sm *WALog) Sync() error {
-	sm.mu.Lock()
-	activeSegment := sm.currentSegment
-	sm.mu.Unlock()
+func (wl *WALog) Sync() error {
+	wl.mu.Lock()
+	activeSegment := wl.currentSegment
+	wl.mu.Unlock()
 	if activeSegment == nil {
 		return errors.New("no active segment")
 	}
@@ -174,11 +174,11 @@ func (sm *WALog) Sync() error {
 	return nil
 }
 
-func (sm *WALog) Close() error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+func (wl *WALog) Close() error {
+	wl.mu.Lock()
+	defer wl.mu.Unlock()
 	var cErr error
-	for _, seg := range sm.segments {
+	for _, seg := range wl.segments {
 		err := seg.Close()
 		if err != nil {
 			cErr = errors.Join(cErr, err)
@@ -188,39 +188,39 @@ func (sm *WALog) Close() error {
 }
 
 // Write appends the given data as a new record to the active segment.
-func (sm *WALog) Write(data []byte) (RecordPosition, error) {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
+func (wl *WALog) Write(data []byte) (RecordPosition, error) {
+	wl.mu.Lock()
+	defer wl.mu.Unlock()
 
-	if sm.currentSegment == nil {
+	if wl.currentSegment == nil {
 		return RecordPosition{}, errors.New("no active segment")
 	}
 
 	estimatedSize := recordOverhead(int64(len(data)))
-	if estimatedSize > sm.maxSegmentSize {
+	if estimatedSize > wl.maxSegmentSize {
 		return RecordPosition{}, ErrRecordTooLarge
 	}
 
 	// if current segment needs rotation rotate it.
-	if sm.currentSegment.WillExceed(len(data)) {
-		if err := sm.rotateSegment(); err != nil {
+	if wl.currentSegment.WillExceed(len(data)) {
+		if err := wl.rotateSegment(); err != nil {
 			return RecordPosition{}, fmt.Errorf("failed to rotate segment: %w", err)
 		}
 	}
 
-	pos, err := sm.currentSegment.Write(data)
+	pos, err := wl.currentSegment.Write(data)
 	if err != nil {
 		return RecordPosition{}, fmt.Errorf("write failed: %w", err)
 	}
 
-	sm.unSynced += estimatedSize
+	wl.unSynced += estimatedSize
 
-	if sm.bytesPerSync > 0 && sm.unSynced >= sm.bytesPerSync {
-		if err := sm.currentSegment.MSync(); err != nil {
+	if wl.bytesPerSync > 0 && wl.unSynced >= wl.bytesPerSync {
+		if err := wl.currentSegment.MSync(); err != nil {
 			return RecordPosition{}, err
 		}
-		sm.unSynced = 0
-		sm.bytesPerSyncCalled.Add(1)
+		wl.unSynced = 0
+		wl.bytesPerSyncCalled.Add(1)
 	}
 
 	return *pos, nil
@@ -231,21 +231,21 @@ func recordOverhead(dataLen int64) int64 {
 }
 
 // BytesPerSyncCallCount how many times this was called on current active segment.
-func (sm *WALog) BytesPerSyncCallCount() int64 {
-	return sm.bytesPerSyncCalled.Load()
+func (wl *WALog) BytesPerSyncCallCount() int64 {
+	return wl.bytesPerSyncCalled.Load()
 }
 
-func (sm *WALog) SegmentRotatedCount() int64 {
-	return sm.segmentRotated.Load()
+func (wl *WALog) SegmentRotatedCount() int64 {
+	return wl.segmentRotated.Load()
 }
 
 // Read returns the data from the provided record position if found.
 // IMPORTANT: The returned `[]byte` is a slice of a memory-mapped file, so data must not be retained or modified.
 // If the data needs to be used beyond the lifetime of the segment, the caller MUST copy it.
-func (sm *WALog) Read(pos RecordPosition) ([]byte, error) {
-	sm.mu.RLock()
-	seg, ok := sm.segments[pos.SegmentID]
-	sm.mu.RUnlock()
+func (wl *WALog) Read(pos RecordPosition) ([]byte, error) {
+	wl.mu.RLock()
+	seg, ok := wl.segments[pos.SegmentID]
+	wl.mu.RUnlock()
 
 	if !ok {
 		return nil, ErrSegmentNotFound
@@ -267,55 +267,55 @@ func (sm *WALog) Read(pos RecordPosition) ([]byte, error) {
 	return data, nil
 }
 
-func (sm *WALog) Segments() map[SegmentID]*Segment {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
+func (wl *WALog) Segments() map[SegmentID]*Segment {
+	wl.mu.RLock()
+	defer wl.mu.RUnlock()
 
-	segmentsCopy := make(map[SegmentID]*Segment, len(sm.segments))
-	for id, seg := range sm.segments {
+	segmentsCopy := make(map[SegmentID]*Segment, len(wl.segments))
+	for id, seg := range wl.segments {
 		segmentsCopy[id] = seg
 	}
 	return segmentsCopy
 }
 
-func (sm *WALog) Current() *Segment {
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-	return sm.currentSegment
+func (wl *WALog) Current() *Segment {
+	wl.mu.RLock()
+	defer wl.mu.RUnlock()
+	return wl.currentSegment
 }
 
 // RotateSegment rotates the current segment and create a new active segment.
-func (sm *WALog) RotateSegment() error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-	return sm.rotateSegment()
+func (wl *WALog) RotateSegment() error {
+	wl.mu.Lock()
+	defer wl.mu.Unlock()
+	return wl.rotateSegment()
 }
 
-func (sm *WALog) rotateSegment() error {
-	if sm.currentSegment != nil && !IsSealed(sm.currentSegment.GetFlags()) {
-		if err := sm.currentSegment.SealSegment(); err != nil {
+func (wl *WALog) rotateSegment() error {
+	if wl.currentSegment != nil && !IsSealed(wl.currentSegment.GetFlags()) {
+		if err := wl.currentSegment.SealSegment(); err != nil {
 			return fmt.Errorf("failed to seal current segment: %w", err)
 		}
-		err := sm.currentSegment.Sync()
+		err := wl.currentSegment.Sync()
 		if err != nil {
 			return err
 		}
 	}
 
 	var newID SegmentID = 1
-	if sm.currentSegment != nil {
-		newID = sm.currentSegment.ID() + 1
+	if wl.currentSegment != nil {
+		newID = wl.currentSegment.ID() + 1
 	}
 
-	newSegment, err := sm.openSegment(newID)
+	newSegment, err := wl.openSegment(newID)
 	if err != nil {
 		return fmt.Errorf("failed to create new segment: %w", err)
 	}
 
-	sm.segments[newID] = newSegment
-	sm.currentSegment = newSegment
-	sm.bytesPerSyncCalled.Store(0)
-	sm.segmentRotated.Add(1)
+	wl.segments[newID] = newSegment
+	wl.currentSegment = newSegment
+	wl.bytesPerSyncCalled.Store(0)
+	wl.segmentRotated.Add(1)
 	return nil
 }
 
@@ -330,10 +330,10 @@ type Reader struct {
 
 // NewReader returns a new Reader that sequentially reads all segments in the WALog,
 // starting from the beginning (lowest SegmentID).
-func (sm *WALog) NewReader() *Reader {
-	sm.mu.RLock()
-	segments := maps.Clone(sm.segments)
-	sm.mu.RUnlock()
+func (wl *WALog) NewReader() *Reader {
+	wl.mu.RLock()
+	segments := maps.Clone(wl.segments)
+	wl.mu.RUnlock()
 
 	var ids []SegmentID
 	for id := range segments {
@@ -398,8 +398,8 @@ func (r *Reader) LastRecordPosition() *RecordPosition {
 
 // NewReaderAfter returns a reader that starts after the given RecordPosition.
 // It first creates a reader from that position, then skips one record.
-func (sm *WALog) NewReaderAfter(pos RecordPosition) (*Reader, error) {
-	reader, err := sm.NewReaderWithStart(pos)
+func (wl *WALog) NewReaderAfter(pos RecordPosition) (*Reader, error) {
+	reader, err := wl.NewReaderWithStart(pos)
 	if err != nil {
 		return nil, err
 	}
@@ -411,18 +411,18 @@ func (sm *WALog) NewReaderAfter(pos RecordPosition) (*Reader, error) {
 
 // NewReaderWithStart returns a new Reader that begins reading from the specified position.
 // If SegmentID is 0, the reader will begin from the very start of the WAL.
-func (sm *WALog) NewReaderWithStart(pos RecordPosition) (*Reader, error) {
+func (wl *WALog) NewReaderWithStart(pos RecordPosition) (*Reader, error) {
 	if pos.SegmentID == 0 {
 		// interpreting SegmentID == 0 as: read from the beginning
-		return sm.NewReader(), nil
+		return wl.NewReader(), nil
 	}
 
-	sm.mu.RLock()
-	segments := make([]*Segment, 0, len(sm.segments))
-	for _, seg := range sm.segments {
+	wl.mu.RLock()
+	segments := make([]*Segment, 0, len(wl.segments))
+	for _, seg := range wl.segments {
 		segments = append(segments, seg)
 	}
-	sm.mu.RUnlock()
+	wl.mu.RUnlock()
 
 	sort.Slice(segments, func(i, j int) bool {
 		return segments[i].ID() < segments[j].ID()
