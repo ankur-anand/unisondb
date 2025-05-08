@@ -5,6 +5,7 @@ import (
 	"log"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/ankur-anand/unisondb/pkg/walfs"
@@ -118,12 +119,16 @@ type Reader struct {
 	appendReader *walfs.Reader
 	label        []metrics.Label
 	metrics      *metrics.Metrics
+	closed       atomic.Bool
 }
 
 // Next returns the next chunk data and its position in the WAL.
 // If there is no data, io. EOF will be returned.
 // The position can be used to read the data from the segment file.
 func (r *Reader) Next() ([]byte, *Offset, error) {
+	if r.closed.Load() {
+		return nil, nil, io.EOF
+	}
 	r.metrics.IncrCounterWithLabels(walMetricsReaderReadTotal, 1, r.label)
 	startTime := time.Now()
 	defer func() {
@@ -133,8 +138,17 @@ func (r *Reader) Next() ([]byte, *Offset, error) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		r.metrics.IncrCounterWithLabels(walMetricsReadErrors, 1, r.label)
 	}
+	if errors.Is(err, io.EOF) {
+		r.Close()
+	}
 	r.metrics.IncrCounterWithLabels(walMetricsReadBytes, float32(len(value)), r.label)
 	return value, off, err
+}
+
+func (r *Reader) Close() {
+	if r.closed.CompareAndSwap(false, true) {
+		r.appendReader.Close()
+	}
 }
 
 // NewReader returns a new instance of WIOReader, allowing the caller to

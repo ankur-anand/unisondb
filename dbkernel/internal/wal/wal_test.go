@@ -268,3 +268,51 @@ func TestWalIO_Suite(t *testing.T) {
 		assert.Len(t, records, 0, "should return 0 transaction record")
 	})
 }
+
+func TestReader_CloseMidway(t *testing.T) {
+	dir := t.TempDir()
+	walInstance, err := wal.NewWalIO(dir, "test_namespace", wal.NewDefaultConfig(), metrics.Default())
+	assert.NoError(t, err)
+	defer walInstance.Close()
+
+	for i := 0; i < 5; i++ {
+		_, err := walInstance.Append([]byte(gofakeit.LetterN(10)))
+		assert.NoError(t, err)
+	}
+
+	reader, err := walInstance.NewReader()
+	assert.NoError(t, err)
+	assert.NotNil(t, reader)
+
+	_, pos, err := reader.Next()
+	assert.NoError(t, err)
+	assert.NotNil(t, pos)
+
+	reader.Close()
+	_, _, err = reader.Next()
+	assert.ErrorIs(t, err, io.EOF, "expected io.EOF after reader was closed")
+}
+
+func TestReader_AutoCloseOnEOF(t *testing.T) {
+	dir := t.TempDir()
+	walInstance, err := wal.NewWalIO(dir, "test_namespace", wal.NewDefaultConfig(), metrics.Default())
+	assert.NoError(t, err)
+	defer walInstance.Close()
+
+	_, err = walInstance.Append([]byte("single-entry"))
+	assert.NoError(t, err)
+
+	reader, err := walInstance.NewReader()
+	assert.NoError(t, err)
+
+	data, pos, err := reader.Next()
+	assert.NoError(t, err)
+	assert.NotNil(t, pos)
+	assert.Equal(t, "single-entry", string(data))
+
+	_, _, err = reader.Next()
+	assert.ErrorIs(t, err, io.EOF)
+
+	_, _, err = reader.Next()
+	assert.ErrorIs(t, err, io.EOF)
+}
