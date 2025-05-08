@@ -19,6 +19,11 @@ import (
 )
 
 const (
+	StateOpen = iota
+	StateClosing
+)
+
+const (
 	FlagActive uint32 = 1 << iota
 	FlagSealed uint32 = 1 << 1
 )
@@ -171,6 +176,7 @@ type Segment struct {
 	header      []byte
 
 	refCount          atomic.Int64
+	state             atomic.Int64
 	markedForDeletion atomic.Bool
 
 	writeMu    sync.RWMutex
@@ -207,6 +213,7 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		mmapSize:   segmentSize,
 		syncOption: MsyncNone,
 	}
+	s.state.Store(StateOpen)
 
 	for _, opt := range opts {
 		opt(s)
@@ -372,7 +379,7 @@ func alignUp(n int64) int64 {
 
 // Write writes the provided slice of bytes to the open mmap file.
 func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
-	if seg.closed.Load() {
+	if seg.closed.Load() || seg.state.Load() != StateOpen {
 		return nil, ErrClosed
 	}
 
@@ -525,7 +532,7 @@ func (seg *Segment) WillExceed(dataSize int) bool {
 }
 
 func (seg *Segment) Close() error {
-	if seg.closed.Load() {
+	if !seg.state.CompareAndSwap(StateOpen, StateClosing) {
 		return nil
 	}
 
@@ -642,8 +649,8 @@ func (r *SegmentReader) Close() {
 }
 
 func (seg *Segment) NewReader() *SegmentReader {
-	// prevent new readers to segments marked for deletion or closed
-	if seg.markedForDeletion.Load() || seg.closed.Load() {
+	// prevent new readers to segments marked for deletion or not opened
+	if seg.markedForDeletion.Load() || seg.state.Load() != StateOpen {
 		return nil
 	}
 
