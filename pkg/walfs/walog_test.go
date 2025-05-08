@@ -1,6 +1,7 @@
 package walfs_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -612,6 +613,58 @@ func TestReader_SeekNext(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "entry-2", string(data))
 	assert.Equal(t, *positions[1], *pos)
+}
+
+func TestReader_NextClosesOlderSegmentReaders(t *testing.T) {
+	dir := t.TempDir()
+
+	walog, err := walfs.NewWALog(
+		dir, ".wal",
+		walfs.WithMaxSegmentSize(1024),
+		walfs.WithBytesPerSync(512),
+	)
+	assert.NoError(t, err)
+
+	for i := 0; i < 100; i++ {
+		data := []byte(fmt.Sprintf("entry-%03d", i))
+		_, err := walog.Write(data)
+		assert.NoError(t, err)
+	}
+
+	segmentRefs := walog.Segments()
+
+	reader := walog.NewReader()
+	defer reader.Close()
+
+	var lastSegID walfs.SegmentID
+	seenSegments := make(map[walfs.SegmentID]bool)
+
+	for {
+		data, pos, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		assert.NoError(t, err)
+		assert.NotNil(t, pos)
+
+		if pos.SegmentID != lastSegID {
+			if lastSegID != 0 {
+				seg := segmentRefs[lastSegID]
+				hasReaders := seg.HasActiveReaders()
+				assert.Falsef(t, hasReaders,
+					"segment %d should not have any active readers after moving to segment %d",
+					lastSegID, pos.SegmentID)
+			}
+			lastSegID = pos.SegmentID
+			seenSegments[pos.SegmentID] = true
+		}
+
+		assert.True(t, bytes.HasPrefix(data, []byte("entry-")))
+	}
+
+	for _, seg := range segmentRefs {
+		assert.False(t, seg.HasActiveReaders())
+	}
 }
 
 func BenchmarkSegmentManager_Write_NoSync(b *testing.B) {
