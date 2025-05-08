@@ -57,8 +57,9 @@ write_files:
       error = 100.0  
       
       [fuzz_config]  
-      ops_per_namespace = 50  
-      workers_per_namespace = 10
+      ops_per_namespace = ${ops_per_namespace}  
+      workers_per_namespace = ${workers_per_namespace}
+      local_relayer_count = ${local_relayer_count}
 
   - path: /etc/systemd/system/unisondb.service
     permissions: '0644'

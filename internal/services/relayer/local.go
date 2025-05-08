@@ -70,11 +70,16 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 	for {
 		select {
 		case <-ctx.Done():
-			segmentLag := int(engine.CurrentOffset().SegmentID) - int(n.lastOffset.SegmentID)
+			var segmentLag int
+			segment := -1
+			if n.lastOffset != nil {
+				segmentLag = int(engine.CurrentOffset().SegmentID) - int(n.lastOffset.SegmentID)
+				segment = int(n.lastOffset.SegmentID)
+			}
 			slog.Debug("[unisondb.relayer]",
 				slog.String("event_type", "local.relayer.sync.stats"),
 				slog.String("namespace", namespace),
-				slog.Int("segment", int(n.lastOffset.SegmentID)),
+				slog.Int("segment", segment),
 				slog.Int("segment_lag", segmentLag),
 				slog.Int("replicated", n.replicatedCount),
 			)
@@ -100,21 +105,20 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 			}
 			panic(err)
 		case <-ticker.C:
-			var segmentLag int
 			if n.lastOffset != nil {
-				segmentLag = int(engine.CurrentOffset().SegmentID) - int(n.lastOffset.SegmentID)
-			}
-			if segmentLag >= segmentLagEmitThreshold {
-				localSegmentLagGauge.WithLabelValues(namespace, n.id).Set(float64(segmentLag))
-				slog.Info("[unisondb.relayer]",
-					slog.String("event_type", "local.relayer.sync.stats"),
-					slog.String("namespace", namespace),
-					slog.Int("segment", int(n.lastOffset.SegmentID)),
-					slog.Int("segment_lag", segmentLag),
-					slog.Int("replicated", n.replicatedCount),
-				)
-			} else {
-				localSegmentLagGauge.DeleteLabelValues(namespace, n.id)
+				segmentLag := int(engine.CurrentOffset().SegmentID) - int(n.lastOffset.SegmentID)
+				if segmentLag >= segmentLagEmitThreshold {
+					localSegmentLagGauge.WithLabelValues(namespace, n.id).Set(float64(segmentLag))
+					slog.Info("[unisondb.relayer]",
+						slog.String("event_type", "local.relayer.sync.stats"),
+						slog.String("namespace", namespace),
+						slog.Int("segment", int(n.lastOffset.SegmentID)),
+						slog.Int("segment_lag", segmentLag),
+						slog.Int("replicated", n.replicatedCount),
+					)
+				} else {
+					localSegmentLagGauge.DeleteLabelValues(namespace, n.id)
+				}
 			}
 		}
 	}
