@@ -78,7 +78,7 @@ func NewRelayer(engine *dbkernel.Engine,
 	currentOffset := engine.CurrentOffset()
 	segmentID := 0
 	if currentOffset != nil {
-		segmentID = int(currentOffset.SegmentId)
+		segmentID = int(currentOffset.SegmentID)
 	}
 
 	var currOffset []byte
@@ -120,7 +120,7 @@ func (r *Relayer) StartRelay(ctx context.Context) error {
 		return err
 	}
 
-	if remoteOffset != nil && int(remoteOffset.SegmentId)-r.startSegmentID > r.segmentLagThreshold {
+	if remoteOffset != nil && int(remoteOffset.SegmentID)-r.startSegmentID > r.segmentLagThreshold {
 		r.logLag(remoteOffset, r.startOffset)
 		return fmt.Errorf("%w %d", ErrSegmentLagThresholdExceeded, r.segmentLagThreshold)
 	}
@@ -134,12 +134,12 @@ func (r *Relayer) StartRelay(ctx context.Context) error {
 		slog.String("namespace", r.namespace),
 		slog.Group("offset",
 			slog.Group("remote",
-				slog.Int("segment_id", int(remoteOffset.SegmentId)),
-				slog.Int("block_number", int(remoteOffset.BlockNumber)),
+				slog.Int("segment_id", int(remoteOffset.SegmentID)),
+				slog.Int("offset", int(remoteOffset.Offset)),
 			),
 			slog.Group("local",
-				slog.Int("segment_id", int(localOffset.SegmentId)),
-				slog.Int("block_number", int(localOffset.BlockNumber)),
+				slog.Int("segment_id", int(localOffset.SegmentID)),
+				slog.Int("offset", int(localOffset.Offset)),
 			),
 		),
 	)
@@ -175,11 +175,11 @@ func (r *Relayer) monitor(ctx context.Context) {
 
 	segmentID := 0
 	if currentOffset != nil {
-		segmentID = int(currentOffset.SegmentId)
+		segmentID = int(currentOffset.SegmentID)
 	}
 
 	if remoteOffset != nil {
-		segmentLag := int(remoteOffset.SegmentId) - segmentID
+		segmentLag := int(remoteOffset.SegmentID) - segmentID
 		segmentLagGauge.WithLabelValues(r.namespace).Set(float64(segmentLag))
 
 		if segmentLag > r.segmentLagThreshold {
@@ -201,12 +201,12 @@ func (r *Relayer) logLag(remote, local *dbkernel.Offset) {
 		slog.String("namespace", r.namespace),
 		slog.Group("offset",
 			slog.Group("remote",
-				slog.Int("segment_id", int(remote.SegmentId)),
-				slog.Int("block_number", int(remote.BlockNumber)),
+				slog.Int("segment_id", int(remote.SegmentID)),
+				slog.Int("offset", int(remote.Offset)),
 			),
 			slog.Group("local",
-				slog.Int("segment_id", int(local.SegmentId)),
-				slog.Int("block_number", int(local.BlockNumber)),
+				slog.Int("segment_id", int(local.SegmentID)),
+				slog.Int("offset", int(local.Offset)),
 			),
 		),
 	)

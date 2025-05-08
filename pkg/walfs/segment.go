@@ -180,6 +180,7 @@ type Segment struct {
 	markedForDeletion atomic.Bool
 	readerIDCounter   atomic.Uint64
 	activeReaders     sync.Map
+	closeCond         *sync.Cond
 
 	writeMu    sync.RWMutex
 	syncOption MsyncOption
@@ -217,6 +218,7 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		activeReaders: sync.Map{},
 	}
 	s.state.Store(StateOpen)
+	s.closeCond = sync.NewCond(&sync.Mutex{})
 
 	for _, opt := range opts {
 		opt(s)
@@ -539,6 +541,12 @@ func (seg *Segment) Close() error {
 		return nil
 	}
 
+	seg.closeCond.L.Lock()
+	for seg.refCount.Load() > 0 {
+		seg.closeCond.Wait()
+	}
+	seg.closeCond.L.Unlock()
+
 	if err := seg.Sync(); err != nil {
 		defer func() {
 			_ = seg.mmapData.Unmap()
@@ -615,6 +623,11 @@ func (seg *Segment) decrRef(id uint64) {
 	_, ok := seg.activeReaders.LoadAndDelete(id)
 	if ok {
 		count := seg.refCount.Add(-1)
+		if count == 0 {
+			seg.closeCond.L.Lock()
+			seg.closeCond.Broadcast()
+			seg.closeCond.L.Unlock()
+		}
 		if count == 0 && seg.markedForDeletion.Load() {
 			seg.cleanup()
 		}

@@ -36,13 +36,13 @@ func TestRelayer_LogLag(t *testing.T) {
 	relayer.logLag(nil, nil)
 
 	remoteOffset := &dbkernel.Offset{
-		SegmentId:   10,
-		BlockNumber: 10,
+		SegmentID: 10,
+		Offset:    10,
 	}
 
 	localOffset := &dbkernel.Offset{
-		SegmentId:   8,
-		BlockNumber: 8,
+		SegmentID: 8,
+		Offset:    8,
 	}
 
 	relayer.logLag(remoteOffset, localOffset)
@@ -125,10 +125,8 @@ func TestRelayer_Monitor(t *testing.T) {
 	mockStreamer.injectErr = nil
 	relayer.monitor(t.Context())
 	mockStreamer.mockedOffset = &dbkernel.Offset{
-		SegmentId:   10,
-		BlockNumber: 10,
-		ChunkOffset: 10,
-		ChunkSize:   100,
+		SegmentID: 10,
+		Offset:    10,
 	}
 	relayer.monitor(t.Context())
 	err = relayer.StartRelay(t.Context())

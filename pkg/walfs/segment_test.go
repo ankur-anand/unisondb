@@ -2,6 +2,7 @@ package walfs
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -94,6 +95,7 @@ func TestSegment_SequentialWrites(t *testing.T) {
 	}
 
 	reader := seg.NewReader()
+	defer reader.Close()
 	for i := 0; i < 10; i++ {
 		data, current, err := reader.Next()
 		assert.NoError(t, err)
@@ -387,6 +389,7 @@ func TestSegment_ConcurrentReadWhileWriting(t *testing.T) {
 		defer wg.Done()
 		<-start
 		reader := seg.NewReader()
+		defer reader.Close()
 		for {
 			_, _, err := reader.Next()
 			if err == io.EOF {
@@ -422,6 +425,7 @@ func TestSegment_EmptyReaderEOF(t *testing.T) {
 	reader := seg.NewReader()
 	_, _, err = reader.Next()
 	assert.ErrorIs(t, err, io.EOF)
+	reader.Close()
 }
 
 func TestSegment_MSync(t *testing.T) {
@@ -735,6 +739,7 @@ func TestSegmentReader_Next_AlignedOffsets(t *testing.T) {
 	}
 
 	reader := seg.NewReader()
+	defer reader.Close()
 	i := 0
 	for {
 		data, current, err := reader.Next()
@@ -803,6 +808,7 @@ func TestSegment_ParallelStreamReaders(t *testing.T) {
 		go func(readerID int) {
 			defer wg.Done()
 			reader := seg.NewReader()
+			defer reader.Close()
 			var count int
 			for {
 				data, _, err := reader.Next()
@@ -1037,6 +1043,53 @@ func TestSegmentReader_ActiveReader(t *testing.T) {
 	reader.Close()
 	hasReader = seg.HasActiveReaders()
 	assert.False(t, hasReader)
+}
+
+func TestSegment_Close_WaitsForReaders_AndBroadcastIsSafe(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+
+	reader := seg.NewReader()
+	assert.NotNil(t, reader)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	closeStarted := make(chan struct{})
+
+	go func() {
+		defer wg.Done()
+		closeStarted <- struct{}{}
+		err := seg.Close()
+		assert.NoError(t, err)
+	}()
+
+	select {
+	case <-closeStarted:
+	case <-ctx.Done():
+		t.Fatal("Close() did not start in time")
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	reader.Close()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		t.Fatal("Close() did not finish; possibly stuck waiting on reader cleanup")
+	}
 }
 
 func calculateAlignedFrameSize(dataLen int) int64 {

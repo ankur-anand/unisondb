@@ -122,6 +122,7 @@ func (r *Replicator) replicateFromReader(ctx context.Context, recordsChan chan<-
 	if err != nil {
 		return err
 	}
+	defer reader.Close()
 
 	for {
 		select {
