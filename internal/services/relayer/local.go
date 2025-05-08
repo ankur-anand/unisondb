@@ -26,6 +26,13 @@ var (
 		// id can really increment cardinality of the metrics, should only be used in test or controlled
 		// env.
 	}, []string{"namespace", "id"})
+
+	localWALReplicatedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "unisondb",
+		Subsystem: "local_relayer",
+		Name:      "wal_records_replicated_total",
+		Help:      "Cumulative count of WAL records successfully replicated locally, labeled by namespace and replication stream ID.",
+	}, []string{"namespace", "id"})
 )
 
 // LocalWalRelayer encodes all the parameter needed to start local relayer and used for testing purpose only.
@@ -61,12 +68,21 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 	for {
 		select {
 		case <-ctx.Done():
+			segmentLag := int(engine.CurrentOffset().SegmentID) - int(n.lastOffset.SegmentID)
+			slog.Debug("[unisondb.relayer]",
+				slog.String("event_type", "local.relayer.sync.stats"),
+				slog.String("namespace", namespace),
+				slog.Int("segment", int(n.lastOffset.SegmentID)),
+				slog.Int("segment_lag", segmentLag),
+				slog.Int("replicated", n.replicatedCount),
+			)
 			return nil
 		case records := <-walReceiver:
 			if len(records) == 0 {
 				continue
 			}
 			for _, record := range records {
+				localWALReplicatedTotal.WithLabelValues(namespace, n.id).Inc()
 				fbRecord := logrecord.GetRootAsLogRecord(record.Record, 0)
 				receivedLSN := fbRecord.Lsn()
 				if receivedLSN != n.lsn+1 {
@@ -74,6 +90,7 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 				}
 				n.lsn++
 			}
+			n.replicatedCount += len(records)
 			n.lastOffset = dbkernel.DecodeOffset(records[len(records)-1].Offset)
 		case err := <-replicatorErrors:
 			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
@@ -81,7 +98,18 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 			}
 			panic(err)
 		case <-ticker.C:
-			localSegmentLagGauge.WithLabelValues(namespace, n.id)
+			var segmentLag int
+			if n.lastOffset != nil {
+				segmentLag = int(engine.CurrentOffset().SegmentID) - int(n.lastOffset.SegmentID)
+			}
+			slog.Debug("[unisondb.relayer]",
+				slog.String("event_type", "local.relayer.sync.stats"),
+				slog.String("namespace", namespace),
+				slog.Int("segment", int(n.lastOffset.SegmentID)),
+				slog.Int("segment_lag", segmentLag),
+				slog.Int("replicated", n.replicatedCount),
+			)
+			localSegmentLagGauge.WithLabelValues(namespace, n.id).Set(float64(segmentLag))
 		}
 	}
 }
