@@ -580,10 +580,8 @@ func (ms *Server) PeriodicLogEngineOffset(ctx context.Context) error {
 			for _, engine := range ms.engines {
 				currentOffset := engine.CurrentOffset()
 				var segmentID uint32
-				var blockID uint32
 				if currentOffset != nil {
-					segmentID = currentOffset.SegmentId
-					blockID = currentOffset.BlockNumber
+					segmentID = currentOffset.SegmentID
 				}
 
 				slog.Info("[unisondb.cliapp]",
@@ -591,7 +589,6 @@ func (ms *Server) PeriodicLogEngineOffset(ctx context.Context) error {
 					slog.Group("engine",
 						slog.String("namespace", engine.Namespace()),
 						slog.Uint64("current_segment_id", uint64(segmentID)),
-						slog.Uint64("current_block_number", uint64(blockID)),
 					),
 				)
 			}

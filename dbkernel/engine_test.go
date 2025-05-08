@@ -803,9 +803,8 @@ func Test_ASyncFSync_Coalescing(t *testing.T) {
 			metadata: &internal.Metadata{
 				RecordProcessed: uint64(100 + i),
 				Pos: &Offset{
-					SegmentId:   0,
-					ChunkOffset: int64(i),
-					BlockNumber: uint32(1 + i),
+					SegmentID: 0,
+					Offset:    int64(1 + i),
 				},
 			},
 		})
@@ -833,7 +832,7 @@ func Test_ASyncFSync_Coalescing(t *testing.T) {
 	assert.NoError(t, err, "RetrieveMetadata should not error")
 	um := internal.UnmarshalMetadata(metadata)
 	assert.Equal(t, uint64(199), um.RecordProcessed, "record processed should be 199")
-	assert.Equal(t, uint32(100), um.Pos.BlockNumber, "block number should be 100")
+	assert.Equal(t, int64(100), um.Pos.Offset, "block number should be 100")
 }
 
 type mockWalSyncer struct {
@@ -1040,9 +1039,8 @@ func TestBtreeSyncInterval(t *testing.T) {
 			metadata: &internal.Metadata{
 				RecordProcessed: uint64(100 + i),
 				Pos: &Offset{
-					SegmentId:   0,
-					ChunkOffset: int64(i),
-					BlockNumber: uint32(1 + i),
+					SegmentID: 0,
+					Offset:    int64(1 + i),
 				},
 			},
 		})

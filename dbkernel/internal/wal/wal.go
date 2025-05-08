@@ -5,10 +5,11 @@ import (
 	"log"
 	"log/slog"
 	"slices"
+	"sync/atomic"
 	"time"
 
+	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
-	"github.com/ankur-anand/wal"
 	"github.com/hashicorp/go-metrics"
 	"github.com/pkg/errors"
 )
@@ -29,29 +30,31 @@ var (
 )
 
 // Offset is a type alias to underlying wal implementation.
-type Offset = wal.ChunkPosition
+type Offset = walfs.RecordPosition
 
 func DecodeOffset(b []byte) *Offset {
-	return wal.DecodeChunkPosition(b)
+	pos, _ := walfs.DecodeRecordPosition(b)
+	return &pos
 }
 
 // WalIO provides a write and read to underlying file based wal store.
 type WalIO struct {
-	appendLog *wal.WAL
+	appendLog *walfs.WALog
 	label     []metrics.Label
 	metrics   *metrics.Metrics
 }
 
 func NewWalIO(dirname, namespace string, config *Config, m *metrics.Metrics) (*WalIO, error) {
 	config.applyDefaults()
-	w, err := wal.Open(newWALOptions(dirname, config))
+	wLog, err := walfs.NewWALog(dirname, ".seg", walfs.WithMaxSegmentSize(config.SegmentSize),
+		walfs.WithMSyncEveryWrite(config.FSync), walfs.WithBytesPerSync(int64(config.BytesPerSync)))
 	if err != nil {
 		return nil, err
 	}
 	l := []metrics.Label{{Name: "namespace", Value: namespace}}
 
 	return &WalIO{
-			appendLog: w,
+			appendLog: wLog,
 			label:     l,
 			metrics:   m,
 		},
@@ -73,12 +76,7 @@ func (w *WalIO) Sync() error {
 }
 
 func (w *WalIO) Close() error {
-	_, err := w.appendLog.WriteAll()
-	if err != nil {
-		slog.Error("[unisondb.wal] write to log file failed]", "error", err)
-		w.metrics.IncrCounterWithLabels(walMetricsAppendErrors, 1, w.label)
-	}
-	err = w.Sync()
+	err := w.Sync()
 	if err != nil {
 		slog.Error("[unisondb.wal] Fsync to log file failed]", "error", err)
 		w.metrics.IncrCounterWithLabels(walMetricsFSyncErrors, 1, w.label)
@@ -92,7 +90,7 @@ func (w *WalIO) Read(pos *Offset) ([]byte, error) {
 	defer func() {
 		w.metrics.MeasureSinceWithLabels(walMetricsReadLatency, startTime, w.label)
 	}()
-	value, err := w.appendLog.Read(pos)
+	value, err := w.appendLog.Read(*pos)
 	if err != nil {
 		w.metrics.IncrCounterWithLabels(walMetricsReadErrors, 1, w.label)
 	}
@@ -107,26 +105,30 @@ func (w *WalIO) Append(data []byte) (*Offset, error) {
 		w.metrics.MeasureSinceWithLabels(walMetricsAppendLatency, startTime, w.label)
 	}()
 	off, err := w.appendLog.Write(data)
-	if errors.Is(err, wal.ErrFsync) {
+	if errors.Is(err, walfs.ErrFsync) {
 		log.Fatalf("[unisondb.wal] write to log file failed: %v", err)
 	}
 	if err != nil {
 		w.metrics.IncrCounterWithLabels(walMetricsAppendErrors, 1, w.label)
 	}
 	w.metrics.IncrCounterWithLabels(walMetricsAppendBytes, float32(len(data)), w.label)
-	return off, err
+	return &off, err
 }
 
 type Reader struct {
-	appendReader *wal.Reader
+	appendReader *walfs.Reader
 	label        []metrics.Label
 	metrics      *metrics.Metrics
+	closed       atomic.Bool
 }
 
 // Next returns the next chunk data and its position in the WAL.
 // If there is no data, io. EOF will be returned.
 // The position can be used to read the data from the segment file.
 func (r *Reader) Next() ([]byte, *Offset, error) {
+	if r.closed.Load() {
+		return nil, nil, io.EOF
+	}
 	r.metrics.IncrCounterWithLabels(walMetricsReaderReadTotal, 1, r.label)
 	startTime := time.Now()
 	defer func() {
@@ -136,16 +138,17 @@ func (r *Reader) Next() ([]byte, *Offset, error) {
 	if err != nil && !errors.Is(err, io.EOF) {
 		r.metrics.IncrCounterWithLabels(walMetricsReadErrors, 1, r.label)
 	}
+	if errors.Is(err, io.EOF) {
+		r.Close()
+	}
 	r.metrics.IncrCounterWithLabels(walMetricsReadBytes, float32(len(value)), r.label)
 	return value, off, err
 }
 
-func (r *Reader) CurrentSegmentID() uint32 {
-	return r.appendReader.CurrentSegmentId()
-}
-
-func (r *Reader) CurrentOffset() *Offset {
-	return r.appendReader.CurrentChunkPosition()
+func (r *Reader) Close() {
+	if r.closed.CompareAndSwap(false, true) {
+		r.appendReader.Close()
+	}
 }
 
 // NewReader returns a new instance of WIOReader, allowing the caller to
@@ -160,7 +163,7 @@ func (w *WalIO) NewReader() (*Reader, error) {
 
 // NewReaderWithStart returns a new instance of WIOReader from the provided Offset.
 func (w *WalIO) NewReaderWithStart(offset *Offset) (*Reader, error) {
-	reader, err := w.appendLog.NewReaderWithStart(offset)
+	reader, err := w.appendLog.NewReaderWithStart(*offset)
 	return &Reader{
 		appendReader: reader,
 		label:        w.label,

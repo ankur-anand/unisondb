@@ -5,7 +5,6 @@ go 1.24.0
 require (
 	github.com/PowerDNS/lmdb-go v1.9.3
 	github.com/anishathalye/porcupine v1.0.2
-	github.com/ankur-anand/wal v0.0.6
 	github.com/bits-and-blooms/bloom/v3 v3.7.0
 	github.com/brianvoe/gofakeit/v7 v7.2.1
 	github.com/cenkalti/backoff/v5 v5.0.2
@@ -13,6 +12,7 @@ require (
 	github.com/common-nighthawk/go-figure v0.0.0-20210622060536-734e95fb86be
 	github.com/dgraph-io/badger/v4 v4.6.0
 	github.com/dustin/go-humanize v1.0.1
+	github.com/edsrzf/mmap-go v1.2.0
 	github.com/fatih/color v1.18.0
 	github.com/gofrs/flock v0.12.1
 	github.com/google/flatbuffers v25.2.10+incompatible
@@ -51,7 +51,6 @@ require (
 	github.com/prometheus/procfs v0.16.0 // indirect
 	github.com/rogpeppe/go-internal v1.13.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
-	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
 	go.opentelemetry.io/otel v1.35.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.35.0 // indirect

@@ -242,9 +242,8 @@ func isNewChunkPosition(current, lastSeen *Offset) bool {
 	if lastSeen == nil {
 		return true
 	}
-	return current.SegmentId > lastSeen.SegmentId ||
-		(current.SegmentId == lastSeen.SegmentId && current.BlockNumber > lastSeen.BlockNumber) ||
-		(current.SegmentId == lastSeen.SegmentId && current.BlockNumber == lastSeen.BlockNumber && current.ChunkOffset > lastSeen.ChunkOffset)
+	return current.SegmentID > lastSeen.SegmentID ||
+		(current.SegmentID == lastSeen.SegmentID && current.Offset > lastSeen.Offset)
 }
 
 // Get retrieves the value associated with the given key.

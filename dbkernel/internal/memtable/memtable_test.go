@@ -99,7 +99,7 @@ func TestMemTable_PutAndGet(t *testing.T) {
 	key := []byte("test-key")
 	val := y.ValueStruct{Value: []byte("test-value")}
 	pos := new(wal.Offset)
-	pos.SegmentId = 1
+	pos.SegmentID = 1
 
 	assert.True(t, table.canPut(key, val), "expected canPut to return true for key %q", key)
 	err := table.Put(key, val)
@@ -121,7 +121,7 @@ func TestMemTable_CannotPut(t *testing.T) {
 	value := gofakeit.LetterN(1100)
 	val := y.ValueStruct{Value: []byte(value)}
 	pos := new(wal.Offset)
-	pos.SegmentId = 1
+	pos.SegmentID = 1
 
 	// should not panic
 	err := table.Put(key, val)
@@ -541,7 +541,7 @@ func TestPublic_Functions(t *testing.T) {
 	value := gofakeit.LetterN(1100)
 	val := y.ValueStruct{Value: []byte(value)}
 	pos := new(wal.Offset)
-	pos.SegmentId = 1
+	pos.SegmentID = 1
 
 	err = mmTable.Put(key, val)
 	assert.NoError(t, err)

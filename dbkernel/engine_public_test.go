@@ -14,6 +14,7 @@ import (
 	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
+	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
@@ -731,8 +732,7 @@ func TestEngine_NewReaderWithStart(t *testing.T) {
 		assert.NoError(t, err, "BatchPut operation should succeed")
 	})
 
-	offset := &wal.Offset{SegmentId: 10000, BlockNumber: 1, ChunkOffset: 9999}
-	r, err := engine.NewReaderWithStart(offset)
-	assert.ErrorIs(t, err, dbkernel.ErrInvalidOffset)
-	assert.Nil(t, r)
+	offset := &wal.Offset{SegmentID: 10000}
+	_, err = engine.NewReaderWithStart(offset)
+	assert.ErrorIs(t, err, walfs.ErrSegmentNotFound)
 }
