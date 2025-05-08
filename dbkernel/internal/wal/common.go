@@ -4,35 +4,31 @@ import (
 	"errors"
 	"time"
 
-	"github.com/ankur-anand/wal"
+	"github.com/ankur-anand/unisondb/pkg/walfs"
 )
 
 var (
 	packageKey = []string{"unisondb"}
 )
 
+const (
+	B  = 1
+	KB = 1024 * B
+	MB = 1024 * KB
+	GB = 1024 * MB
+)
+
 // Default permission values.
 const (
-	defaultBytesPerSync = 1 * wal.MB  // 1MB
-	defaultSegmentSize  = 16 * wal.MB // 16MB
+	defaultBytesPerSync = 1 * MB  // 1MB
+	defaultSegmentSize  = 16 * MB // 16MB
 	defaultSyncInterval = 1 * time.Second
 )
 
 var (
 	ErrWalNextOffset = errors.New("wal next offset out of range")
-	ErrWalFSync      = wal.ErrFsync
+	ErrWalFSync      = walfs.ErrFsync
 )
-
-func newWALOptions(dirPath string, c *Config) wal.Options {
-	return wal.Options{
-		DirPath:        dirPath,
-		SegmentSize:    c.SegmentSize,
-		SegmentFileExt: ".seg.wal",
-		Sync:           c.FSync,
-		SyncInterval:   c.SyncInterval,
-		BytesPerSync:   c.BytesPerSync,
-	}
-}
 
 // Config stores all tunable parameters for WAL.
 type Config struct {
