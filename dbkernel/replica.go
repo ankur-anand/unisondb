@@ -83,8 +83,7 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 }
 
 func isEqualOffset(local, remote *Offset) bool {
-	// IMP: not to validate the chunk size.
-	if local.SegmentId == remote.SegmentId && local.BlockNumber == remote.BlockNumber && local.ChunkOffset == remote.ChunkOffset {
+	if local.SegmentID == remote.SegmentID && local.Offset == remote.Offset {
 		return true
 	}
 	return false
