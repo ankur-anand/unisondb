@@ -239,6 +239,9 @@ func (sm *WALog) SegmentRotatedCount() int64 {
 	return sm.segmentRotated.Load()
 }
 
+// Read returns the data from the provided record position if found.
+// IMPORTANT: The returned `[]byte` is a slice of a memory-mapped file, so data must not be retained or modified.
+// If the data needs to be used beyond the lifetime of the segment, the caller MUST copy it.
 func (sm *WALog) Read(pos RecordPosition) ([]byte, error) {
 	sm.mu.RLock()
 	seg, ok := sm.segments[pos.SegmentID]
@@ -281,6 +284,7 @@ func (sm *WALog) Current() *Segment {
 	return sm.currentSegment
 }
 
+// RotateSegment rotates the current segment and create a new active segment.
 func (sm *WALog) RotateSegment() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -315,12 +319,17 @@ func (sm *WALog) rotateSegment() error {
 	return nil
 }
 
+// Reader represents a high-level sequential reader over a WALog.
+// It reads across all available WAL segments in order, automatically
+// advancing from one segment to the next.
 type Reader struct {
 	segmentReaders []*SegmentReader
 	currentReader  int
 	lastPos        *RecordPosition
 }
 
+// NewReader returns a new Reader that sequentially reads all segments in the WALog,
+// starting from the beginning (lowest SegmentID).
 func (sm *WALog) NewReader() *Reader {
 	sm.mu.RLock()
 	segments := maps.Clone(sm.segments)
@@ -348,6 +357,17 @@ func (sm *WALog) NewReader() *Reader {
 	}
 }
 
+// Close closes all segment readers to release their references.
+// IMPORTANT: This method MUST be called after the Reader is no longer needed.
+func (r *Reader) Close() {
+	for _, sr := range r.segmentReaders {
+		sr.Close()
+	}
+}
+
+// Next returns the next available WAL record data and its current position.
+// IMPORTANT: The returned `[]byte` is a slice of a memory-mapped file, so data must not be retained or modified.
+// If the data needs to be used beyond the lifetime of the segment, the caller MUST copy it.
 func (r *Reader) Next() ([]byte, *RecordPosition, error) {
 	for r.currentReader < len(r.segmentReaders) {
 		data, pos, err := r.segmentReaders[r.currentReader].Next()
@@ -365,12 +385,34 @@ func (r *Reader) Next() ([]byte, *RecordPosition, error) {
 	return nil, nil, io.EOF
 }
 
+// SeekNext advances the reader by one record, discarding the data.
+func (r *Reader) SeekNext() error {
+	_, _, err := r.Next()
+	return err
+}
+
+// LastRecordPosition returns the RecordPosition of the last successfully read entry.
 func (r *Reader) LastRecordPosition() *RecordPosition {
 	return r.lastPos
 }
 
-func (sm *WALog) NewReaderWithStart(startOffset RecordPosition) (*Reader, error) {
-	if startOffset.SegmentID == 0 {
+// NewReaderAfter returns a reader that starts after the given RecordPosition.
+// It first creates a reader from that position, then skips one record.
+func (sm *WALog) NewReaderAfter(pos RecordPosition) (*Reader, error) {
+	reader, err := sm.NewReaderWithStart(pos)
+	if err != nil {
+		return nil, err
+	}
+	if err := reader.SeekNext(); err != nil && !errors.Is(err, io.EOF) {
+		return nil, err
+	}
+	return reader, nil
+}
+
+// NewReaderWithStart returns a new Reader that begins reading from the specified position.
+// If SegmentID is 0, the reader will begin from the very start of the WAL.
+func (sm *WALog) NewReaderWithStart(pos RecordPosition) (*Reader, error) {
+	if pos.SegmentID == 0 {
 		// interpreting SegmentID == 0 as: read from the beginning
 		return sm.NewReader(), nil
 	}
@@ -392,7 +434,7 @@ func (sm *WALog) NewReaderWithStart(startOffset RecordPosition) (*Reader, error)
 	)
 
 	for _, seg := range segments {
-		if seg.ID() < startOffset.SegmentID {
+		if seg.ID() < pos.SegmentID {
 			continue
 		}
 		reader := seg.NewReader()
@@ -400,14 +442,14 @@ func (sm *WALog) NewReaderWithStart(startOffset RecordPosition) (*Reader, error)
 			continue
 		}
 
-		if seg.ID() == startOffset.SegmentID {
+		if seg.ID() == pos.SegmentID {
 			segmentFound = true
 			size := seg.GetSegmentSize()
-			if startOffset.Offset > size {
+			if pos.Offset > size {
 				return nil, ErrOffsetOutOfBounds
 			}
 
-			reader.readOffset = startOffset.Offset
+			reader.readOffset = pos.Offset
 			if reader.readOffset <= segmentHeaderSize {
 				reader.readOffset = segmentHeaderSize
 			}

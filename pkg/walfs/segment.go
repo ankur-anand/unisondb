@@ -675,13 +675,20 @@ func (r *SegmentReader) Next() ([]byte, *RecordPosition, error) {
 	if r.readOffset >= r.segment.WriteOffset() {
 		return nil, nil, io.EOF
 	}
+	currentOffset := r.readOffset
 	data, next, err := r.segment.Read(r.readOffset)
 	if err != nil {
 		return nil, nil, err
 	}
-	r.lastRecordOffset = r.readOffset
+	r.lastRecordOffset = currentOffset
 	r.readOffset = next.Offset
-	return data, next, nil
+
+	currentPos := &RecordPosition{
+		SegmentID: r.segment.ID(),
+		Offset:    currentOffset,
+	}
+
+	return data, currentPos, nil
 }
 
 func (r *SegmentReader) LastRecordPosition() *RecordPosition {

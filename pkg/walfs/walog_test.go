@@ -468,18 +468,20 @@ retryRead:
 			var err error
 			reader, err = manager.NewReaderWithStart(*lastPosition)
 			assert.NoError(t, err)
+			assert.NoError(t, reader.SeekNext())
 		}
 
 		for {
-			data, next, err := reader.Next()
+			data, pos, err := reader.Next()
 			if errors.Is(err, io.EOF) {
 				retries++
 				time.Sleep(10 * time.Millisecond)
 				continue retryRead
 			}
 			assert.NoError(t, err)
+			assert.NotNil(t, pos)
 			readEntries = append(readEntries, string(data))
-			lastPosition = next
+			lastPosition = pos
 			if len(readEntries) >= totalRecords {
 				break retryRead
 			}
@@ -550,6 +552,66 @@ func TestManagerReader_LastRecordPosition(t *testing.T) {
 	assert.Nil(t, data)
 	assert.Nil(t, pos)
 	assert.ErrorIs(t, err, io.EOF)
+}
+
+func TestWALog_NewReaderAfter(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(1<<20))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	var positions []*walfs.RecordPosition
+	for i := 1; i <= 3; i++ {
+		payload := []byte(fmt.Sprintf("entry-%d", i))
+		pos, err := wal.Write(payload)
+		assert.NoError(t, err)
+		positions = append(positions, &pos)
+	}
+
+	reader, err := wal.NewReaderAfter(*positions[0])
+	assert.NoError(t, err)
+	defer reader.Close()
+
+	var actual []string
+	for {
+		data, _, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		assert.NoError(t, err)
+		actual = append(actual, string(data))
+	}
+
+	expected := []string{"entry-2", "entry-3"}
+	assert.Equal(t, expected, actual)
+}
+
+func TestReader_SeekNext(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(1<<20))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	var positions []*walfs.RecordPosition
+	for i := 1; i <= 3; i++ {
+		pos, err := wal.Write([]byte(fmt.Sprintf("entry-%d", i)))
+		assert.NoError(t, err)
+		positions = append(positions, &pos)
+	}
+
+	reader, err := wal.NewReaderWithStart(*positions[0])
+	assert.NoError(t, err)
+	defer reader.Close()
+
+	err = reader.SeekNext()
+	assert.NoError(t, err)
+
+	data, pos, err := reader.Next()
+	assert.NoError(t, err)
+	assert.Equal(t, "entry-2", string(data))
+	assert.Equal(t, *positions[1], *pos)
 }
 
 func BenchmarkSegmentManager_Write_NoSync(b *testing.B) {

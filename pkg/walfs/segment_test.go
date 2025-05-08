@@ -95,15 +95,13 @@ func TestSegment_SequentialWrites(t *testing.T) {
 
 	reader := seg.NewReader()
 	for i := 0; i < 10; i++ {
-		data, next, err := reader.Next()
+		data, current, err := reader.Next()
 		assert.NoError(t, err)
 
 		expected := []byte(fmt.Sprintf("entry-%d", i))
 		assert.Equal(t, expected, data, "read data doesn't match written data")
 
-		if i < 9 && next.Offset != positions[i+1].Offset {
-			t.Errorf("entry %d: wrong next offset", i)
-		}
+		assert.Equal(t, positions[i].Offset, current.Offset, "entry %d: wrong current offset", i)
 	}
 
 	_, _, err = reader.Next()
@@ -737,15 +735,15 @@ func TestSegmentReader_Next_AlignedOffsets(t *testing.T) {
 	}
 
 	reader := seg.NewReader()
-	var i int
+	i := 0
 	for {
-		data, pos, err := reader.Next()
+		data, current, err := reader.Next()
 		if err == io.EOF {
 			break
 		}
 		assert.NoError(t, err)
 		assert.Equal(t, inputs[i], data, "mismatch at index %d", i)
-		assert.Equal(t, int64(0), pos.Offset%8, "unaligned offset at index %d: %d", i, pos.Offset)
+		assert.Equal(t, int64(0), current.Offset%8, "unaligned offset at index %d: %d", i, current.Offset)
 		i++
 	}
 }
@@ -947,9 +945,8 @@ func TestSegmentReader_LastRecordPosition(t *testing.T) {
 		last := reader.LastRecordPosition()
 		assert.NotNil(t, last)
 		assert.Equal(t, seg.ID(), last.SegmentID)
+		assert.Equal(t, expected, pos.Offset)
 		assert.Equal(t, expected, last.Offset)
-
-		assert.True(t, last.Offset < pos.Offset)
 	}
 
 	data, pos, err := reader.Next()
