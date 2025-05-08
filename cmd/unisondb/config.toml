@@ -34,3 +34,4 @@ error = 100.0
 [fuzz_config]
 ops_per_namespace = 100
 workers_per_namespace = 20
+local_relayer_count = 100
