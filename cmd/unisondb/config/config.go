@@ -18,15 +18,16 @@ import (
 
 // Config : top-level configuration.
 type Config struct {
-	HTTPPort     int                    `toml:"http_port"`
-	ListenIP     string                 `toml:"listen_ip"`
-	Grpc         GrpcConfig             `toml:"grpc_config"`
-	Storage      StorageConfig          `toml:"storage_config"`
-	PProfConfig  PProfConfig            `toml:"pprof_config"`
-	RelayConfigs map[string]RelayConfig `toml:"relayer_config"`
-	LogConfig    LogConfig              `toml:"log_config"`
-	Limiter      Limiter                `toml:"limiter"`
-	FuzzConfig   FuzzConfig             `toml:"fuzz_config"`
+	HTTPPort           int                    `toml:"http_port"`
+	ListenIP           string                 `toml:"listen_ip"`
+	Grpc               GrpcConfig             `toml:"grpc_config"`
+	Storage            StorageConfig          `toml:"storage_config"`
+	PProfConfig        PProfConfig            `toml:"pprof_config"`
+	RelayConfigs       map[string]RelayConfig `toml:"relayer_config"`
+	WalIOGlobalLimiter WalIOGlobalLimiter     `toml:"wal_io_global_limiter"`
+	LogConfig          LogConfig              `toml:"log_config"`
+	Limiter            Limiter                `toml:"limiter"`
+	FuzzConfig         FuzzConfig             `toml:"fuzz_config"`
 }
 
 type GrpcConfig struct {
