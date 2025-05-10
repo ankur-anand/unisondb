@@ -87,11 +87,11 @@ type RateLimitedWalIO struct {
 }
 
 // NewRateLimitedWalIO constructs a RateLimitedWalIO.
-func NewRateLimitedWalIO(ctx context.Context, w WalIO, ratePerSecond int, burstSize int) *RateLimitedWalIO {
+func NewRateLimitedWalIO(ctx context.Context, w WalIO, limiter *rate.Limiter) *RateLimitedWalIO {
 	return &RateLimitedWalIO{
 		ctx:        ctx,
 		underlying: w,
-		limiter:    rate.NewLimiter(rate.Limit(ratePerSecond), burstSize),
+		limiter:    limiter,
 	}
 }
 
@@ -164,6 +164,11 @@ func NewRelayer(engine *dbkernel.Engine,
 		startOffset:         currentOffset,
 		walIOHandler:        walHandler,
 	}
+}
+
+// CurrentWalIO returns the currently configured WalIO implementation for the Relayer.
+func (r *Relayer) CurrentWalIO() WalIO {
+	return r.walIOHandler
 }
 
 // EnableRateLimitedWalIO configures the Relayer to apply a token bucket rate limiter

@@ -18,6 +18,7 @@ import (
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/time/rate"
 )
 
 func TestRelayer_LogLag(t *testing.T) {
@@ -201,7 +202,8 @@ func TestRateLimitedWalIO_ContextCancellation(t *testing.T) {
 	defer cancel()
 
 	mock := &mockWalIO{}
-	rlWalIO := NewRateLimitedWalIO(ctx, mock, 1, 1)
+	limiter := rate.NewLimiter(rate.Limit(1), 1)
+	rlWalIO := NewRateLimitedWalIO(ctx, mock, limiter)
 
 	record := &v1.WALRecord{Offset: []byte("test-offset"), Record: []byte("test-record")}
 
@@ -247,28 +249,29 @@ func TestRelayer_WithRateLimiterWalWriter(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{}))
 
 	rel := NewRelayer(engine, namespace, nil, 10, logger)
-	_, isRateLimited := rel.walIOHandler.(*RateLimitedWalIO)
+	_, isRateLimited := rel.CurrentWalIO().(*RateLimitedWalIO)
 
 	assert.False(t, isRateLimited, "should be simple")
 
 	rel.EnableRateLimitedWalIO(nil)
-	_, isRateLimited = rel.walIOHandler.(*RateLimitedWalIO)
+	_, isRateLimited = rel.CurrentWalIO().(*RateLimitedWalIO)
 
 	assert.False(t, isRateLimited, "should be simple")
 
 	rateLimit := 5
 	burstSize := 2
+	limiter := rate.NewLimiter(rate.Limit(rateLimit), burstSize)
 
-	rateLimiterIO := NewRateLimitedWalIO(t.Context(), rel.walIOHandler, rateLimit, burstSize)
+	rateLimiterIO := NewRateLimitedWalIO(t.Context(), rel.walIOHandler, limiter)
 
 	rel.EnableRateLimitedWalIO(rateLimiterIO)
 
-	_, isRateLimited = rel.walIOHandler.(*RateLimitedWalIO)
+	_, isRateLimited = rel.CurrentWalIO().(*RateLimitedWalIO)
 	assert.True(t, isRateLimited, "should be of type RateLimitedWalIO after EnableRateLimitedWalIO")
 	// before the start it should be allowed to change
 	rel.startOffset = &dbkernel.Offset{SegmentID: 10, Offset: 100}
 	rel.EnableRateLimitedWalIO(rateLimiterIO)
-	_, isRateLimited = rel.walIOHandler.(*RateLimitedWalIO)
+	_, isRateLimited = rel.CurrentWalIO().(*RateLimitedWalIO)
 	assert.True(t, isRateLimited, "should be of type RateLimitedWalIO after EnableRateLimitedWalIO")
 
 	rel.started.Store(true)
