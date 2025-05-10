@@ -18,15 +18,16 @@ import (
 
 // Config : top-level configuration.
 type Config struct {
-	HTTPPort     int                    `toml:"http_port"`
-	ListenIP     string                 `toml:"listen_ip"`
-	Grpc         GrpcConfig             `toml:"grpc_config"`
-	Storage      StorageConfig          `toml:"storage_config"`
-	PProfConfig  PProfConfig            `toml:"pprof_config"`
-	RelayConfigs map[string]RelayConfig `toml:"relayer_config"`
-	LogConfig    LogConfig              `toml:"log_config"`
-	Limiter      Limiter                `toml:"limiter"`
-	FuzzConfig   FuzzConfig             `toml:"fuzz_config"`
+	HTTPPort           int                    `toml:"http_port"`
+	ListenIP           string                 `toml:"listen_ip"`
+	Grpc               GrpcConfig             `toml:"grpc_config"`
+	Storage            StorageConfig          `toml:"storage_config"`
+	PProfConfig        PProfConfig            `toml:"pprof_config"`
+	RelayConfigs       map[string]RelayConfig `toml:"relayer_config"`
+	WalIOGlobalLimiter WalIOGlobalLimiter     `toml:"wal_io_global_limiter"`
+	LogConfig          LogConfig              `toml:"log_config"`
+	Limiter            Limiter                `toml:"limiter"`
+	FuzzConfig         FuzzConfig             `toml:"fuzz_config"`
 }
 
 type GrpcConfig struct {
@@ -79,6 +80,15 @@ type FuzzConfig struct {
 type PProfConfig struct {
 	Enabled bool `toml:"enabled"`
 	Port    int  `toml:"port"`
+}
+
+// WalIOGlobalLimiter defines global rate-limiting settings for controlling
+// WAL (Write-Ahead Log) write throughput across all namespaces during streaming replication,
+// in a short period, helping control resource usage (CPU, memory) at the current VM.
+type WalIOGlobalLimiter struct {
+	Enable    bool `toml:"enable"`
+	Burst     int  `toml:"burst"`
+	RateLimit int  `toml:"rate_limit"`
 }
 
 func ParseLevelPercents(cfg LogConfig) (map[slog.Level]float64, error) {

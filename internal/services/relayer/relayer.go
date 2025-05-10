@@ -13,13 +13,15 @@ import (
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 )
 
-type Streamer interface {
-	GetLatestOffset(ctx context.Context) (*dbkernel.Offset, error)
-	StreamWAL(ctx context.Context) error
-}
+var (
+	ErrSegmentLagThresholdExceeded = errors.New("segment lag threshold exceeded")
+	// TODO: Refactor this to return the name should be coming from the Streamer Interface itself.
+	defaultStreamerLabel = "grpc"
+)
 
 var (
 	segmentLagGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
@@ -35,7 +37,38 @@ var (
 		Name:      "wal_segment_lag_threshold",
 		Help:      "Configured segment lag threshold for the WAL relayer per namespace",
 	}, []string{"namespace"})
+	rateLimiterWaitDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: promNamespace,
+		Subsystem: promSubsystem,
+		Name:      "rate_limiter_wait_duration_seconds",
+		Help:      "Time spent waiting for rate limiter tokens.",
+		Buckets:   prometheus.DefBuckets,
+	}, []string{"streamer"})
+
+	rateLimiterErrors = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: promNamespace,
+		Subsystem: promSubsystem,
+		Name:      "rate_limiter_errors_total",
+		Help:      "Total number of rate limiter errors.",
+	}, []string{"streamer"})
+
+	rateLimiterSuccess = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: promNamespace,
+		Subsystem: promSubsystem,
+		Name:      "rate_limiter_success_total",
+		Help:      "Total number of successful rate limiter grants.",
+	}, []string{"streamer"})
 )
+
+type Streamer interface {
+	GetLatestOffset(ctx context.Context) (*dbkernel.Offset, error)
+	StreamWAL(ctx context.Context) error
+}
+
+// WalIO defines the interface for writing Write-Ahead Log (WAL) records.
+type WalIO interface {
+	Write(data *v1.WALRecord) error
+}
 
 type walIOHandler struct {
 	replica *dbkernel.ReplicaWALHandler
@@ -45,14 +78,43 @@ func (w walIOHandler) Write(data *v1.WALRecord) error {
 	return w.replica.ApplyRecord(data.Record, data.Offset)
 }
 
-var (
-	ErrSegmentLagThresholdExceeded = errors.New("segment lag threshold exceeded")
-)
+// RateLimitedWalIO wraps WalIO with a token bucket rate limiter.
+type RateLimitedWalIO struct {
+	// this should be the parent ctx that controls the entire program flow.
+	ctx        context.Context
+	underlying WalIO
+	limiter    *rate.Limiter
+}
+
+// NewRateLimitedWalIO constructs a RateLimitedWalIO.
+func NewRateLimitedWalIO(ctx context.Context, w WalIO, limiter *rate.Limiter) *RateLimitedWalIO {
+	return &RateLimitedWalIO{
+		ctx:        ctx,
+		underlying: w,
+		limiter:    limiter,
+	}
+}
+
+// Write applies rate limiting before delegating to the underlying WalIO.
+func (r *RateLimitedWalIO) Write(data *v1.WALRecord) error {
+	start := time.Now()
+	err := r.limiter.Wait(r.ctx)
+	duration := time.Since(start)
+	rateLimiterWaitDuration.WithLabelValues(defaultStreamerLabel).Observe(duration.Seconds())
+	if err != nil {
+		rateLimiterErrors.WithLabelValues(defaultStreamerLabel).Inc()
+		return fmt.Errorf("rate limit exceeded: %w", err)
+	}
+	rateLimiterSuccess.WithLabelValues(defaultStreamerLabel).Inc()
+
+	return r.underlying.Write(data)
+}
 
 // Relayer relays WAL record from the upstream over the provided grpc connection for the given namespace.
 type Relayer struct {
-	namespace           string
-	engine              *dbkernel.Engine
+	namespace string
+	engine    *dbkernel.Engine
+	// TODO: refactor, relayer should be independent of this?
 	grpcConn            *grpc.ClientConn
 	client              Streamer
 	segmentLagThreshold int
@@ -62,7 +124,7 @@ type Relayer struct {
 	logger         *slog.Logger
 	startSegmentID int
 	startOffset    *dbkernel.Offset
-	walIOHandler   walIOHandler
+	walIOHandler   WalIO
 
 	offsetMonitorInterval time.Duration
 }
@@ -102,6 +164,39 @@ func NewRelayer(engine *dbkernel.Engine,
 		startOffset:         currentOffset,
 		walIOHandler:        walHandler,
 	}
+}
+
+// CurrentWalIO returns the currently configured WalIO implementation for the Relayer.
+//
+//nolint:ireturn
+func (r *Relayer) CurrentWalIO() WalIO {
+	return r.walIOHandler
+}
+
+// EnableRateLimitedWalIO configures the Relayer to apply a token bucket rate limiter
+// on WAL writes. This helps control replication throughput and prevents excessive
+// memory or CPU usage by slowing down WAL processing at the consumer side.
+// Must be called before calling the StartRelay else will panic.
+// We are accepting the concrete implementation as that's what the function name is.
+func (r *Relayer) EnableRateLimitedWalIO(walIO *RateLimitedWalIO) {
+	if walIO == nil {
+		return
+	}
+
+	if r.started.Load() {
+		panic("cannot enable rate limiter after relay has started for namespace: " + r.namespace)
+	}
+
+	r.walIOHandler = walIO
+	var currOffset []byte
+	if r.startOffset != nil {
+		currOffset = r.startOffset.Encode()
+	}
+	r.client = streamer.NewGrpcStreamerClient(r.grpcConn, r.namespace, walIO, currOffset)
+	r.logger.Info("[unisondb.relayer]",
+		slog.String("event_type", "relayer.rate_limiter.enabled"),
+		slog.String("namespace", r.namespace),
+	)
 }
 
 // StartRelay starts the WAL replication Sync with the upstream over the provided grpc-connection,
