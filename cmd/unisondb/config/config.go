@@ -81,6 +81,15 @@ type PProfConfig struct {
 	Port    int  `toml:"port"`
 }
 
+// WalIOGlobalLimiter defines global rate-limiting settings for controlling
+// WAL (Write-Ahead Log) write throughput across all namespaces during streaming replication,
+// in a short period, helping control resource usage (CPU, memory) at the current VM.
+type WalIOGlobalLimiter struct {
+	Enable    bool `toml:"enable"`
+	Burst     int  `toml:"burst"`
+	RateLimit int  `toml:"rate_limit"`
+}
+
 func ParseLevelPercents(cfg LogConfig) (map[slog.Level]float64, error) {
 	out := map[slog.Level]float64{
 		slog.LevelDebug: 100.0,

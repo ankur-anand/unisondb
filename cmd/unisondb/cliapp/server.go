@@ -33,6 +33,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -255,6 +256,11 @@ func (ms *Server) SetupRelayer(ctx context.Context) error {
 		return err
 	}
 
+	var limiter *rate.Limiter
+	if ms.cfg.WalIOGlobalLimiter.Enable {
+		limiter = rate.NewLimiter(rate.Limit(ms.cfg.WalIOGlobalLimiter.RateLimit), ms.cfg.WalIOGlobalLimiter.Burst)
+	}
+
 	for _, engine := range ms.engines {
 		conn, ok := conns[engine.Namespace()]
 		if !ok || conn == nil {
@@ -263,6 +269,12 @@ func (ms *Server) SetupRelayer(ctx context.Context) error {
 
 		rl := relayer.NewRelayer(engine, engine.Namespace(),
 			conns[engine.Namespace()], lagConf[engine.Namespace()], ms.pl)
+
+		if limiter != nil {
+			limitIO := relayer.NewRateLimitedWalIO(ctx, rl.CurrentWalIO(), limiter)
+			rl.EnableRateLimitedWalIO(limitIO)
+		}
+
 		ms.relayer = append(ms.relayer, relayerWithInfo{
 			namespace: engine.Namespace(),
 			relayer:   rl,
