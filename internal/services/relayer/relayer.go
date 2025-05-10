@@ -167,6 +167,8 @@ func NewRelayer(engine *dbkernel.Engine,
 }
 
 // CurrentWalIO returns the currently configured WalIO implementation for the Relayer.
+//
+//nolint:ireturn
 func (r *Relayer) CurrentWalIO() WalIO {
 	return r.walIOHandler
 }
