@@ -170,23 +170,25 @@ func NewRelayer(engine *dbkernel.Engine,
 // on WAL writes. This helps control replication throughput and prevents excessive
 // memory or CPU usage by slowing down WAL processing at the consumer side.
 // Must be called before calling the StartRelay else will panic.
-func (r *Relayer) EnableRateLimitedWalIO(rateLimit int, burstSize int) {
+// We are accepting the concrete implementation as that's what the function name is.
+func (r *Relayer) EnableRateLimitedWalIO(walIO *RateLimitedWalIO) {
+	if walIO == nil {
+		return
+	}
+
 	if r.started.Load() {
 		panic("cannot enable rate limiter after relay has started for namespace: " + r.namespace)
 	}
-	rlWalIO := NewRateLimitedWalIO(context.Background(), r.walIOHandler, rateLimit, burstSize)
-	r.walIOHandler = rlWalIO
 
+	r.walIOHandler = walIO
 	var currOffset []byte
 	if r.startOffset != nil {
 		currOffset = r.startOffset.Encode()
 	}
-	r.client = streamer.NewGrpcStreamerClient(r.grpcConn, r.namespace, rlWalIO, currOffset)
+	r.client = streamer.NewGrpcStreamerClient(r.grpcConn, r.namespace, walIO, currOffset)
 	r.logger.Info("[unisondb.relayer]",
 		slog.String("event_type", "relayer.rate_limiter.enabled"),
 		slog.String("namespace", r.namespace),
-		slog.Int("rate_limit", rateLimit),
-		slog.Int("burst_size", burstSize),
 	)
 }
 

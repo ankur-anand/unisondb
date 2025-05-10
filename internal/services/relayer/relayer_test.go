@@ -251,16 +251,23 @@ func TestRelayer_WithRateLimiterWalWriter(t *testing.T) {
 
 	assert.False(t, isRateLimited, "should be simple")
 
+	rel.EnableRateLimitedWalIO(nil)
+	_, isRateLimited = rel.walIOHandler.(*RateLimitedWalIO)
+
+	assert.False(t, isRateLimited, "should be simple")
+
 	rateLimit := 5
 	burstSize := 2
 
-	rel.EnableRateLimitedWalIO(rateLimit, burstSize)
+	rateLimiterIO := NewRateLimitedWalIO(t.Context(), rel.walIOHandler, rateLimit, burstSize)
+
+	rel.EnableRateLimitedWalIO(rateLimiterIO)
 
 	_, isRateLimited = rel.walIOHandler.(*RateLimitedWalIO)
 	assert.True(t, isRateLimited, "should be of type RateLimitedWalIO after EnableRateLimitedWalIO")
 	// before the start it should be allowed to change
 	rel.startOffset = &dbkernel.Offset{SegmentID: 10, Offset: 100}
-	rel.EnableRateLimitedWalIO(rateLimit, burstSize)
+	rel.EnableRateLimitedWalIO(rateLimiterIO)
 	_, isRateLimited = rel.walIOHandler.(*RateLimitedWalIO)
 	assert.True(t, isRateLimited, "should be of type RateLimitedWalIO after EnableRateLimitedWalIO")
 
@@ -271,6 +278,6 @@ func TestRelayer_WithRateLimiterWalWriter(t *testing.T) {
 		}
 	}()
 
-	rel.EnableRateLimitedWalIO(10, 5)
+	rel.EnableRateLimitedWalIO(rateLimiterIO)
 
 }
