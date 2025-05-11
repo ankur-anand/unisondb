@@ -69,12 +69,12 @@ variable "prometheus_version" {
 }
 
 variable "ops_per_namespace" {
-  default = 50
+  default = 100
   type    = number
 }
 
 variable "workers_per_namespace" {
-  default = 10
+  default = 20
   type    = number
 }
 

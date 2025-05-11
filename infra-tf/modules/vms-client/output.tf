@@ -14,9 +14,9 @@ output "droplet_ips" {
   }
 }
 
-output "droplet_private_ips" {
-  value = {
-    for name, droplet in digitalocean_droplet.do_droplets :
-    name => droplet.ipv4_address_private
-  }
-}
+# output "droplet_private_ips" {
+#   value = {
+#     for name, droplet in digitalocean_droplet.do_droplets :
+#     name => droplet.ipv4_address_private
+#   }
+# }

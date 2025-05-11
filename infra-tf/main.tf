@@ -72,6 +72,13 @@ variable "local_relayer_count" {
   type = number
 }
 
+variable "git_branch" {
+  description = "The git branch to use"
+  type        = string
+  default     = "main"
+}
+
+
 module "fuzzer" {
   source              = "./modules/vms-fuzzer"
   do_token            = var.do_token
@@ -100,17 +107,31 @@ variable "client_droplet_size" {
   default     = "s-1vcpu-1gb"
 }
 
+variable "ssh_private_key_path" {
+  description = "Path to the SSH private key used for connecting to droplets."
+  type        = string
+}
+
+variable "instance_count" {
+  description = "Number of instances to launch on each vm for replication"
+  type        = number
+}
+
+
 module "client" {
-  source       = "./modules/vms-client"
-  do_token     = var.do_token
-  ts_auth_key  = var.ts_auth_key
-  vpc_id       = module.vpc.vpc_id
-  central_ip   = module.fuzzer.droplet_private_ip
-  client_count = var.client_count
-  ob_token     = var.ob_token
-  ob_pass      = var.ob_pass
-  ob_user      = var.ob_user
-  droplet_size = var.client_droplet_size
+  source               = "./modules/vms-client"
+  do_token             = var.do_token
+  ts_auth_key          = var.ts_auth_key
+  vpc_id               = module.vpc.vpc_id
+  central_ip           = module.fuzzer.droplet_private_ip
+  client_count         = var.client_count
+  ob_token             = var.ob_token
+  ob_pass              = var.ob_pass
+  ob_user              = var.ob_user
+  droplet_size         = var.client_droplet_size
+  git_branch           = var.git_branch
+  ssh_private_key_path = var.ssh_private_key_path
+  instance_count       = var.instance_count
 }
 
 output "client" {

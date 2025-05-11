@@ -68,7 +68,7 @@ variable "ob_user" {
 }
 
 variable "ob_pass" {
-  description = "OpenVPN user password"
+  description = "OpenObserve user password"
   type        = string
   sensitive   = true
 }
@@ -77,6 +77,21 @@ variable "prometheus_version" {
   description = "The Prometheus version to install"
   type        = string
   default     = "2.53.4"
+}
+
+variable "git_branch" {
+  description = "The git branch to use"
+  type        = string
+}
+
+variable "ssh_private_key_path" {
+  description = "Path to the SSH private key used for connecting to droplets."
+  type        = string
+}
+
+variable "instance_count" {
+  description = "Number of instances to launch on each vm"
+  type        = number
 }
 
 locals {
