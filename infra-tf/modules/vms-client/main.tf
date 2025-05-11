@@ -44,6 +44,33 @@ resource "digitalocean_droplet" "do_droplets" {
     ob_user            = var.ob_user
     ob_pass            = var.ob_pass
     role               = "client"
+    branch             = var.git_branch
   })
+
+  connection {
+    type        = "ssh"
+    user        = "ankur"
+    private_key = file(var.ssh_private_key_path)
+    host        = self.ipv4_address
+  }
+
+  provisioner "file" {
+    source      = "${path.module}/generate_configs.sh"
+    destination = "/tmp/setup_unisondb.sh"
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "echo 'Waiting for cloud-init to complete...'",
+      "while [ ! -f /var/lib/cloud/instance/boot-finished ]; do sleep 5; done",
+      "echo 'cloud-init completed.'",
+      "chmod +x /tmp/setup_unisondb.sh",
+      "sudo CENTRAL_IP=${var.central_ip} INSTANCE_COUNT=${var.instance_count} USERNAME=ankur OB_TOKEN=${var.ob_token} OB_USER=${var.ob_user} OB_PASS=${var.ob_pass} ROLE=client /tmp/setup_unisondb.sh"
+    ]
+  }
+
+  lifecycle {
+    ignore_changes = [user_data]
+  }
 
 }

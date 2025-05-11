@@ -23,69 +23,6 @@ packages:
   - build-essential
   - liblmdb-dev
 
-write_files:
-  - path: /etc/unisondb/config.toml
-    permissions: '0644'
-    content: |
-      ## Port of the http server  
-      http_port = 4000  
-      pprof_enable = true  
-      
-      [grpc_config]  
-      port = 4001   
-      allow_insecure = true  
-      
-      [storage_config]  
-      base_dir = "/tmp/unisondb/server"  
-      namespaces = ["default", "tenant_1", "tenant_2"]  
-      bytes_per_sync = "1MB"  
-      segment_size = "16MB"  
-      arena_size = "4MB"
-      
-      [relayer_config.relayer1]
-      namespaces = ["default", "tenant_1", "tenant_2"]
-      upstream_address = "${central_ip}:4001"
-      segment_lag_threshold = 100
-      allow_insecure = true
-      
-      [pprof_config]  
-      enabled = true  
-      port = 6060  
-      
-      [log_config]  
-      log_level = "info"  
-      disable_timestamp = true
-      
-      [log_config.min_level_percents]  
-      debug = 100.0  
-      info  = 100.0  
-      warn  = 100.0  
-      error = 100.0  
-      
-      [fuzz_config]  
-      ops_per_namespace = 50  
-      workers_per_namespace = 10
-
-  - path: /etc/systemd/system/unisondb.service
-    permissions: '0644'
-    content: |
-      [Unit]
-      Description=UnisonDB Server
-      After=network.target
-
-      [Service]
-      ExecStart=/usr/local/bin/unisondb --config /etc/unisondb/config.toml relayer
-      WorkingDirectory=/opt/unisondb
-      Restart=on-failure
-      User=${username}
-      LimitNOFILE=65535
-      StandardOutput=journal
-      StandardError=journal
-      SyslogIdentifier=unisondb
-
-      [Install]
-      WantedBy=multi-user.target
-
   - path: /etc/sysctl.d/99-tailscale.conf
     permissions: '0644'
     content: |
@@ -100,46 +37,7 @@ write_files:
       Compress=yes
       SystemMaxUse=100M
       SystemKeepFree=10M
-
-  - path: /etc/prometheus/prometheus.yml
-    permissions: '0644'
-    content: |
-      global:
-        scrape_interval: 30s
-        external_labels:
-          instance: "${id}"
-
-      scrape_configs:
-        - job_name: "unisondb"
-          static_configs:
-            - targets: ["localhost:4000"]
-              labels:
-                instance: "${id}"
-                role: "${role}"
-
-      remote_write:
-        - url: "https://api.openobserve.ai/api/${ob_token}/prometheus/api/v1/write"
-          basic_auth:
-            username: "${ob_user}"
-            password: "${ob_pass}"
-
-  - path: /etc/systemd/system/prometheus.service
-    permissions: '0644'
-    content: |
-      [Unit]
-      Description=Prometheus
-      After=network.target
-
-      [Service]
-      ExecStart=/usr/local/bin/prometheus \
-        --config.file=/etc/prometheus/prometheus.yml \
-        --storage.tsdb.path=/opt/prometheus/data \
-        --web.listen-address=":9090"
-      Restart=on-failure
-      User=nobody
-
-      [Install]
-      WantedBy=multi-user.target
+      
 
 runcmd:
   - set -x
@@ -173,18 +71,15 @@ runcmd:
   - ln -sf /opt/prometheus/promtool /usr/local/bin/promtool
   - mkdir -p /opt/prometheus/data
   - chown -R nobody:nogroup /opt/prometheus
-  - systemctl daemon-reload
-  - systemctl enable prometheus
-  - systemctl start prometheus
 
   - export PATH=$PATH:/usr/local/go/bin:/opt/go/bin
   - export GOPATH=/opt/go
   - export GOCACHE=/opt/go/cache
   - git clone https://github.com/ankur-anand/unisondb.git /opt/unisondb
+  - cd /opt/unisondb && git checkout ${branch}
   - cd /opt/unisondb/cmd/unisondb && go build -tags fuzz -o /usr/local/bin/unisondb
   - chown ${username}:${username} /usr/local/bin/unisondb
+  - echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
+  - sudo sysctl -p
 
-  - systemctl daemon-reload
-  - systemctl enable unisondb
-  - systemctl start unisondb
   - echo "Bootstrapped ${username} on ${id}"
