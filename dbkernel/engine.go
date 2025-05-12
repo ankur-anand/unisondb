@@ -90,8 +90,10 @@ type Engine struct {
 	cancel   context.CancelFunc
 
 	// used for notification.
-	notifierMu   sync.RWMutex
-	appendNotify chan struct{}
+	coalesceFlag     atomic.Bool
+	coalesceDuration time.Duration
+	notifierMu       sync.RWMutex
+	appendNotify     chan struct{}
 }
 
 // NewStorageEngine initializes WAL, MemTable, and BtreeStore and returns an initialized Engine for a namespace.
@@ -522,12 +524,38 @@ func (e *Engine) writeOffset(offset *wal.Offset) {
 }
 
 func (e *Engine) notifyAppend() {
-	e.notifierMu.Lock()
-	defer e.notifierMu.Unlock()
-	if e.appendNotify != nil {
-		close(e.appendNotify)
+	if !e.config.WriteNotifyCoalescing.Enabled {
+		e.notifierMu.Lock()
+		defer e.notifierMu.Unlock()
+		if e.appendNotify != nil {
+			close(e.appendNotify)
+		}
+		e.appendNotify = make(chan struct{})
+		return
 	}
-	e.appendNotify = make(chan struct{})
+	if !e.coalesceFlag.CompareAndSwap(false, true) {
+		// Coalescing timer already running
+		return
+	}
+
+	go func() {
+		select {
+		case <-e.ctx.Done():
+			return
+		case <-time.After(e.coalesceDuration):
+		}
+
+		e.notifierMu.Lock()
+		defer e.notifierMu.Unlock()
+
+		e.notifierMu.Lock()
+		defer e.notifierMu.Unlock()
+		if e.appendNotify != nil {
+			close(e.appendNotify)
+		}
+		e.appendNotify = make(chan struct{})
+		e.coalesceFlag.Store(false)
+	}()
 }
 
 func (e *Engine) writeNilOffset() {

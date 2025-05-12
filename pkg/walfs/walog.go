@@ -1,6 +1,7 @@
 package walfs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 var (
@@ -20,6 +22,9 @@ var (
 	ErrFsync              = errors.New("fsync error")
 	ErrRecordTooLarge     = errors.New("record size exceeds maximum segment capacity")
 )
+
+// DeletionPredicate is a function that determines if a segment ID is safe to delete.
+type DeletionPredicate func(segID SegmentID) bool
 
 type WALogOptions func(*WALog)
 
@@ -48,6 +53,19 @@ func WithMSyncEveryWrite(enabled bool) WALogOptions {
 	}
 }
 
+// WithAutoCleanupPolicy configures the automatic segment cleanup policy for the WAL.
+// - maxAge: Segments older than this duration are eligible for deletion.
+// - minSegments: Minimum number of WAL segments to always retain, regardless of age.
+// - maxSegments: If the total number of segments exceeds this limit, older segments will be deleted irrespective of its age.
+func WithAutoCleanupPolicy(maxAge time.Duration, minSegments, maxSegments int, enable bool) WALogOptions {
+	return func(sm *WALog) {
+		sm.deletionMaxAge = maxAge
+		sm.deletionMinSegments = minSegments
+		sm.deletionMaxSegments = maxSegments
+		sm.enableAutoCleanup = enable
+	}
+}
+
 // WALog manages the lifecycle of each individual segments, including creation, rotation,
 // recovery, and read/write operations.
 type WALog struct {
@@ -65,6 +83,13 @@ type WALog struct {
 	mu             sync.RWMutex
 	currentSegment *Segment
 	segments       map[SegmentID]*Segment
+
+	deletionMaxAge      time.Duration
+	deletionMinSegments int
+	deletionMaxSegments int
+	enableAutoCleanup   bool
+	deletionMu          sync.Mutex
+	pendingDeletion     map[SegmentID]*Segment
 }
 
 // NewWALog returns an initialized WALog that manages the segments in the provided dir with the given ext.
@@ -466,4 +491,98 @@ func (wl *WALog) NewReaderWithStart(pos RecordPosition) (*Reader, error) {
 		segmentReaders: readers,
 		currentReader:  0,
 	}, nil
+}
+
+// StartPendingSegmentCleaner starts a background goroutine that periodically
+// inspects segments marked for pending deletion and attempts to safely remove them.
+// If there are any current reader it will mark it for deletion.
+func (wl *WALog) StartPendingSegmentCleaner(ctx context.Context,
+	interval time.Duration,
+	canDeleteFn func(segID SegmentID) bool,
+) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				wl.deletionMu.Lock()
+				for id, seg := range wl.pendingDeletion {
+					if canDeleteFn != nil && canDeleteFn(id) {
+						seg.MarkForDeletion()
+						if seg.refCount.Load() == 0 {
+							seg.cleanup()
+						}
+					}
+				}
+				wl.deletionMu.Unlock()
+			}
+		}
+	}()
+}
+
+// MarkSegmentsForDeletion identifies and queues WAL segments for deletion based on
+// their age and segment count retention constraints.
+func (wl *WALog) MarkSegmentsForDeletion() {
+	if !wl.enableAutoCleanup {
+		return
+	}
+
+	now := time.Now().UnixNano()
+	var candidates []*Segment
+
+	wl.mu.RLock()
+	clonedSegments := maps.Clone(wl.segments)
+	wl.mu.RUnlock()
+
+	for _, seg := range clonedSegments {
+		if !IsSealed(seg.GetFlags()) {
+			continue
+		}
+		age := now - seg.GetLastModifiedAt()
+		if age >= wl.deletionMaxAge.Nanoseconds() {
+			candidates = append(candidates, seg)
+		}
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].ID() < candidates[j].ID()
+	})
+
+	currentSegments := len(wl.segments)
+
+	if currentSegments <= wl.deletionMinSegments {
+		return
+	}
+
+	segmentsAboveMin := currentSegments - wl.deletionMinSegments
+	if segmentsAboveMin <= 0 {
+		return
+	}
+
+	segmentsToDelete := 0
+
+	if currentSegments > wl.deletionMaxSegments {
+		// delete enough to reach max limit.
+		segmentsToDelete = currentSegments - wl.deletionMaxSegments
+	} else {
+		// just reduce to minSegmentsToKeep.
+		segmentsToDelete = currentSegments - wl.deletionMinSegments
+	}
+
+	wl.deletionMu.Lock()
+	defer wl.deletionMu.Unlock()
+	// Queue segments for deletion.
+	for _, seg := range candidates {
+		if segmentsToDelete <= 0 {
+			break
+		}
+		if _, alreadyQueued := wl.pendingDeletion[seg.ID()]; !alreadyQueued {
+			wl.pendingDeletion[seg.ID()] = seg
+			segmentsToDelete--
+		}
+	}
 }
