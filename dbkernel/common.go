@@ -53,8 +53,8 @@ type EngineConfig struct {
 // from WAL writers to readers waiting for new data. This helps reduce notification
 // storms under high write throughput, as reader will still be able to read.
 type WriteNotifyCoalescingConfig struct {
-	Enabled  bool   `toml:"enabled"`
-	Duration string `toml:"duration"` // e.g., "5ms", "100ms"
+	Enabled  bool          `toml:"enabled"`
+	Duration time.Duration `toml:"duration"`
 }
 
 // NewDefaultEngineConfig returns an initialized default config for engine.

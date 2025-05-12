@@ -533,8 +533,8 @@ func (e *Engine) notifyAppend() {
 		e.appendNotify = make(chan struct{})
 		return
 	}
+
 	if !e.coalesceFlag.CompareAndSwap(false, true) {
-		// Coalescing timer already running
 		return
 	}
 
@@ -548,8 +548,6 @@ func (e *Engine) notifyAppend() {
 		e.notifierMu.Lock()
 		defer e.notifierMu.Unlock()
 
-		e.notifierMu.Lock()
-		defer e.notifierMu.Unlock()
 		if e.appendNotify != nil {
 			close(e.appendNotify)
 		}
