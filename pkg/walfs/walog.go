@@ -635,9 +635,11 @@ func (wl *WALog) NewReaderWithStart(pos RecordPosition) (*Reader, error) {
 		startOffset  int64 = segmentHeaderSize
 	)
 
-	for _, seg := range segments {
+	for i := len(segments) - 1; i >= 0; i-- {
+		seg := segments[i]
 		if seg.ID() < pos.SegmentID {
-			continue
+			// we’ve gone past the matching segment; stop
+			break
 		}
 		if seg.ID() == pos.SegmentID {
 			segmentFound = true
@@ -648,7 +650,8 @@ func (wl *WALog) NewReaderWithStart(pos RecordPosition) (*Reader, error) {
 				startOffset = pos.Offset
 			}
 		}
-		filtered = append(filtered, seg)
+		// prepend to preserve ascending order
+		filtered = append([]*Segment{seg}, filtered...)
 	}
 
 	if !segmentFound {
