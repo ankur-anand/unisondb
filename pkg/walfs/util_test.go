@@ -60,7 +60,7 @@ func TestReaderTracker_ConcurrentAccess(t *testing.T) {
 	rt := newReaderTracker()
 	var wg sync.WaitGroup
 	const total = 1000
-	
+
 	wg.Add(total)
 	for i := 0; i < total; i++ {
 		go func(id uint64) {
