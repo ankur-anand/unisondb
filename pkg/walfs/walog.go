@@ -54,8 +54,7 @@ func WithMSyncEveryWrite(enabled bool) WALogOptions {
 	}
 }
 
-// WithOnSegmentRotated registers a fn callback function that will be called
-// immediately after a WAL segment is rotated
+// WithOnSegmentRotated registers a fn callback function that will be called immediately after a WAL segment is rotated.
 func WithOnSegmentRotated(fn func()) WALogOptions {
 	return func(sm *WALog) {
 		if fn != nil {
@@ -487,9 +486,8 @@ func (wl *WALog) CleanupStalePendingSegments() {
 			wl.mu.Lock()
 			delete(wl.segments, id)
 			wl.mu.Unlock()
-			slog.Info("[unisondb.walfs]",
-				slog.String("event_type", "segment.cleanup.stale_entry"),
-				slog.Uint64("segment_id", uint64(id)),
+			slog.Debug("[unisondb.walfs]",
+				slog.String("event_type", "old.segment.cleanup"),
 				slog.String("path", seg.path),
 			)
 		}

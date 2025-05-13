@@ -136,6 +136,13 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 	}
 
 	engine.appendNotify = make(chan struct{})
+	if conf.WalConfig.AutoCleanup {
+		delPredicate := func(segID wal.SegID) bool {
+			currOff := engine.CurrentOffset()
+			return currOff.SegmentID > segID
+		}
+		engine.walIO.RunWalCleanup(ctx, conf.WalConfig.CleanupInterval, delPredicate)
+	}
 
 	return engine, nil
 }

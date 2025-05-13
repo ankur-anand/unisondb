@@ -221,6 +221,33 @@ func (ms *Server) SetupStorageConfig(ctx context.Context) error {
 	}
 
 	ms.storageConfig = storeConfig
+	return ms.setupWalCleanup(ctx)
+}
+
+func (ms *Server) setupWalCleanup(ctx context.Context) error {
+	if ms.cfg.Storage.WALCleanupConfig.Enabled {
+		cleanUpDur, err := time.ParseDuration(ms.cfg.Storage.WALCleanupConfig.Interval)
+		if err != nil {
+			return err
+		}
+		if cleanUpDur <= 1 {
+			return errors.New("invalid value for wal cleanup config: interval must be greater than 1")
+		}
+		ms.storageConfig.WalConfig.CleanupInterval = cleanUpDur
+
+		dur, err := time.ParseDuration(ms.cfg.Storage.WALCleanupConfig.MaxAge)
+		if err != nil {
+			return err
+		}
+		if dur <= 1 {
+			return errors.New("invalid value for wal cleanup config: max age must be greater than 1")
+		}
+		ms.storageConfig.WalConfig.AutoCleanup = true
+		ms.storageConfig.WalConfig.MaxAge = dur
+		ms.storageConfig.WalConfig.MaxSegment = ms.cfg.Storage.WALCleanupConfig.MaxSegments
+		ms.storageConfig.WalConfig.MinSegment = ms.cfg.Storage.WALCleanupConfig.MinSegments
+	}
+
 	return nil
 }
 

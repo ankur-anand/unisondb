@@ -1,9 +1,11 @@
 package wal
 
 import (
+	"context"
 	"io"
 	"log"
 	"log/slog"
+	"math/rand"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -15,22 +17,26 @@ import (
 )
 
 var (
-	walMetricsReadTotal       = append(packageKey, "wal", "read", "total")
-	walMetricsReaderReadTotal = append(packageKey, "wal", "reader", "next", "read", "total")
-	walMetricsAppendTotal     = append(packageKey, "wal", "append", "total")
-	walMetricsReadLatency     = append(packageKey, "wal", "read", "durations", "seconds")
-	walMetricsAppendLatency   = append(packageKey, "wal", "append", "durations", "seconds")
-	walMetricsReadErrors      = append(packageKey, "wal", "read", "errors", "total")
-	walMetricsAppendErrors    = append(packageKey, "wal", "append", "errors", "total")
-	walMetricsReadBytes       = append(packageKey, "wal", "read", "bytes", "total")
-	walMetricsAppendBytes     = append(packageKey, "wal", "append", "bytes", "total")
-	walMetricsFSyncTotal      = append(packageKey, "wal", "fsync", "total")
-	walMetricsFSyncErrors     = append(packageKey, "wal", "fsync", "errors", "total")
-	walMetricsFSyncDurations  = append(packageKey, "wal", "fsync", "durations", "seconds")
+	walMetricsReadTotal           = append(packageKey, "wal", "read", "total")
+	walMetricsReaderReadTotal     = append(packageKey, "wal", "reader", "next", "read", "total")
+	walMetricsAppendTotal         = append(packageKey, "wal", "append", "total")
+	walMetricsReadLatency         = append(packageKey, "wal", "read", "durations", "seconds")
+	walMetricsAppendLatency       = append(packageKey, "wal", "append", "durations", "seconds")
+	walMetricsReadErrors          = append(packageKey, "wal", "read", "errors", "total")
+	walMetricsAppendErrors        = append(packageKey, "wal", "append", "errors", "total")
+	walMetricsReadBytes           = append(packageKey, "wal", "read", "bytes", "total")
+	walMetricsAppendBytes         = append(packageKey, "wal", "append", "bytes", "total")
+	walMetricsFSyncTotal          = append(packageKey, "wal", "fsync", "total")
+	walMetricsFSyncErrors         = append(packageKey, "wal", "fsync", "errors", "total")
+	walMetricsFSyncDurations      = append(packageKey, "wal", "fsync", "durations", "seconds")
+	walMetricsSegmentRotatedTotal = append(packageKey, "wal", "segment", "rotated", "total")
+	walMetricNextReadEOFTotal     = append(packageKey, "wal", "reader", "next", "read", "EOF", "total")
 )
 
 // Offset is a type alias to underlying wal implementation.
 type Offset = walfs.RecordPosition
+
+type SegID = walfs.SegmentID
 
 func DecodeOffset(b []byte) *Offset {
 	pos, _ := walfs.DecodeRecordPosition(b)
@@ -46,12 +52,18 @@ type WalIO struct {
 
 func NewWalIO(dirname, namespace string, config *Config, m *metrics.Metrics) (*WalIO, error) {
 	config.applyDefaults()
+	l := []metrics.Label{{Name: "namespace", Value: namespace}}
+
+	callbackOnRotate := func() {
+		metrics.IncrCounterWithLabels(walMetricsSegmentRotatedTotal, 1, l)
+	}
 	wLog, err := walfs.NewWALog(dirname, ".seg", walfs.WithMaxSegmentSize(config.SegmentSize),
-		walfs.WithMSyncEveryWrite(config.FSync), walfs.WithBytesPerSync(int64(config.BytesPerSync)))
+		walfs.WithMSyncEveryWrite(config.FSync), walfs.WithBytesPerSync(int64(config.BytesPerSync)),
+		walfs.WithOnSegmentRotated(callbackOnRotate),
+		walfs.WithAutoCleanupPolicy(config.MaxAge, config.MinSegment, config.MaxSegment, config.AutoCleanup))
 	if err != nil {
 		return nil, err
 	}
-	l := []metrics.Label{{Name: "namespace", Value: namespace}}
 
 	return &WalIO{
 			appendLog: wLog,
@@ -59,6 +71,24 @@ func NewWalIO(dirname, namespace string, config *Config, m *metrics.Metrics) (*W
 			metrics:   m,
 		},
 		err
+}
+
+func (w *WalIO) RunWalCleanup(ctx context.Context, interval time.Duration, predicate walfs.DeletionPredicate) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				w.appendLog.MarkSegmentsForDeletion()
+			}
+		}
+	}()
+	jitter := rand.Intn(10)
+	dur := time.Duration(jitter)*time.Second + interval
+	w.appendLog.StartPendingSegmentCleaner(ctx, dur, predicate)
 }
 
 // Sync Flushes the wal using fsync.
@@ -129,7 +159,6 @@ func (r *Reader) Next() ([]byte, *Offset, error) {
 	if r.closed.Load() {
 		return nil, nil, io.EOF
 	}
-	r.metrics.IncrCounterWithLabels(walMetricsReaderReadTotal, 1, r.label)
 	startTime := time.Now()
 	defer func() {
 		r.metrics.MeasureSinceWithLabels(walMetricsReadLatency, startTime, r.label)
@@ -139,9 +168,13 @@ func (r *Reader) Next() ([]byte, *Offset, error) {
 		r.metrics.IncrCounterWithLabels(walMetricsReadErrors, 1, r.label)
 	}
 	if errors.Is(err, io.EOF) {
+		r.metrics.IncrCounterWithLabels(walMetricNextReadEOFTotal, 1, r.label)
 		r.Close()
 	}
-	r.metrics.IncrCounterWithLabels(walMetricsReadBytes, float32(len(value)), r.label)
+	if err == nil {
+		r.metrics.IncrCounterWithLabels(walMetricsReaderReadTotal, 1, r.label)
+		r.metrics.IncrCounterWithLabels(walMetricsReadBytes, float32(len(value)), r.label)
+	}
 	return value, off, err
 }
 

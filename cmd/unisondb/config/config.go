@@ -41,12 +41,21 @@ type GrpcConfig struct {
 }
 
 type StorageConfig struct {
-	BaseDir          string   `toml:"base_dir"`
-	Namespaces       []string `toml:"namespaces"`
-	BytesPerSync     string   `toml:"bytes_per_sync"`
-	SegmentSize      string   `toml:"segment_size"`
-	ArenaSize        string   `toml:"arena_size"`
-	WalFsyncInterval string   `toml:"wal_fsync_interval"`
+	BaseDir          string           `toml:"base_dir"`
+	Namespaces       []string         `toml:"namespaces"`
+	BytesPerSync     string           `toml:"bytes_per_sync"`
+	SegmentSize      string           `toml:"segment_size"`
+	ArenaSize        string           `toml:"arena_size"`
+	WalFsyncInterval string           `toml:"wal_fsync_interval"`
+	WALCleanupConfig WALCleanupConfig `toml:"wal_cleanup_config"`
+}
+
+type WALCleanupConfig struct {
+	Enabled     bool   `toml:"enabled"`
+	MaxAge      string `toml:"max_age"`
+	MinSegments int    `toml:"min_segments"`
+	MaxSegments int    `toml:"max_segments"`
+	Interval    string `toml:"interval"`
 }
 
 // WriteNotifyConfig controls coalescing of notifications from WAL writers to readers.
