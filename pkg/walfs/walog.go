@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"os"
 	"sort"
@@ -381,6 +382,7 @@ func (wl *WALog) StartPendingSegmentCleaner(ctx context.Context,
 					}
 				}
 				wl.deletionMu.Unlock()
+				wl.CleanupStalePendingSegments()
 			}
 		}
 	}()
@@ -457,6 +459,28 @@ func (wl *WALog) QueuedSegmentsForDeletion() map[SegmentID]*Segment {
 		segmentsCopy[id] = seg
 	}
 	return segmentsCopy
+}
+
+// CleanupStalePendingSegments scans pendingDeletion and segments maps.
+// If a segment's file no longer exists on disk, it removes those entries from both maps.
+func (wl *WALog) CleanupStalePendingSegments() {
+	wl.deletionMu.Lock()
+	defer wl.deletionMu.Unlock()
+
+	for id, seg := range wl.pendingDeletion {
+		if _, err := os.Stat(seg.path); os.IsNotExist(err) {
+			// deleted; remove from both maps
+			delete(wl.pendingDeletion, id)
+			wl.mu.Lock()
+			delete(wl.segments, id)
+			wl.mu.Unlock()
+			slog.Info("[unisondb.walfs]",
+				slog.String("event_type", "segment.cleanup.stale_entry"),
+				slog.Uint64("segment_id", uint64(id)),
+				slog.String("path", seg.path),
+			)
+		}
+	}
 }
 
 // Reader represents a high-level sequential reader over a WALog.

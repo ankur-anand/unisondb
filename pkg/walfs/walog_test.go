@@ -785,6 +785,30 @@ func TestWALog_StartPendingSegmentCleaner(t *testing.T) {
 	}
 }
 
+func TestWALog_CleanupStalePendingSegments(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal",
+		walfs.WithMaxSegmentSize(2<<20),
+		walfs.WithAutoCleanupPolicy(time.Millisecond*100, 1, 5, true))
+	assert.NoError(t, err)
+
+	for i := 0; i < 5; i++ {
+		_, err := wal.Write(make([]byte, 1024*1024))
+		assert.NoError(t, err)
+	}
+	wal.MarkSegmentsForDeletion()
+
+	deletionQueued := wal.QueuedSegmentsForDeletion()
+	wal.CleanupStalePendingSegments()
+
+	for segID := range deletionQueued {
+		_, stillPending := wal.QueuedSegmentsForDeletion()[segID]
+		assert.False(t, stillPending, "segment should be removed from pendingDeletion")
+		_, stillInSegments := wal.Segments()[segID]
+		assert.False(t, stillInSegments, "segment should be removed from segments map")
+	}
+}
+
 func BenchmarkSegmentManager_Write_NoSync(b *testing.B) {
 	tmpDir := b.TempDir()
 	manager, err := walfs.NewWALog(tmpDir, ".wal",
