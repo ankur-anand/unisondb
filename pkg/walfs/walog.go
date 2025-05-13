@@ -1,9 +1,11 @@
 package walfs
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"os"
 	"sort"
@@ -11,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 var (
@@ -20,6 +23,9 @@ var (
 	ErrFsync              = errors.New("fsync error")
 	ErrRecordTooLarge     = errors.New("record size exceeds maximum segment capacity")
 )
+
+// DeletionPredicate is a function that determines if a segment ID is safe to delete.
+type DeletionPredicate func(segID SegmentID) bool
 
 type WALogOptions func(*WALog)
 
@@ -48,6 +54,28 @@ func WithMSyncEveryWrite(enabled bool) WALogOptions {
 	}
 }
 
+// WithAutoCleanupPolicy configures the automatic segment cleanup policy for the WAL.
+// - maxAge: Segments older than this duration are eligible for deletion.
+// - minSegments: Minimum number of WAL segments to always retain, regardless of age.
+// - maxSegments: If the total number of segments exceeds this limit, older segments will be deleted irrespective of its age.
+func WithAutoCleanupPolicy(maxAge time.Duration, minSegments, maxSegments int, enable bool) WALogOptions {
+	return func(sm *WALog) {
+		if minSegments > 0 {
+			sm.minSegmentsToRetain = minSegments
+		}
+		if maxSegments > 0 {
+			sm.maxSegmentsToRetain = maxSegments
+		}
+		if maxAge > 0 {
+			sm.segmentMaxAge = maxAge
+		}
+		sm.segmentMaxAge = maxAge
+		sm.minSegmentsToRetain = minSegments
+		sm.maxSegmentsToRetain = maxSegments
+		sm.enableAutoCleanup = enable
+	}
+}
+
 // WALog manages the lifecycle of each individual segments, including creation, rotation,
 // recovery, and read/write operations.
 type WALog struct {
@@ -65,6 +93,13 @@ type WALog struct {
 	mu             sync.RWMutex
 	currentSegment *Segment
 	segments       map[SegmentID]*Segment
+
+	segmentMaxAge       time.Duration
+	minSegmentsToRetain int
+	maxSegmentsToRetain int
+	enableAutoCleanup   bool
+	deletionMu          sync.Mutex
+	pendingDeletion     map[SegmentID]*Segment
 }
 
 // NewWALog returns an initialized WALog that manages the segments in the provided dir with the given ext.
@@ -80,6 +115,11 @@ func NewWALog(dir string, ext string, opts ...WALogOptions) (*WALog, error) {
 		segments:            make(map[SegmentID]*Segment),
 		forceSyncEveryWrite: MsyncNone,
 		bytesPerSync:        0,
+		segmentMaxAge:       0,
+		minSegmentsToRetain: 0,
+		maxSegmentsToRetain: 0,
+		enableAutoCleanup:   false,
+		pendingDeletion:     make(map[SegmentID]*Segment),
 	}
 
 	for _, opt := range opts {
@@ -317,6 +357,130 @@ func (wl *WALog) rotateSegment() error {
 	wl.bytesPerSyncCalled.Store(0)
 	wl.segmentRotated.Add(1)
 	return nil
+}
+
+// StartPendingSegmentCleaner starts a background goroutine that periodically
+// inspects segments marked for pending deletion and attempts to safely remove them.
+// If there are any current reader it will mark it for deletion.
+func (wl *WALog) StartPendingSegmentCleaner(ctx context.Context,
+	interval time.Duration,
+	canDeleteFn func(segID SegmentID) bool,
+) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				wl.deletionMu.Lock()
+				for id, seg := range wl.pendingDeletion {
+					if canDeleteFn != nil && canDeleteFn(id) {
+						seg.MarkForDeletion()
+					}
+				}
+				wl.deletionMu.Unlock()
+				wl.CleanupStalePendingSegments()
+			}
+		}
+	}()
+}
+
+// MarkSegmentsForDeletion identifies and queues WAL segments for deletion based on
+// their age and segment count retention constraints.
+func (wl *WALog) MarkSegmentsForDeletion() {
+	if !wl.enableAutoCleanup {
+		return
+	}
+
+	wl.mu.RLock()
+	currentSegments := len(wl.segments)
+	clonedSegments := maps.Clone(wl.segments)
+	wl.mu.RUnlock()
+
+	if wl.minSegmentsToRetain > 0 && currentSegments <= wl.minSegmentsToRetain {
+		return
+	}
+
+	var candidates []*Segment
+	for _, seg := range clonedSegments {
+		if IsSealed(seg.GetFlags()) {
+			candidates = append(candidates, seg)
+		}
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].ID() < candidates[j].ID()
+	})
+
+	segmentsToDelete := 0
+
+	segmentsAboveMin := currentSegments - wl.minSegmentsToRetain
+	if segmentsAboveMin <= 0 {
+		return
+	}
+
+	if wl.maxSegmentsToRetain > 0 && currentSegments > wl.maxSegmentsToRetain {
+		segmentsToDelete = currentSegments - wl.maxSegmentsToRetain
+	} else if wl.segmentMaxAge > 0 {
+		now := time.Now().UnixNano()
+		for _, seg := range candidates {
+			if now-seg.GetLastModifiedAt() >= wl.segmentMaxAge.Nanoseconds() {
+				segmentsToDelete++
+			}
+		}
+	}
+
+	if segmentsToDelete == 0 {
+		return
+	}
+
+	wl.deletionMu.Lock()
+	defer wl.deletionMu.Unlock()
+
+	for _, seg := range candidates {
+		if segmentsToDelete <= 0 {
+			break
+		}
+		if _, alreadyQueued := wl.pendingDeletion[seg.ID()]; !alreadyQueued {
+			wl.pendingDeletion[seg.ID()] = seg
+			segmentsToDelete--
+		}
+	}
+}
+
+func (wl *WALog) QueuedSegmentsForDeletion() map[SegmentID]*Segment {
+	wl.deletionMu.Lock()
+	defer wl.deletionMu.Unlock()
+
+	segmentsCopy := make(map[SegmentID]*Segment, len(wl.segments))
+	for id, seg := range wl.pendingDeletion {
+		segmentsCopy[id] = seg
+	}
+	return segmentsCopy
+}
+
+// CleanupStalePendingSegments scans pendingDeletion and segments maps.
+// If a segment's file no longer exists on disk, it removes those entries from both maps.
+func (wl *WALog) CleanupStalePendingSegments() {
+	wl.deletionMu.Lock()
+	defer wl.deletionMu.Unlock()
+
+	for id, seg := range wl.pendingDeletion {
+		if _, err := os.Stat(seg.path); os.IsNotExist(err) {
+			// deleted; remove from both maps
+			delete(wl.pendingDeletion, id)
+			wl.mu.Lock()
+			delete(wl.segments, id)
+			wl.mu.Unlock()
+			slog.Info("[unisondb.walfs]",
+				slog.String("event_type", "segment.cleanup.stale_entry"),
+				slog.Uint64("segment_id", uint64(id)),
+				slog.String("path", seg.path),
+			)
+		}
+	}
 }
 
 // Reader represents a high-level sequential reader over a WALog.

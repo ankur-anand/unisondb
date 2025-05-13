@@ -1095,3 +1095,75 @@ func TestBtreeSyncInterval_Engine(t *testing.T) {
 		t.Errorf("callback timeout waiting for timer fsync")
 	}
 }
+
+func TestNotificationCoalesce(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	engine := &Engine{
+		ctx:          ctx,
+		notifierMu:   sync.RWMutex{},
+		appendNotify: make(chan struct{}),
+		coalesceFlag: atomic.Bool{},
+		config: &EngineConfig{
+			WriteNotifyCoalescing: WriteNotifyCoalescingConfig{
+				Enabled:  true,
+				Duration: 10 * time.Millisecond,
+			},
+		},
+	}
+
+	notChan := make(chan struct{})
+	engine.notifierMu.Lock()
+	engine.appendNotify = notChan
+	engine.notifierMu.Unlock()
+	dur := 10 * time.Millisecond
+	engine.coalesceDuration = dur
+
+	engine.notifyAppend()
+	start := time.Now()
+	select {
+	case <-notChan:
+		elapsed := time.Since(start)
+		if elapsed < dur {
+			t.Errorf("Notification arrived too early: %v", elapsed)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Errorf("Notification did not arrive within expected time")
+	}
+
+	notChan = make(chan struct{})
+	engine.notifierMu.Lock()
+	engine.appendNotify = notChan
+	engine.notifierMu.Unlock()
+	engine.coalesceFlag.Store(false)
+
+	engine.notifyAppend()
+	// should not block.
+	engine.notifyAppend()
+	engine.notifyAppend()
+
+	start = time.Now()
+	select {
+	case <-notChan:
+		elapsed := time.Since(start)
+		if elapsed < dur {
+			t.Errorf("Notification arrived too early: %v", elapsed)
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Errorf("Notification did not arrive within expected time")
+	}
+
+	notChan = make(chan struct{})
+	engine.notifierMu.Lock()
+	engine.appendNotify = notChan
+	engine.notifierMu.Unlock()
+	engine.config.WriteNotifyCoalescing.Enabled = false
+	engine.notifyAppend()
+
+	select {
+	case <-notChan:
+	case <-time.After(10 * time.Millisecond):
+		t.Errorf("Immediate notification did not occur when coalescing was disabled")
+	}
+}

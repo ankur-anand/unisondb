@@ -208,6 +208,18 @@ func (ms *Server) SetupStorageConfig(ctx context.Context) error {
 		storeConfig.ArenaSize = value
 	}
 
+	if ms.cfg.WriteNotifyConfig.Enabled {
+		dur, err := time.ParseDuration(ms.cfg.WriteNotifyConfig.MaxDelay)
+		if err != nil {
+			return err
+		}
+		if dur <= 1 {
+			return errors.New("invalid value for write notify config: max delay must be greater than 1")
+		}
+		storeConfig.WriteNotifyCoalescing.Enabled = true
+		storeConfig.WriteNotifyCoalescing.Duration = dur
+	}
+
 	ms.storageConfig = storeConfig
 	return nil
 }

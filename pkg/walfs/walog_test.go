@@ -2,6 +2,7 @@ package walfs_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -664,6 +665,147 @@ func TestReader_NextClosesOlderSegmentReaders(t *testing.T) {
 
 	for _, seg := range segmentRefs {
 		assert.False(t, seg.HasActiveReaders())
+	}
+}
+
+func TestWALog_MarkSegmentsForDeletion(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Run("honour_max_segment", func(t *testing.T) {
+		wal, err := walfs.NewWALog(tmpDir, ".wal",
+			walfs.WithMaxSegmentSize(2<<20),
+			walfs.WithAutoCleanupPolicy(time.Millisecond*100, 1, 3, true))
+		assert.NoError(t, err)
+		for i := 0; i < 50; i++ {
+			_, err := wal.Write(make([]byte, 1024*1024))
+			assert.NoError(t, err)
+		}
+
+		wal.MarkSegmentsForDeletion()
+		segments := wal.QueuedSegmentsForDeletion()
+		assert.Len(t, segments, 47, "only 3 segment is allowed to be kept")
+	})
+
+	t.Run("honour_min_segment", func(t *testing.T) {
+		wal, err := walfs.NewWALog(tmpDir, ".wal",
+			walfs.WithMaxSegmentSize(2<<20),
+			walfs.WithAutoCleanupPolicy(time.Millisecond*100, 10, 40, true))
+		assert.NoError(t, err)
+		for i := 0; i < 50; i++ {
+			_, err := wal.Write(make([]byte, 1024*1024))
+			assert.NoError(t, err)
+		}
+
+		wal.MarkSegmentsForDeletion()
+		segments := wal.QueuedSegmentsForDeletion()
+		assert.GreaterOrEqual(t, len(segments), 10, "at least 10 segment is allowed to be kept")
+	})
+
+	t.Run("cleanup_disabled", func(t *testing.T) {
+		wal, err := walfs.NewWALog(tmpDir, ".wal",
+			walfs.WithMaxSegmentSize(2<<20),
+			walfs.WithAutoCleanupPolicy(time.Millisecond*100, 1, 3, false))
+		assert.NoError(t, err)
+
+		for i := 0; i < 10; i++ {
+			_, err := wal.Write(make([]byte, 1024*1024))
+			assert.NoError(t, err)
+		}
+
+		wal.MarkSegmentsForDeletion()
+		segments := wal.QueuedSegmentsForDeletion()
+		assert.Len(t, segments, 0, "No segments should be queued when cleanup is disabled")
+	})
+
+	t.Run("latest_segment_not_deleted", func(t *testing.T) {
+		wal, err := walfs.NewWALog(tmpDir, ".wal",
+			walfs.WithMaxSegmentSize(2<<20),
+			walfs.WithAutoCleanupPolicy(time.Millisecond*100, 1, 2, true))
+		assert.NoError(t, err)
+
+		for i := 0; i < 10; i++ {
+			_, err := wal.Write(make([]byte, 1024*1024))
+			assert.NoError(t, err)
+		}
+
+		wal.MarkSegmentsForDeletion()
+		currentID := wal.Current().ID()
+		segments := wal.QueuedSegmentsForDeletion()
+
+		_, queued := segments[currentID]
+		assert.False(t, queued, "Current active segment should never be queued for deletion")
+	})
+
+	t.Run("age_based_deletion", func(t *testing.T) {
+		wal, err := walfs.NewWALog(tmpDir, ".wal",
+			walfs.WithMaxSegmentSize(2<<20),
+			walfs.WithAutoCleanupPolicy(time.Millisecond*10, 1, 100, true))
+		assert.NoError(t, err)
+
+		for i := 0; i < 5; i++ {
+			_, err := wal.Write(make([]byte, 1024*1024))
+			assert.NoError(t, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+
+		wal.MarkSegmentsForDeletion()
+		segments := wal.QueuedSegmentsForDeletion()
+		assert.Greater(t, len(segments), 0, "Old segments should be queued based on age")
+	})
+}
+
+func TestWALog_StartPendingSegmentCleaner(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal",
+		walfs.WithMaxSegmentSize(2<<20),
+		walfs.WithAutoCleanupPolicy(time.Millisecond*100, 1, 5, true))
+	assert.NoError(t, err)
+
+	for i := 0; i < 10; i++ {
+		_, err := wal.Write(make([]byte, 1024*1024))
+		assert.NoError(t, err)
+	}
+
+	wal.MarkSegmentsForDeletion()
+
+	canDeleteFn := func(segID walfs.SegmentID) bool {
+		return true
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	wal.StartPendingSegmentCleaner(ctx, 50*time.Millisecond, canDeleteFn)
+
+	time.Sleep(500 * time.Millisecond)
+
+	for id := range wal.QueuedSegmentsForDeletion() {
+		segmentPath := walfs.SegmentFileName(tmpDir, ".wal", id)
+		_, err := os.Stat(segmentPath)
+		assert.True(t, os.IsNotExist(err), fmt.Sprintf("Segment file %s should have been deleted", segmentPath))
+	}
+}
+
+func TestWALog_CleanupStalePendingSegments(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal",
+		walfs.WithMaxSegmentSize(2<<20),
+		walfs.WithAutoCleanupPolicy(time.Millisecond*100, 1, 5, true))
+	assert.NoError(t, err)
+
+	for i := 0; i < 5; i++ {
+		_, err := wal.Write(make([]byte, 1024*1024))
+		assert.NoError(t, err)
+	}
+	wal.MarkSegmentsForDeletion()
+
+	deletionQueued := wal.QueuedSegmentsForDeletion()
+	wal.CleanupStalePendingSegments()
+
+	for segID := range deletionQueued {
+		_, stillPending := wal.QueuedSegmentsForDeletion()[segID]
+		assert.False(t, stillPending, "segment should be removed from pendingDeletion")
+		_, stillInSegments := wal.Segments()[segID]
+		assert.False(t, stillInSegments, "segment should be removed from segments map")
 	}
 }
 

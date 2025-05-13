@@ -41,11 +41,20 @@ const (
 
 // EngineConfig embeds all the config needed for Engine.
 type EngineConfig struct {
-	ArenaSize          int64            `toml:"arena_size"`
-	WalConfig          wal.Config       `toml:"wal_config"`
-	BtreeConfig        kvdrivers.Config `toml:"btree_config"`
-	DBEngine           DBEngine         `toml:"db_engine"`
-	BTreeFlushInterval time.Duration    `toml:"btree_flush_interval"`
+	ArenaSize             int64                       `toml:"arena_size"`
+	WalConfig             wal.Config                  `toml:"wal_config"`
+	BtreeConfig           kvdrivers.Config            `toml:"btree_config"`
+	DBEngine              DBEngine                    `toml:"db_engine"`
+	BTreeFlushInterval    time.Duration               `toml:"btree_flush_interval"`
+	WriteNotifyCoalescing WriteNotifyCoalescingConfig `toml:"write_notify_coalescing"`
+}
+
+// WriteNotifyCoalescingConfig controls the coalescing of notifications
+// from WAL writers to readers waiting for new data. This helps reduce notification
+// storms under high write throughput, as reader will still be able to read.
+type WriteNotifyCoalescingConfig struct {
+	Enabled  bool          `toml:"enabled"`
+	Duration time.Duration `toml:"duration"`
 }
 
 // NewDefaultEngineConfig returns an initialized default config for engine.

@@ -28,6 +28,7 @@ type Config struct {
 	LogConfig          LogConfig              `toml:"log_config"`
 	Limiter            Limiter                `toml:"limiter"`
 	FuzzConfig         FuzzConfig             `toml:"fuzz_config"`
+	WriteNotifyConfig  WriteNotifyConfig      `toml:"write_notify_config"`
 }
 
 type GrpcConfig struct {
@@ -46,6 +47,12 @@ type StorageConfig struct {
 	SegmentSize      string   `toml:"segment_size"`
 	ArenaSize        string   `toml:"arena_size"`
 	WalFsyncInterval string   `toml:"wal_fsync_interval"`
+}
+
+// WriteNotifyConfig controls coalescing of notifications from WAL writers to readers.
+type WriteNotifyConfig struct {
+	Enabled  bool   `toml:"enabled"`
+	MaxDelay string `toml:"max_delay"`
 }
 
 // RelayConfig holds TLS and upstream gRPC config.
