@@ -41,7 +41,12 @@ type Config struct {
 	// Not the process, data will be still safe as os buffer persists.
 	FSync bool `toml:"fsync"`
 	// call FSync with at this interval.
-	SyncInterval time.Duration `toml:"sync_interval"`
+	SyncInterval    time.Duration `toml:"sync_interval"`
+	AutoCleanup     bool          `toml:"auto_cleanup"`
+	MaxAge          time.Duration `toml:"max_age"`
+	MinSegment      int           `toml:"min_segment"`
+	MaxSegment      int           `toml:"max_segment"`
+	CleanupInterval time.Duration `toml:"cleanup_interval"`
 }
 
 func NewDefaultConfig() *Config {
@@ -66,5 +71,8 @@ func (c *Config) applyDefaults() {
 	}
 	if c.SyncInterval == 0 {
 		c.SyncInterval = defaultSyncInterval
+	}
+	if c.CleanupInterval == 0 {
+		c.CleanupInterval = 5 * time.Minute
 	}
 }

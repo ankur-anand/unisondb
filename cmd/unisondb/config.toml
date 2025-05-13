@@ -12,10 +12,21 @@ ca_path = "../../certs/ca.crt"
 # StorageConfig stores all tunable parameters.
 [storage_config]
 base_dir = "/tmp/unisondb/server"   # Base directory for storage
-namespaces = ["default", "tenant_1", "tenant_2"]
+namespaces = ["default", "tenant_1", "tenant_2", "tenant_3", "tenant_4"]
 bytes_per_sync = "1MB"
 segment_size = "16MB"
 arena_size = "4MB"
+
+[write_notify_config]
+enabled = false
+max_delay = "20ms"
+
+[storage_config.wal_cleanup_config]
+interval = "5m"
+enabled = false
+max_age = "1h"
+min_segments = 5
+max_segments = 10
 
 [pprof_config]
 enabled = true
@@ -32,6 +43,6 @@ warn  = 100.0
 error = 100.0
 
 [fuzz_config]
-ops_per_namespace = 100
-workers_per_namespace = 20
-local_relayer_count = 100
+ops_per_namespace = 400
+workers_per_namespace = 50
+local_relayer_count = 1000

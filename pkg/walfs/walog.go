@@ -54,6 +54,15 @@ func WithMSyncEveryWrite(enabled bool) WALogOptions {
 	}
 }
 
+// WithOnSegmentRotated registers a fn callback function that will be called immediately after a WAL segment is rotated.
+func WithOnSegmentRotated(fn func()) WALogOptions {
+	return func(sm *WALog) {
+		if fn != nil {
+			sm.rotationCallback = fn
+		}
+	}
+}
+
 // WithAutoCleanupPolicy configures the automatic segment cleanup policy for the WAL.
 // - maxAge: Segments older than this duration are eligible for deletion.
 // - minSegments: Minimum number of WAL segments to always retain, regardless of age.
@@ -89,6 +98,7 @@ type WALog struct {
 	forceSyncEveryWrite MsyncOption
 	bytesPerSyncCalled  atomic.Int64
 	segmentRotated      atomic.Int64
+	rotationCallback    func()
 
 	mu             sync.RWMutex
 	currentSegment *Segment
@@ -120,6 +130,7 @@ func NewWALog(dir string, ext string, opts ...WALogOptions) (*WALog, error) {
 		maxSegmentsToRetain: 0,
 		enableAutoCleanup:   false,
 		pendingDeletion:     make(map[SegmentID]*Segment),
+		rotationCallback:    func() {},
 	}
 
 	for _, opt := range opts {
@@ -356,6 +367,7 @@ func (wl *WALog) rotateSegment() error {
 	wl.currentSegment = newSegment
 	wl.bytesPerSyncCalled.Store(0)
 	wl.segmentRotated.Add(1)
+	wl.rotationCallback()
 	return nil
 }
 
@@ -474,9 +486,8 @@ func (wl *WALog) CleanupStalePendingSegments() {
 			wl.mu.Lock()
 			delete(wl.segments, id)
 			wl.mu.Unlock()
-			slog.Info("[unisondb.walfs]",
-				slog.String("event_type", "segment.cleanup.stale_entry"),
-				slog.Uint64("segment_id", uint64(id)),
+			slog.Debug("[unisondb.walfs]",
+				slog.String("event_type", "old.segment.cleanup"),
 				slog.String("path", seg.path),
 			)
 		}
