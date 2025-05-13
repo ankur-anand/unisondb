@@ -175,6 +175,7 @@ func BenchmarkSegment(b *testing.B) {
 							}
 							count++
 						}
+						reader.Close()
 						if count != numEntries {
 							b.Fatalf("expected %d entries, got %d", numEntries, count)
 						}
