@@ -36,6 +36,8 @@ const (
 	segmentHeaderVersion = 1
 )
 
+var crcTable = crc32.MakeTable(crc32.Castagnoli)
+
 // SegmentHeader encodes all the necessary information about the segment file at the top of the file.
 // Its Size is 64 byte once encoded.
 type SegmentHeader struct {
@@ -724,8 +726,8 @@ func (r *SegmentReader) LastRecordPosition() *RecordPosition {
 }
 
 func crc32Checksum(header []byte, data []byte) uint32 {
-	sum := crc32.ChecksumIEEE(header)
-	return crc32.Update(sum, crc32.IEEETable, data)
+	sum := crc32.Checksum(header, crcTable)
+	return crc32.Update(sum, crcTable, data)
 }
 
 // SegmentFileName returns the file name of a Segment file.
