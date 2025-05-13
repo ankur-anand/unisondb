@@ -809,6 +809,25 @@ func TestWALog_CleanupStalePendingSegments(t *testing.T) {
 	}
 }
 
+func TestWALog_SegmentRotationCallback(t *testing.T) {
+	tmpDir := t.TempDir()
+	called := make(chan struct{})
+	callback := func() {
+		close(called)
+	}
+
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithOnSegmentRotated(callback))
+	assert.NoError(t, err)
+	err = wal.RotateSegment()
+	assert.NoError(t, err, "rotate segment should not return an error")
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Errorf("error waiting for the RotateSegment Callback")
+	}
+
+}
+
 func BenchmarkSegmentManager_Write_NoSync(b *testing.B) {
 	tmpDir := b.TempDir()
 	manager, err := walfs.NewWALog(tmpDir, ".wal",
