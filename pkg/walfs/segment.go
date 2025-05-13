@@ -181,7 +181,7 @@ type Segment struct {
 	state             atomic.Int64
 	markedForDeletion atomic.Bool
 	readerIDCounter   atomic.Uint64
-	activeReaders     sync.Map
+	activeReaders     *readerTracker
 	closeCond         *sync.Cond
 
 	writeMu    sync.RWMutex
@@ -217,7 +217,7 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		header:        make([]byte, recordHeaderSize),
 		mmapSize:      segmentSize,
 		syncOption:    MsyncNone,
-		activeReaders: sync.Map{},
+		activeReaders: newReaderTracker(),
 	}
 	s.state.Store(StateOpen)
 	s.closeCond = sync.NewCond(&sync.Mutex{})
@@ -571,12 +571,7 @@ func (seg *Segment) Close() error {
 }
 
 func (seg *Segment) HasActiveReaders() bool {
-	hasReaders := false
-	seg.activeReaders.Range(func(_, _ any) bool {
-		hasReaders = true
-		return false
-	})
-	return hasReaders
+	return seg.activeReaders.HasAny()
 }
 
 func (seg *Segment) WriteOffset() int64 {
@@ -622,8 +617,7 @@ func (seg *Segment) incrRef() {
 }
 
 func (seg *Segment) decrRef(id uint64) {
-	_, ok := seg.activeReaders.LoadAndDelete(id)
-	if ok {
+	if ok := seg.activeReaders.Remove(id); ok {
 		count := seg.refCount.Add(-1)
 		if count == 0 {
 			seg.closeCond.L.Lock()
@@ -635,7 +629,6 @@ func (seg *Segment) decrRef(id uint64) {
 		}
 	}
 }
-
 func (seg *Segment) MarkForDeletion() {
 	if seg.markedForDeletion.CompareAndSwap(false, true) {
 		if seg.refCount.Load() == 0 {
@@ -678,7 +671,7 @@ func (seg *Segment) NewReader() *SegmentReader {
 	}
 
 	id := seg.readerIDCounter.Add(1)
-	seg.activeReaders.Store(id, struct{}{})
+	seg.activeReaders.Add(id)
 	seg.incrRef()
 
 	reader := &SegmentReader{

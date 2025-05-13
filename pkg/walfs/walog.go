@@ -100,9 +100,16 @@ type WALog struct {
 	segmentRotated      atomic.Int64
 	rotationCallback    func()
 
+	// this mutex is used in the write path.
+	// it protects the writer path.
 	mu             sync.RWMutex
 	currentSegment *Segment
 	segments       map[SegmentID]*Segment
+
+	// in the read-path we will update the snapshot segment that reader can
+	// use exclusively.
+	// optimizes the read path and prevent Read-Stall Lock in hot path.
+	segmentSnapshot atomic.Pointer[[]*Segment]
 
 	segmentMaxAge       time.Duration
 	minSegmentsToRetain int
@@ -188,6 +195,7 @@ func (wl *WALog) recoverSegments() error {
 
 		wl.segments[1] = seg
 		wl.currentSegment = seg
+		wl.snapshotSegments()
 		return nil
 	}
 
@@ -203,10 +211,24 @@ func (wl *WALog) recoverSegments() error {
 			}
 		}
 		wl.segments[id] = seg
+		wl.snapshotSegments()
 		wl.currentSegment = seg
 	}
 
 	return nil
+}
+
+func (wl *WALog) snapshotSegments() {
+	segments := make([]*Segment, 0, len(wl.segments))
+	for _, seg := range wl.segments {
+		segments = append(segments, seg)
+	}
+
+	sort.Slice(segments, func(i, j int) bool {
+		return segments[i].ID() < segments[j].ID()
+	})
+
+	wl.segmentSnapshot.Store(&segments)
 }
 
 func (wl *WALog) Sync() error {
@@ -367,6 +389,7 @@ func (wl *WALog) rotateSegment() error {
 	wl.currentSegment = newSegment
 	wl.bytesPerSyncCalled.Store(0)
 	wl.segmentRotated.Add(1)
+	wl.snapshotSegments()
 	wl.rotationCallback()
 	return nil
 }
@@ -476,67 +499,62 @@ func (wl *WALog) QueuedSegmentsForDeletion() map[SegmentID]*Segment {
 // CleanupStalePendingSegments scans pendingDeletion and segments maps.
 // If a segment's file no longer exists on disk, it removes those entries from both maps.
 func (wl *WALog) CleanupStalePendingSegments() {
-	wl.deletionMu.Lock()
-	defer wl.deletionMu.Unlock()
 
+	toRemove := make(map[SegmentID]*Segment)
+
+	wl.deletionMu.Lock()
 	for id, seg := range wl.pendingDeletion {
 		if _, err := os.Stat(seg.path); os.IsNotExist(err) {
-			// deleted; remove from both maps
-			delete(wl.pendingDeletion, id)
-			wl.mu.Lock()
-			delete(wl.segments, id)
-			wl.mu.Unlock()
-			slog.Debug("[unisondb.walfs]",
-				slog.String("event_type", "old.segment.cleanup"),
-				slog.String("path", seg.path),
-			)
+			toRemove[id] = seg
 		}
 	}
+	wl.deletionMu.Unlock()
+
+	if len(toRemove) == 0 {
+		return
+	}
+
+	wl.mu.Lock()
+	for id, seg := range toRemove {
+		delete(wl.segments, id)
+		delete(wl.pendingDeletion, id)
+		slog.Debug("[unisondb.walfs]",
+			slog.String("event_type", "old.segment.cleanup"),
+			slog.String("path", seg.path),
+		)
+	}
+	wl.snapshotSegments()
+	wl.mu.Unlock()
 }
 
 // Reader represents a high-level sequential reader over a WALog.
 // It reads across all available WAL segments in order, automatically
 // advancing from one segment to the next.
 type Reader struct {
-	segmentReaders []*SegmentReader
-	currentReader  int
-	lastPos        *RecordPosition
+	segments []*Segment
+	// index in segments
+	segmentIndex  int
+	currentReader *SegmentReader
+	lastPos       *RecordPosition
+	startOffset   int64
 }
 
 // NewReader returns a new Reader that sequentially reads all segments in the WALog,
 // starting from the beginning (lowest SegmentID).
 func (wl *WALog) NewReader() *Reader {
-	wl.mu.RLock()
-	segments := maps.Clone(wl.segments)
-	wl.mu.RUnlock()
-
-	var ids []SegmentID
-	for id := range segments {
-		ids = append(ids, id)
-	}
-
-	sort.Slice(ids, func(i, j int) bool {
-		return ids[i] < ids[j]
-	})
-
-	var readers []*SegmentReader
-	for _, id := range ids {
-		if reader := segments[id].NewReader(); reader != nil {
-			readers = append(readers, reader)
-		}
-	}
+	segments := *wl.segmentSnapshot.Load()
 
 	return &Reader{
-		segmentReaders: readers,
-		currentReader:  0,
+		segments:      segments,
+		currentReader: nil,
 	}
 }
 
 // Close closes all segment readers to release their references.
 // IMPORTANT: This method MUST be called after the Reader is no longer needed.
 func (r *Reader) Close() {
-	for _, sr := range r.segmentReaders {
-		sr.Close()
+	if r.currentReader != nil {
+		r.currentReader.Close()
 	}
 }
 
@@ -544,20 +562,38 @@ func (r *Reader) Close() {
 // IMPORTANT: The returned `[]byte` is a slice of a memory-mapped file, so data must not be retained or modified.
 // If the data needs to be used beyond the lifetime of the segment, the caller MUST copy it.
 func (r *Reader) Next() ([]byte, *RecordPosition, error) {
-	for r.currentReader < len(r.segmentReaders) {
-		data, pos, err := r.segmentReaders[r.currentReader].Next()
+	for {
+		if r.currentReader == nil {
+			if r.segmentIndex >= len(r.segments) {
+				return nil, nil, io.EOF
+			}
+			seg := r.segments[r.segmentIndex]
+			r.segmentIndex++
+
+			reader := seg.NewReader()
+			if reader == nil {
+				continue
+			}
+			// make sure to advance to correct offset
+			if r.segmentIndex == 1 && r.startOffset > segmentHeaderSize {
+				reader.readOffset = r.startOffset
+			}
+			r.currentReader = reader
+		}
+
+		reader := r.currentReader
+		data, pos, err := reader.Next()
 		if err == nil {
-			r.lastPos = r.segmentReaders[r.currentReader].LastRecordPosition()
+			r.lastPos = reader.LastRecordPosition()
 			return data, pos, nil
 		}
 		if errors.Is(err, io.EOF) {
-			r.segmentReaders[r.currentReader].Close()
-			r.currentReader++
+			reader.Close()
+			r.currentReader = nil
 			continue
 		}
 		return nil, nil, err
 	}
-	return nil, nil, io.EOF
 }
 
 // SeekNext advances the reader by one record, discarding the data.
@@ -588,49 +624,34 @@ func (wl *WALog) NewReaderAfter(pos RecordPosition) (*Reader, error) {
 // If SegmentID is 0, the reader will begin from the very start of the WAL.
 func (wl *WALog) NewReaderWithStart(pos RecordPosition) (*Reader, error) {
 	if pos.SegmentID == 0 {
-		// interpreting SegmentID == 0 as: read from the beginning
 		return wl.NewReader(), nil
 	}
 
-	wl.mu.RLock()
-	segments := make([]*Segment, 0, len(wl.segments))
-	for _, seg := range wl.segments {
-		segments = append(segments, seg)
-	}
-	wl.mu.RUnlock()
-
-	sort.Slice(segments, func(i, j int) bool {
-		return segments[i].ID() < segments[j].ID()
-	})
+	segments := *wl.segmentSnapshot.Load()
 
 	var (
-		readers      []*SegmentReader
+		filtered     []*Segment
 		segmentFound bool
+		startOffset  int64 = segmentHeaderSize
 	)
 
-	for _, seg := range segments {
+	for i := len(segments) - 1; i >= 0; i-- {
+		seg := segments[i]
 		if seg.ID() < pos.SegmentID {
-			continue
+			// we’ve gone past the matching segment; stop
+			break
 		}
-		reader := seg.NewReader()
-		if reader == nil {
-			continue
-		}
-
 		if seg.ID() == pos.SegmentID {
 			segmentFound = true
-			size := seg.GetSegmentSize()
-			if pos.Offset > size {
+			if pos.Offset > seg.GetSegmentSize() {
 				return nil, ErrOffsetOutOfBounds
 			}
-
-			reader.readOffset = pos.Offset
-			if reader.readOffset <= segmentHeaderSize {
-				reader.readOffset = segmentHeaderSize
+			if pos.Offset > segmentHeaderSize {
+				startOffset = pos.Offset
 			}
 		}
-
-		readers = append(readers, reader)
+		// prepend to preserve ascending order
+		filtered = append([]*Segment{seg}, filtered...)
 	}
 
 	if !segmentFound {
@@ -638,7 +659,8 @@ func (wl *WALog) NewReaderWithStart(pos RecordPosition) (*Reader, error) {
 	}
 
 	return &Reader{
-		segmentReaders: readers,
-		currentReader:  0,
+		segments:      filtered,
+		startOffset:   startOffset,
+		currentReader: nil,
 	}, nil
 }

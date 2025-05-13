@@ -1001,7 +1001,7 @@ func TestSegmentReader_CloseOnlyOnce(t *testing.T) {
 	finalRef := seg.refCount.Load()
 	assert.Equal(t, afterClose, finalRef, "refCount should not decrement again after GC")
 
-	_, ok := seg.activeReaders.Load(id)
+	ok := seg.activeReaders.Contains(id)
 	assert.False(t, ok, "reader ID should be removed from activeReaders after Close()")
 }
 
