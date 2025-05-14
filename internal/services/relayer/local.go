@@ -55,9 +55,9 @@ func NewLocalWalRelayer(id int) *LocalWalRelayer {
 func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metricsTickInterval time.Duration) error {
 	rpInstance := replicator.NewReplicator(engine,
 		20,
-		100*time.Millisecond, n.lastOffset, "local")
+		1*time.Second, n.lastOffset, "local")
 
-	walReceiver := make(chan []*v1.WALRecord, 2)
+	walReceiver := make(chan []*v1.WALRecord, 100)
 	replicatorErrors := make(chan error, 2)
 	go func() {
 		err := rpInstance.Replicate(ctx, walReceiver)
