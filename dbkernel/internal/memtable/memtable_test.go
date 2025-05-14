@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
@@ -39,8 +40,7 @@ func setupMemTableWithLMDB(t *testing.T, capacity int64) (*MemTable, internal.BT
 		assert.NoError(t, err, "failed to close db")
 	})
 
-	tdir := os.TempDir()
-	walDir := filepath.Join(tdir, "wal_test")
+	walDir := filepath.Join(t.TempDir(), fmt.Sprintf("wal_test_%d", time.Now().UnixNano()))
 	err = os.MkdirAll(walDir, 0777)
 	assert.NoError(t, err)
 
@@ -73,8 +73,7 @@ func setupMemTableWithBoltDB(t *testing.T, capacity int64) (*MemTable, internal.
 		assert.NoError(t, err, "failed to close db")
 	})
 
-	tdir := os.TempDir()
-	walDir := filepath.Join(tdir, "wal_test")
+	walDir := filepath.Join(t.TempDir(), fmt.Sprintf("wal_test_%d", time.Now().UnixNano()))
 	err = os.MkdirAll(walDir, 0777)
 	assert.NoError(t, err)
 
