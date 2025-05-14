@@ -129,9 +129,7 @@ func (w *WalIO) Append(data []byte) (*Offset, error) {
 	startTime := time.Now()
 	defer func() {
 		duration := time.Since(startTime)
-		if rand.Float64() < 0.1 || duration > 10*time.Millisecond {
-			w.taggedScope.Histogram(metricWalWriteDuration, writeLatencyBuckets).RecordDuration(duration)
-		}
+		w.taggedScope.Histogram(metricWalWriteDuration, writeLatencyBuckets).RecordDuration(duration)
 	}()
 
 	off, err := w.appendLog.Write(data)
@@ -170,7 +168,7 @@ func (r *Reader) Next() ([]byte, *Offset, error) {
 	if err == nil {
 		duration := time.Since(startTime)
 		// we are sampling only 10% of fast-path reads, but always capture slow reads
-		if rand.Float64() < 0.1 || duration > 10*time.Millisecond {
+		if rand.Float64() < 0.05 || duration > 10*time.Millisecond {
 			r.taggedScope.Histogram(metricsWalReadDuration, readLatencyBuckets).RecordDuration(duration)
 		}
 		r.taggedScope.Counter(metricsWalReadTotal).Inc(1)
