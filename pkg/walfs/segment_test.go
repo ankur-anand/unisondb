@@ -166,6 +166,23 @@ func TestSegment_InvalidCRC(t *testing.T) {
 
 	seg.mmapData[pos.Offset] ^= 0xFF
 	_, _, err = seg.Read(pos.Offset)
+	assert.NoError(t, err)
+	seg.isSealed.Store(true)
+	_, _, err = seg.Read(pos.Offset)
+	assert.ErrorIs(t, err, ErrInvalidCRC)
+	seg.isSealed.Store(false)
+	_, _, err = seg.Read(pos.Offset)
+	assert.NoError(t, err)
+	err = seg.SealSegment()
+	assert.NoError(t, err)
+	_, _, err = seg.Read(pos.Offset)
+	assert.ErrorIs(t, err, ErrInvalidCRC)
+
+	assert.NoError(t, seg.Close())
+
+	seg, err = OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	_, _, err = seg.Read(pos.Offset)
 	assert.ErrorIs(t, err, ErrInvalidCRC)
 }
 
