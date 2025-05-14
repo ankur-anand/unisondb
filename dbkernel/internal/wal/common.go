@@ -5,10 +5,62 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/pkg/walfs"
+	"github.com/uber-go/tally/v4"
 )
 
 var (
-	packageKey = []string{"unisondb"}
+	fsyncLatencyBuckets = tally.DurationBuckets{
+		2 * time.Millisecond,
+		5 * time.Millisecond,
+		7 * time.Millisecond,
+		10 * time.Millisecond,
+		15 * time.Millisecond,
+		20 * time.Millisecond,
+		30 * time.Millisecond,
+		50 * time.Millisecond,
+		100 * time.Millisecond,
+		200 * time.Millisecond,
+		500 * time.Millisecond,
+		1 * time.Second,
+		5 * time.Second,
+		10 * time.Second,
+	}
+	readLatencyBuckets = tally.DurationBuckets{
+		500 * time.Microsecond,
+		1 * time.Millisecond,
+		2 * time.Millisecond,
+		3 * time.Millisecond,
+		5 * time.Millisecond,
+		7 * time.Millisecond,
+		10 * time.Millisecond,
+		15 * time.Millisecond,
+		25 * time.Millisecond,
+		50 * time.Millisecond,
+		100 * time.Millisecond,
+		200 * time.Millisecond,
+		500 * time.Millisecond,
+		1 * time.Second,
+		2 * time.Second,
+		5 * time.Second,
+	}
+
+	writeLatencyBuckets = tally.DurationBuckets{
+		1 * time.Millisecond,
+		2 * time.Millisecond,
+		3 * time.Millisecond,
+		5 * time.Millisecond,
+		10 * time.Millisecond,
+		15 * time.Millisecond,
+		25 * time.Millisecond,
+		50 * time.Millisecond,
+		75 * time.Millisecond,
+		100 * time.Millisecond,
+		200 * time.Millisecond,
+		500 * time.Millisecond,
+		1 * time.Second,
+		2 * time.Second,
+		5 * time.Second,
+	}
 )
 
 const (

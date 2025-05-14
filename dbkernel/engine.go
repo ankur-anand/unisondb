@@ -171,7 +171,7 @@ func (e *Engine) initStorage(dataDir, namespace string, conf *EngineConfig) erro
 	}
 	e.fileLock = fileLock
 
-	walIO, err := wal.NewWalIO(walDir, namespace, &conf.WalConfig, metrics.Default())
+	walIO, err := wal.NewWalIO(walDir, namespace, &conf.WalConfig)
 	if err != nil {
 		return err
 	}

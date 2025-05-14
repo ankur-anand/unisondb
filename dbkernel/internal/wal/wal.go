@@ -10,27 +10,23 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ankur-anand/unisondb/pkg/umetrics"
 	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
-	"github.com/hashicorp/go-metrics"
 	"github.com/pkg/errors"
 )
 
 var (
-	walMetricsReadTotal           = append(packageKey, "wal", "read", "total")
-	walMetricsReaderReadTotal     = append(packageKey, "wal", "reader", "next", "read", "total")
-	walMetricsAppendTotal         = append(packageKey, "wal", "append", "total")
-	walMetricsReadLatency         = append(packageKey, "wal", "read", "durations", "seconds")
-	walMetricsAppendLatency       = append(packageKey, "wal", "append", "durations", "seconds")
-	walMetricsReadErrors          = append(packageKey, "wal", "read", "errors", "total")
-	walMetricsAppendErrors        = append(packageKey, "wal", "append", "errors", "total")
-	walMetricsReadBytes           = append(packageKey, "wal", "read", "bytes", "total")
-	walMetricsAppendBytes         = append(packageKey, "wal", "append", "bytes", "total")
-	walMetricsFSyncTotal          = append(packageKey, "wal", "fsync", "total")
-	walMetricsFSyncErrors         = append(packageKey, "wal", "fsync", "errors", "total")
-	walMetricsFSyncDurations      = append(packageKey, "wal", "fsync", "durations", "seconds")
-	walMetricsSegmentRotatedTotal = append(packageKey, "wal", "segment", "rotated", "total")
-	walMetricNextReadEOFTotal     = append(packageKey, "wal", "reader", "next", "read", "EOF", "total")
+	metricWalWriteTotal        = "write_total"
+	metricWalWriteError        = "write_errors_total"
+	metricWalWriteDuration     = "write_duration_seconds"
+	metricsSegmentRotatedTotal = "segment_rotated_total"
+	metricsWalReadTotal        = "read_total"
+	metricsWalReadErrorTotal   = "read_error_total"
+	metricsWalReadDuration     = "read_durations_second"
+	metricsFSyncTotal          = "fsync_total"
+	metricsFSyncErrors         = "fsync_errors_total"
+	metricsFSyncDurations      = "fsync_durations_seconds"
 )
 
 // Offset is a type alias to underlying wal implementation.
@@ -45,17 +41,18 @@ func DecodeOffset(b []byte) *Offset {
 
 // WalIO provides a write and read to underlying file based wal store.
 type WalIO struct {
-	appendLog *walfs.WALog
-	label     []metrics.Label
-	metrics   *metrics.Metrics
+	appendLog   *walfs.WALog
+	namespace   string
+	taggedScope umetrics.Scope
 }
 
-func NewWalIO(dirname, namespace string, config *Config, m *metrics.Metrics) (*WalIO, error) {
+func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
 	config.applyDefaults()
-	l := []metrics.Label{{Name: "namespace", Value: namespace}}
-
+	taggedScope := umetrics.AutoScope().Tagged(map[string]string{
+		"namespace": namespace,
+	})
 	callbackOnRotate := func() {
-		metrics.IncrCounterWithLabels(walMetricsSegmentRotatedTotal, 1, l)
+		taggedScope.Counter(metricsSegmentRotatedTotal).Inc(1)
 	}
 	wLog, err := walfs.NewWALog(dirname, ".seg", walfs.WithMaxSegmentSize(config.SegmentSize),
 		walfs.WithMSyncEveryWrite(config.FSync), walfs.WithBytesPerSync(int64(config.BytesPerSync)),
@@ -66,9 +63,9 @@ func NewWalIO(dirname, namespace string, config *Config, m *metrics.Metrics) (*W
 	}
 
 	return &WalIO{
-			appendLog: wLog,
-			label:     l,
-			metrics:   m,
+			appendLog:   wLog,
+			namespace:   namespace,
+			taggedScope: taggedScope,
 		},
 		err
 }
@@ -93,14 +90,14 @@ func (w *WalIO) RunWalCleanup(ctx context.Context, interval time.Duration, predi
 
 // Sync Flushes the wal using fsync.
 func (w *WalIO) Sync() error {
-	w.metrics.IncrCounterWithLabels(walMetricsFSyncTotal, 1, w.label)
+	w.taggedScope.Counter(metricsFSyncTotal).Inc(1)
 	startTime := time.Now()
 	defer func() {
-		w.metrics.MeasureSinceWithLabels(walMetricsFSyncDurations, startTime, w.label)
+		w.taggedScope.Histogram(metricsFSyncDurations, fsyncLatencyBuckets).RecordDuration(time.Since(startTime))
 	}()
 	err := w.appendLog.Sync()
 	if err != nil {
-		w.metrics.IncrCounterWithLabels(walMetricsFSyncErrors, 1, w.label)
+		w.taggedScope.Counter(metricsFSyncErrors).Inc(1)
 	}
 	return err
 }
@@ -109,47 +106,49 @@ func (w *WalIO) Close() error {
 	err := w.Sync()
 	if err != nil {
 		slog.Error("[unisondb.wal] Fsync to log file failed]", "error", err)
-		w.metrics.IncrCounterWithLabels(walMetricsFSyncErrors, 1, w.label)
+		w.taggedScope.Counter(metricsFSyncErrors).Inc(1)
 	}
 	return w.appendLog.Close()
 }
 
 func (w *WalIO) Read(pos *Offset) ([]byte, error) {
-	w.metrics.IncrCounterWithLabels(walMetricsReadTotal, 1, w.label)
+	w.taggedScope.Counter(metricsWalReadTotal).Inc(1)
 	startTime := time.Now()
 	defer func() {
-		w.metrics.MeasureSinceWithLabels(walMetricsReadLatency, startTime, w.label)
+		w.taggedScope.Histogram(metricsWalReadDuration, readLatencyBuckets).RecordDuration(time.Since(startTime))
 	}()
 	value, err := w.appendLog.Read(*pos)
 	if err != nil {
-		w.metrics.IncrCounterWithLabels(walMetricsReadErrors, 1, w.label)
+		w.taggedScope.Counter(metricsWalReadErrorTotal).Inc(1)
 	}
-	w.metrics.IncrCounterWithLabels(walMetricsReadBytes, float32(len(value)), w.label)
 	return value, err
 }
 
 func (w *WalIO) Append(data []byte) (*Offset, error) {
-	w.metrics.IncrCounterWithLabels(walMetricsAppendTotal, 1, w.label)
+	w.taggedScope.Counter(metricWalWriteTotal).Inc(1)
 	startTime := time.Now()
 	defer func() {
-		w.metrics.MeasureSinceWithLabels(walMetricsAppendLatency, startTime, w.label)
+		duration := time.Since(startTime)
+		if rand.Float64() < 0.1 || duration > 10*time.Millisecond {
+			w.taggedScope.Histogram(metricWalWriteDuration, writeLatencyBuckets).RecordDuration(duration)
+		}
 	}()
+
 	off, err := w.appendLog.Write(data)
 	if errors.Is(err, walfs.ErrFsync) {
 		log.Fatalf("[unisondb.wal] write to log file failed: %v", err)
 	}
 	if err != nil {
-		w.metrics.IncrCounterWithLabels(walMetricsAppendErrors, 1, w.label)
+		w.taggedScope.Counter(metricWalWriteError).Inc(1)
 	}
-	w.metrics.IncrCounterWithLabels(walMetricsAppendBytes, float32(len(data)), w.label)
 	return &off, err
 }
 
 type Reader struct {
 	appendReader *walfs.Reader
-	label        []metrics.Label
-	metrics      *metrics.Metrics
 	closed       atomic.Bool
+	namespace    string
+	taggedScope  umetrics.Scope
 }
 
 // Next returns the next chunk data and its position in the WAL.
@@ -160,20 +159,21 @@ func (r *Reader) Next() ([]byte, *Offset, error) {
 		return nil, nil, io.EOF
 	}
 	startTime := time.Now()
-	defer func() {
-		r.metrics.MeasureSinceWithLabels(walMetricsReadLatency, startTime, r.label)
-	}()
 	value, off, err := r.appendReader.Next()
 	if err != nil && !errors.Is(err, io.EOF) {
-		r.metrics.IncrCounterWithLabels(walMetricsReadErrors, 1, r.label)
+		r.taggedScope.Counter(metricsWalReadTotal).Inc(1)
+		r.taggedScope.Counter(metricsWalReadErrorTotal).Inc(1)
 	}
 	if errors.Is(err, io.EOF) {
-		r.metrics.IncrCounterWithLabels(walMetricNextReadEOFTotal, 1, r.label)
 		r.Close()
 	}
 	if err == nil {
-		r.metrics.IncrCounterWithLabels(walMetricsReaderReadTotal, 1, r.label)
-		r.metrics.IncrCounterWithLabels(walMetricsReadBytes, float32(len(value)), r.label)
+		duration := time.Since(startTime)
+		// we are sampling only 10% of fast-path reads, but always capture slow reads
+		if rand.Float64() < 0.1 || duration > 10*time.Millisecond {
+			r.taggedScope.Histogram(metricsWalReadDuration, readLatencyBuckets).RecordDuration(duration)
+		}
+		r.taggedScope.Counter(metricsWalReadTotal).Inc(1)
 	}
 	return value, off, err
 }
@@ -189,8 +189,8 @@ func (r *Reader) Close() {
 func (w *WalIO) NewReader() (*Reader, error) {
 	return &Reader{
 		appendReader: w.appendLog.NewReader(),
-		label:        w.label,
-		metrics:      w.metrics,
+		namespace:    w.namespace,
+		taggedScope:  w.taggedScope,
 	}, nil
 }
 
@@ -199,8 +199,8 @@ func (w *WalIO) NewReaderWithStart(offset *Offset) (*Reader, error) {
 	reader, err := w.appendLog.NewReaderWithStart(*offset)
 	return &Reader{
 		appendReader: reader,
-		label:        w.label,
-		metrics:      w.metrics,
+		namespace:    w.namespace,
+		taggedScope:  w.taggedScope,
 	}, err
 }
 

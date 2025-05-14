@@ -1,47 +1,26 @@
 package wal_test
 
 import (
-	"bytes"
 	"io"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
-	"github.com/ankur-anand/unisondb/internal/etc"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/brianvoe/gofakeit/v7"
-	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/assert"
 )
 
 func setupWalTest(t *testing.T) *wal.WalIO {
 	dir := t.TempDir()
 
-	inm := metrics.NewInmemSink(1*time.Millisecond, time.Minute)
-	cfg := metrics.DefaultConfig("wal")
-	cfg.TimerGranularity = time.Second
-	cfg.EnableHostname = false
-	cfg.EnableRuntimeMetrics = true
-	m, err := metrics.New(cfg, inm)
-	if err != nil {
-		panic(err)
-	}
-
-	walInstance, err := wal.NewWalIO(dir, "test_namespace", wal.NewDefaultConfig(), m)
+	walInstance, err := wal.NewWalIO(dir, "test_namespace", wal.NewDefaultConfig())
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
 		err := walInstance.Close()
 		assert.NoError(t, err, "closing wal instance failed")
-		buf := new(bytes.Buffer)
-		err = etc.DumpStats(inm, buf)
-		assert.NoError(t, err, "failed to dump stats")
-		output := buf.String()
-		assert.Contains(t, output, "wal.fsync.total")
-		assert.Contains(t, output, "wal.append.total")
-		assert.Contains(t, output, "wal.read.total")
 	})
 
 	return walInstance
@@ -271,7 +250,7 @@ func TestWalIO_Suite(t *testing.T) {
 
 func TestReader_CloseMidway(t *testing.T) {
 	dir := t.TempDir()
-	walInstance, err := wal.NewWalIO(dir, "test_namespace", wal.NewDefaultConfig(), metrics.Default())
+	walInstance, err := wal.NewWalIO(dir, "test_namespace", wal.NewDefaultConfig())
 	assert.NoError(t, err)
 	defer walInstance.Close()
 
@@ -295,7 +274,7 @@ func TestReader_CloseMidway(t *testing.T) {
 
 func TestReader_AutoCloseOnEOF(t *testing.T) {
 	dir := t.TempDir()
-	walInstance, err := wal.NewWalIO(dir, "test_namespace", wal.NewDefaultConfig(), metrics.Default())
+	walInstance, err := wal.NewWalIO(dir, "test_namespace", wal.NewDefaultConfig())
 	assert.NoError(t, err)
 	defer walInstance.Close()
 

@@ -13,7 +13,6 @@ import (
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"
-	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -31,7 +30,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 	//walConfig.FSync = true
 	//walConfig.SyncInterval = 0
 	//walConfig.BytesPerSync = 0
-	walInstance, err := wal.NewWalIO(walDir, testNamespace, walConfig, metrics.Default())
+	walInstance, err := wal.NewWalIO(walDir, testNamespace, walConfig)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := walInstance.Close()
