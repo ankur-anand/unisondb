@@ -499,7 +499,6 @@ func (wl *WALog) QueuedSegmentsForDeletion() map[SegmentID]*Segment {
 // CleanupStalePendingSegments scans pendingDeletion and segments maps.
 // If a segment's file no longer exists on disk, it removes those entries from both maps.
 func (wl *WALog) CleanupStalePendingSegments() {
-
 	toRemove := make(map[SegmentID]*Segment)
 
 	wl.deletionMu.Lock()

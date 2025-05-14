@@ -71,7 +71,7 @@ func decodeSegmentHeader(buf []byte) (*SegmentHeader, error) {
 	}
 
 	crc := binary.LittleEndian.Uint32(buf[56:60])
-	computed := crc32.ChecksumIEEE(buf[0:56])
+	computed := crc32.Checksum(buf[0:56], crcTable)
 	if crc != computed {
 		return nil, fmt.Errorf("segment metadata CRC mismatch: expected %08x, got %08x", crc, computed)
 	}
@@ -184,6 +184,7 @@ type Segment struct {
 	activeReaders     *readerTracker
 	closeCond         *sync.Cond
 
+	isSealed   atomic.Bool
 	writeMu    sync.RWMutex
 	syncOption MsyncOption
 }
@@ -247,6 +248,7 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		if IsSealed(meta.Flags) {
 			// for the sealed Segment our active offset is already saved
 			offset = meta.WriteOffset
+			s.isSealed.Store(true)
 		} else {
 			// while we trust the write offset we are scanning the Segment
 			// to find the true end of valid data for safe appends,
@@ -290,9 +292,9 @@ func (seg *Segment) SealSegment() error {
 	flags |= FlagSealed
 	binary.LittleEndian.PutUint32(mmapData[40:44], flags)
 
-	crc := crc32.ChecksumIEEE(mmapData[0:56])
+	crc := crc32.Checksum(mmapData[0:56], crcTable)
 	binary.LittleEndian.PutUint32(mmapData[56:60], crc)
-
+	seg.isSealed.Store(true)
 	return nil
 }
 
@@ -331,7 +333,7 @@ func writeInitialMetadata(mmapData mmap.MMap) {
 	binary.LittleEndian.PutUint64(mmapData[24:32], segmentHeaderSize)
 	binary.LittleEndian.PutUint64(mmapData[32:40], 0)
 	binary.LittleEndian.PutUint32(mmapData[40:44], FlagActive)
-	crc := crc32.ChecksumIEEE(mmapData[0:56])
+	crc := crc32.Checksum(mmapData[0:56], crcTable)
 	binary.LittleEndian.PutUint32(mmapData[56:60], crc)
 }
 
@@ -435,7 +437,7 @@ func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
 	binary.LittleEndian.PutUint64(seg.mmapData[32:40], prevCount+1)
 	binary.LittleEndian.PutUint64(seg.mmapData[16:24], uint64(time.Now().UnixNano()))
 
-	crc := crc32.ChecksumIEEE(seg.mmapData[0:56])
+	crc := crc32.Checksum(seg.mmapData[0:56], crcTable)
 	binary.LittleEndian.PutUint32(seg.mmapData[56:60], crc)
 
 	// MSync if option is set
@@ -489,10 +491,19 @@ func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
 
 	data := seg.mmapData[offset+recordHeaderSize : offset+recordHeaderSize+dataSize]
 
-	savedSum := binary.LittleEndian.Uint32(header[:4])
-	computedSum := crc32Checksum(header[4:], data)
-	if savedSum != computedSum {
-		return nil, nil, ErrInvalidCRC
+	// sealed segments are immutable and may have been recovered
+	// from disk after a crash or shutdown. CRC validation ensures that data
+	// persisted to disk is still intact and wasn't partially written or corrupted.
+	// for active segment, we do one validation at start if not sealed, else it's in the
+	// same process memory, so having corruption of the same byte is very unlikely, until
+	// done from some external forces.
+	// doing this in the hot-path is CPU intensive and most of the read are towards the tail.
+	if seg.isSealed.Load() {
+		savedSum := binary.LittleEndian.Uint32(header[:4])
+		computedSum := crc32Checksum(header[4:], data)
+		if savedSum != computedSum {
+			return nil, nil, ErrInvalidCRC
+		}
 	}
 
 	next := &RecordPosition{
