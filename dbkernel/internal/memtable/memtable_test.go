@@ -15,7 +15,6 @@ import (
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/dgraph-io/badger/v4/y"
-	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -45,7 +44,7 @@ func setupMemTableWithLMDB(t *testing.T, capacity int64) (*MemTable, internal.BT
 	err = os.MkdirAll(walDir, 0777)
 	assert.NoError(t, err)
 
-	walInstance, err := wal.NewWalIO(walDir, testNamespace, wal.NewDefaultConfig(), metrics.Default())
+	walInstance, err := wal.NewWalIO(walDir, testNamespace, wal.NewDefaultConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := walInstance.Close()
@@ -79,7 +78,7 @@ func setupMemTableWithBoltDB(t *testing.T, capacity int64) (*MemTable, internal.
 	err = os.MkdirAll(walDir, 0777)
 	assert.NoError(t, err)
 
-	walInstance, err := wal.NewWalIO(walDir, testNamespace, wal.NewDefaultConfig(), metrics.Default())
+	walInstance, err := wal.NewWalIO(walDir, testNamespace, wal.NewDefaultConfig())
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		err := walInstance.Close()

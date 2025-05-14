@@ -24,6 +24,7 @@ import (
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
 	"github.com/ankur-anand/unisondb/pkg/logutil"
 	"github.com/ankur-anand/unisondb/pkg/svcutils"
+	"github.com/ankur-anand/unisondb/pkg/umetrics"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
 	v1Streamer "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"github.com/hashicorp/go-metrics"
@@ -32,6 +33,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	promreporter "github.com/uber-go/tally/v4/prometheus"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
@@ -169,10 +171,33 @@ func (ms *Server) InitTelemetry(ctx context.Context) error {
 	defaultConfig.EnableHostname = false
 	defaultConfig.EnableRuntimeMetrics = false
 	_, err = metrics.NewGlobal(defaultConfig, sink)
+
 	if err != nil {
 		return err
 	}
+
 	streamer.RegisterMetrics()
+	reporter := promreporter.NewReporter(promreporter.Options{
+		Registerer: prometheus.DefaultRegisterer,
+		Gatherer:   prometheus.DefaultGatherer,
+	})
+
+	closer, err := umetrics.Initialize(umetrics.Options{
+		Prefix:         "unisondb",
+		Reporter:       reporter,
+		ReportInterval: 10 * time.Second,
+		CommonTags:     nil,
+	})
+	if err != nil {
+		return err
+	}
+
+	ms.DeferCallback = append(ms.DeferCallback, func(ctx context.Context) {
+		err := closer.Close()
+		if err != nil {
+			slog.Error("[unisondb.cliapp] tally.Closer: failed", "error", err)
+		}
+	})
 	return nil
 }
 

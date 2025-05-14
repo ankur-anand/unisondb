@@ -6,14 +6,13 @@ import (
 	"testing"
 
 	"github.com/brianvoe/gofakeit/v7"
-	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/assert"
 )
 
 func setupWalTest(t *testing.T) *WalIO {
 	dir := t.TempDir()
 
-	walInstance, err := NewWalIO(dir, "test_namespace", NewDefaultConfig(), metrics.Default())
+	walInstance, err := NewWalIO(dir, "test_namespace", NewDefaultConfig())
 	assert.NoError(t, err)
 
 	t.Cleanup(func() {
