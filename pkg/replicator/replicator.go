@@ -3,7 +3,6 @@ package replicator
 import (
 	"context"
 	"errors"
-	"hash/crc32"
 	"io"
 	"time"
 
@@ -144,9 +143,10 @@ func (r *Replicator) replicateFromReader(ctx context.Context, recordsChan chan<-
 		}
 
 		walRecord := &v1.WALRecord{
-			Offset:        pos.Encode(),
-			Record:        value,
-			Crc32Checksum: crc32.ChecksumIEEE(value),
+			Offset: pos.Encode(),
+			Record: value,
+			// TODO: Get From the WAL Reader itself. Don't calculate here.
+			//Crc32Checksum: crc32.Checksum(value, crcTable),
 		}
 
 		batch = append(batch, walRecord)
