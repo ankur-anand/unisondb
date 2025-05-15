@@ -564,6 +564,21 @@ func (ms *Server) RunFuzzer(ctx context.Context) error {
 		)
 	}
 
+	var delay time.Duration
+	var err error
+	if ms.cfg.FuzzConfig.StartupDelay != "" {
+		delay, err = time.ParseDuration(ms.cfg.FuzzConfig.StartupDelay)
+		if err != nil {
+			return err
+		}
+	}
+	if delay > 0 {
+		slog.Info("[unisondb.cliapp]",
+			slog.String("event_type", "FUZZER.start.delayed"),
+			slog.Duration("delay", delay))
+		time.Sleep(delay)
+	}
+
 	g, ctx := errgroup.WithContext(ctx)
 
 	for _, engine := range ms.engines {
