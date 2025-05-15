@@ -91,6 +91,9 @@ type FuzzConfig struct {
 	OpsPerNamespace     int `toml:"ops_per_namespace"`
 	WorkersPerNamespace int `toml:"workers_per_namespace"`
 	LocalRelayerCount   int `toml:"local_relayer_count"`
+	// this is delay that gets introduced in fuzzing.
+	// this lets the infra to come up.
+	StartupDelay string `toml:"startup_delay"`
 }
 
 type PProfConfig struct {
