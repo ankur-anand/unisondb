@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/PowerDNS/lmdb-go/lmdb"
-	"github.com/hashicorp/go-metrics"
 )
 
 // LMDBTxnQueue encapsulates LMDB Transactions and provides an API that allow multiple
@@ -17,7 +16,7 @@ import (
 // Caller should call Commit in the end to finish any pending Txn not flushed via maxBatchSize.
 // Single instance of Txn are not concurrent safe.
 type LMDBTxnQueue struct {
-	label           []metrics.Label
+	mt              *MetricsTracker
 	db              lmdb.DBI
 	env             *lmdb.Env
 	err             error
@@ -35,7 +34,7 @@ func (l *LmdbEmbed) NewTxnQueue(maxBatchSize int) *LMDBTxnQueue {
 		env:          l.env,
 		db:           l.db,
 		maxBatchSize: maxBatchSize,
-		label:        l.label,
+		mt:           l.mt,
 		opsQueue:     make([]func(*lmdb.Txn) error, 0, maxBatchSize),
 		stats:        &TxnStats{},
 	}
@@ -334,11 +333,6 @@ func (lq *LMDBTxnQueue) flushBatch() error {
 
 	startTime := time.Now()
 
-	metrics.IncrCounterWithLabels(mTxnFlushTotal, 1, lq.label)
-	defer func() {
-		metrics.MeasureSinceWithLabels(mTxnFlushLatency, startTime, lq.label)
-	}()
-
 	txn, err := lq.env.BeginTxn(nil, 0)
 	if err != nil {
 		return err
@@ -360,10 +354,10 @@ func (lq *LMDBTxnQueue) flushBatch() error {
 	err = txn.Commit()
 
 	if lq.err == nil {
-		metrics.IncrCounterWithLabels(mTxnFlushBatchSize, float32(len(lq.opsQueue)), lq.label)
-		metrics.IncrCounterWithLabels(mSetTotal, lq.putOps, lq.label)
-		metrics.IncrCounterWithLabels(mDelTotal, lq.deleteOps, lq.label)
-		metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, lq.entriesModified, lq.label)
+		lq.mt.RecordFlush(len(lq.opsQueue), startTime)
+		lq.mt.RecordBatchOps(OpSet, int(lq.putOps))
+		lq.mt.RecordBatchOps(OpDelete, int(lq.deleteOps))
+		lq.mt.RecordWriteUnits(int(lq.entriesModified))
 		lq.stats.EntriesModified += lq.entriesModified
 		lq.stats.DeleteOps += lq.deleteOps
 		lq.stats.PutOps += lq.putOps
@@ -371,6 +365,8 @@ func (lq *LMDBTxnQueue) flushBatch() error {
 		lq.putOps = 0
 		lq.deleteOps = 0
 		lq.entriesModified = 0
+	} else {
+		lq.mt.RecordError(TxnCommit)
 	}
 	return err
 }

@@ -9,7 +9,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/hashicorp/go-metrics"
 	"go.etcd.io/bbolt"
 )
 
@@ -17,9 +16,9 @@ import (
 type BoltDBEmbed struct {
 	db        *bbolt.DB
 	namespace []byte
-	label     []metrics.Label
 	conf      Config
 	path      string
+	mt        *MetricsTracker
 }
 
 func NewBoltdb(path string, conf Config) (*BoltDBEmbed, error) {
@@ -27,10 +26,6 @@ func NewBoltdb(path string, conf Config) (*BoltDBEmbed, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := []metrics.Label{{Name: "namespace", Value: conf.Namespace}, {
-		Name:  "db",
-		Value: "bolt",
-	}}
 	err = db.Update(func(tx *bbolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte(conf.Namespace))
 		if err != nil {
@@ -41,9 +36,9 @@ func NewBoltdb(path string, conf Config) (*BoltDBEmbed, error) {
 	})
 	return &BoltDBEmbed{db: db,
 		namespace: []byte(conf.Namespace),
-		label:     l,
 		conf:      conf,
 		path:      path,
+		mt:        NewMetricsTracker("bolt", conf.Namespace),
 	}, err
 }
 
@@ -57,14 +52,7 @@ func (b *BoltDBEmbed) Close() error {
 
 // Set associates a value with a key within a specific namespace.
 func (b *BoltDBEmbed) Set(key []byte, value []byte) error {
-	metrics.IncrCounterWithLabels(mSetTotal, 1, b.label)
-	metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, 1, b.label)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mSetLatency, startTime, b.label)
-	}()
-
-	return b.db.Update(func(tx *bbolt.Tx) error {
+	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
 			return ErrBucketNotFound
@@ -74,18 +62,13 @@ func (b *BoltDBEmbed) Set(key []byte, value []byte) error {
 
 		return bucket.Put(key, storedValue)
 	})
+
+	return err
 }
 
 // SetMany associates multiple values with corresponding keys within a namespace.
 func (b *BoltDBEmbed) SetMany(keys [][]byte, value [][]byte) error {
-	metrics.IncrCounterWithLabels(mSetTotal, 1, b.label)
-	metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, float32(len(keys)), b.label)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mSetLatency, startTime, b.label)
-	}()
-
-	return b.db.Update(func(tx *bbolt.Tx) error {
+	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
 			return ErrBucketNotFound
@@ -101,17 +84,13 @@ func (b *BoltDBEmbed) SetMany(keys [][]byte, value [][]byte) error {
 		}
 		return nil
 	})
+
+	return err
 }
 
 // SetChunks stores a value that has been split into chunks, associating them with a single key.
 func (b *BoltDBEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) error {
-	metrics.IncrCounterWithLabels(mSetTotal, 1, b.label)
-	metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, float32(len(chunks))+1, b.label)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mSetLatency, startTime, b.label)
-	}()
-	return b.db.Update(func(tx *bbolt.Tx) error {
+	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
 			return ErrBucketNotFound
@@ -156,6 +135,8 @@ func (b *BoltDBEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) er
 
 		return nil
 	})
+
+	return err
 }
 
 // SetManyRowColumns update/insert multiple rows and the provided columnEntries to the row.
@@ -163,11 +144,6 @@ func (b *BoltDBEmbed) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []
 	if len(rowKeys) != len(columnEntriesPerRow) {
 		return ErrInvalidArguments
 	}
-
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mSetLatency, startTime, b.label)
-	}()
 
 	totalColumns := 0
 	err := b.db.Update(func(tx *bbolt.Tx) error {
@@ -199,8 +175,6 @@ func (b *BoltDBEmbed) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []
 		return nil
 	})
 
-	metrics.IncrCounterWithLabels(mSetTotal, 1, b.label)
-	metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, float32(totalColumns+len(rowKeys)), b.label)
 	return err
 }
 
@@ -209,11 +183,6 @@ func (b *BoltDBEmbed) DeleteManyRowColumns(rowKeys [][]byte, columnEntriesPerRow
 	if len(rowKeys) != len(columnEntriesPerRow) {
 		return ErrInvalidArguments
 	}
-
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mDelLatency, startTime, b.label)
-	}()
 
 	totalColumns := 0
 	err := b.db.Update(func(tx *bbolt.Tx) error {
@@ -245,17 +214,11 @@ func (b *BoltDBEmbed) DeleteManyRowColumns(rowKeys [][]byte, columnEntriesPerRow
 		return nil
 	})
 
-	metrics.IncrCounterWithLabels(mDelTotal, 1, b.label)
-	metrics.IncrCounterWithLabels(mDelTotal, float32(totalColumns+len(rowKeys)), b.label)
 	return err
 }
 
 // DeleteEntireRows deletes all the columns associated with all the rowKeys.
 func (b *BoltDBEmbed) DeleteEntireRows(rowKeys [][]byte) (int, error) {
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mDelLatency, startTime, b.label)
-	}()
 	columnsDeleted := -len(rowKeys)
 	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
@@ -294,20 +257,12 @@ func (b *BoltDBEmbed) DeleteEntireRows(rowKeys [][]byte) (int, error) {
 		return nil
 	})
 
-	metrics.IncrCounterWithLabels(mDelTotal, 1, b.label)
-	metrics.IncrCounterWithLabels(mDelTotal, float32(columnsDeleted+len(rowKeys)), b.label)
 	return columnsDeleted, err
 }
 
 // Delete deletes a value with a key within a specific namespace.
 func (b *BoltDBEmbed) Delete(key []byte) error {
-	metrics.IncrCounterWithLabels(mDelTotal, 1, b.label)
-
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mDelLatency, startTime, b.label)
-	}()
-	return b.db.Update(func(tx *bbolt.Tx) error {
+	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
 			return ErrBucketNotFound
@@ -321,7 +276,6 @@ func (b *BoltDBEmbed) Delete(key []byte) error {
 		flag := storedValue[0]
 		switch flag {
 		case kvValue:
-			metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, 1, b.label)
 			return bucket.Delete(key)
 
 		case chunkedValue:
@@ -330,7 +284,6 @@ func (b *BoltDBEmbed) Delete(key []byte) error {
 			}
 
 			chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
-			metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, float32(chunkCount), b.label)
 
 			for i := 0; i < int(chunkCount); i++ {
 				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
@@ -344,16 +297,13 @@ func (b *BoltDBEmbed) Delete(key []byte) error {
 
 		return ErrInvalidOpsForValueType
 	})
+
+	return err
 }
 
 // DeleteMany delete multiple values with corresponding keys within a namespace.
 func (b *BoltDBEmbed) DeleteMany(keys [][]byte) error {
-	metrics.IncrCounterWithLabels(mDelTotal, 1, b.label)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mDelLatency, startTime, b.label)
-	}()
-	return b.db.Update(func(tx *bbolt.Tx) error {
+	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
 			return ErrBucketNotFound
@@ -367,7 +317,6 @@ func (b *BoltDBEmbed) DeleteMany(keys [][]byte) error {
 			flag := storedValue[0]
 			switch flag {
 			case kvValue:
-				metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, float32(1), b.label)
 				if err := bucket.Delete(key); err != nil {
 					return err
 				}
@@ -384,11 +333,12 @@ func (b *BoltDBEmbed) DeleteMany(keys [][]byte) error {
 		}
 		return nil
 	})
+
+	return err
 }
 
 func (b *BoltDBEmbed) deleteChunk(key []byte, storedValue []byte, bucket *bbolt.Bucket) error {
 	chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
-	metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, float32(chunkCount), b.label)
 	for i := 0; i < int(chunkCount); i++ {
 		chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
 		if err := bucket.Delete([]byte(chunkKey)); err != nil {
@@ -434,15 +384,19 @@ func (b *BoltDBEmbed) GetValueType(key []byte) (ValueEntryType, error) {
 	return entryType, err
 }
 
+func (b *BoltDBEmbed) recordOpResult(op string, start time.Time, err error) {
+	if err != nil {
+		b.mt.RecordError(op)
+	} else {
+		b.mt.RecordOp(op, start)
+	}
+}
+
 // Get retrieves a value associated with a key within a specific namespace.
 func (b *BoltDBEmbed) Get(key []byte) ([]byte, error) {
 	rowKey := []byte(string(key) + rowKeySeperator)
 
-	metrics.IncrCounterWithLabels(mGetTotal, 1, b.label)
 	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mGetLatency, startTime, b.label)
-	}()
 	var value []byte
 
 	err := b.db.View(func(tx *bbolt.Tx) error {
@@ -506,6 +460,7 @@ func (b *BoltDBEmbed) Get(key []byte) ([]byte, error) {
 		}
 	})
 
+	b.recordOpResult(OpGet, startTime, err)
 	return value, err
 }
 
@@ -514,9 +469,6 @@ func (b *BoltDBEmbed) Get(key []byte) ([]byte, error) {
 func (b *BoltDBEmbed) GetRowColumns(rowKey []byte, filter func(columnKey []byte) bool) (map[string][]byte, error) {
 	rowKey = []byte(string(rowKey) + rowKeySeperator)
 	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mRowGetLatency, startTime, b.label)
-	}()
 
 	if filter == nil {
 		filter = func(columnKey []byte) bool {
@@ -547,7 +499,7 @@ func (b *BoltDBEmbed) GetRowColumns(rowKey []byte, filter func(columnKey []byte)
 		}
 	})
 
-	metrics.IncrCounterWithLabels(mRowGetTotal, float32(len(entries)), b.label)
+	b.recordOpResult(OpGet, startTime, err)
 	return entries, err
 }
 

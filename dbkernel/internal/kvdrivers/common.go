@@ -38,7 +38,6 @@ var (
 
 var (
 	sysBucketMetaData = "sys.kv.unison.db.wal.metadata.bucket"
-	packageKey        = []string{"unisondb", "kvdrivers"}
 )
 
 type TxnStats struct {
@@ -48,22 +47,10 @@ type TxnStats struct {
 }
 
 var (
-	mSetTotal      = append(packageKey, []string{"set", "total"}...)
-	mGetTotal      = append(packageKey, []string{"get", "total"}...)
-	mDelTotal      = append(packageKey, []string{"delete", "total"}...)
-	mSetLatency    = append(packageKey, []string{"set", "durations", "seconds"}...)
-	mGetLatency    = append(packageKey, []string{"get", "durations", "seconds"}...)
-	mDelLatency    = append(packageKey, []string{"delete", "durations", "seconds"}...)
-	mRowGetTotal   = append(packageKey, []string{"row", "get", "total"}...)
-	mRowGetLatency = append(packageKey, []string{"row", "get", "durations", "seconds"}...)
-
-	mSnapshotTotal   = append(packageKey, []string{"snapshot", "total"}...)
-	mSnapshotLatency = append(packageKey, []string{"snapshot", "durations", "seconds"}...)
-
-	mTxnFlushTotal           = append(packageKey, []string{"flush", "total"}...)
-	mTxnFlushLatency         = append(packageKey, []string{"flush", "durations", "seconds"}...)
-	mTxnFlushBatchSize       = append(packageKey, []string{"flush", "batch", "size"}...)
-	mTxnEntriesModifiedTotal = append(packageKey, []string{"entries", "modified", "total"}...)
+	OpSet     = "set"
+	OpGet     = "get"
+	OpDelete  = "delete"
+	TxnCommit = "commit"
 )
 
 type Config struct {
