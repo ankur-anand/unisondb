@@ -7,8 +7,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/PowerDNS/lmdb-go/lmdb"
-	"github.com/hashicorp/go-metrics"
 	"go.etcd.io/bbolt"
 )
 
@@ -18,7 +16,6 @@ import (
 // Caller should call Commit in the end to finish any pending Txn not flushed via maxBatchSize.
 // Single instance of Txn are not concurrent safe.
 type BoltTxnQueue struct {
-	label           []metrics.Label
 	err             error
 	db              *bbolt.DB
 	namespace       []byte
@@ -28,12 +25,13 @@ type BoltTxnQueue struct {
 	putOps          float32
 	deleteOps       float32
 	stats           *TxnStats
+	mt              *MetricsTracker
 }
 
 // NewTxnQueue returns an initialized BoltTxnQueue for Batch API queuing and commit.
 func (b *BoltDBEmbed) NewTxnQueue(maxBatchSize int) *BoltTxnQueue {
 	return &BoltTxnQueue{
-		label:        b.label,
+		mt:           b.mt,
 		err:          nil,
 		maxBatchSize: maxBatchSize,
 		opsQueue:     make([]func(bucket *bbolt.Bucket) error, 0, maxBatchSize),
@@ -249,10 +247,7 @@ func (bq *BoltTxnQueue) BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPer
 
 			for entryKey := range entries {
 				if err := txn.Delete([]byte(entryKey)); err != nil {
-					if !lmdb.IsNotFound(err) {
-						return err
-					}
-					bq.entriesModified++
+					return err
 				}
 			}
 
@@ -323,11 +318,6 @@ func (bq *BoltTxnQueue) flushBatch() error {
 
 	startTime := time.Now()
 
-	metrics.IncrCounterWithLabels(mTxnFlushTotal, 1, bq.label)
-	defer func() {
-		metrics.MeasureSinceWithLabels(mTxnFlushLatency, startTime, bq.label)
-	}()
-
 	txn, err := bq.db.Begin(true)
 	if err != nil {
 		return err
@@ -362,10 +352,11 @@ func (bq *BoltTxnQueue) flushBatch() error {
 	err = txn.Commit()
 
 	if bq.err == nil {
-		metrics.IncrCounterWithLabels(mTxnFlushBatchSize, float32(len(bq.opsQueue)), bq.label)
-		metrics.IncrCounterWithLabels(mSetTotal, bq.putOps, bq.label)
-		metrics.IncrCounterWithLabels(mDelTotal, bq.deleteOps, bq.label)
-		metrics.IncrCounterWithLabels(mTxnEntriesModifiedTotal, bq.entriesModified, bq.label)
+		bq.mt.RecordFlush(len(bq.opsQueue), startTime)
+		bq.mt.RecordBatchOps(OpSet, int(bq.putOps))
+		bq.mt.RecordBatchOps(OpDelete, int(bq.deleteOps))
+		bq.mt.RecordWriteUnits(int(bq.entriesModified))
+
 		bq.stats.EntriesModified += bq.entriesModified
 		bq.stats.DeleteOps += bq.deleteOps
 		bq.stats.PutOps += bq.putOps
@@ -374,7 +365,10 @@ func (bq *BoltTxnQueue) flushBatch() error {
 		bq.putOps = 0
 		bq.deleteOps = 0
 		bq.entriesModified = 0
+	} else {
+		bq.mt.RecordError(TxnCommit)
 	}
+
 	return err
 }
 
