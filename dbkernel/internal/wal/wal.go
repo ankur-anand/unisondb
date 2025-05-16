@@ -167,7 +167,7 @@ func (r *Reader) Next() ([]byte, *Offset, error) {
 	}
 	if err == nil {
 		duration := time.Since(startTime)
-		// we are sampling only 10% of fast-path reads, but always capture slow reads
+		// we are sampling only 5% of fast-path reads, but always capture slow reads
 		if rand.Float64() < 0.05 || duration > 10*time.Millisecond {
 			r.taggedScope.Histogram(metricsWalReadDuration, readLatencyBuckets).RecordDuration(duration)
 		}
