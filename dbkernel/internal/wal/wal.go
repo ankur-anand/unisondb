@@ -14,7 +14,10 @@ import (
 	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/pkg/errors"
+	"github.com/uber-go/tally/v4"
 )
+
+var segmentEntryBuckets = tally.MustMakeExponentialValueBuckets(500, 2, 10)
 
 var (
 	metricWalWriteTotal        = "write_total"
@@ -27,6 +30,8 @@ var (
 	metricsFSyncTotal          = "fsync_total"
 	metricsFSyncErrors         = "fsync_errors_total"
 	metricsFSyncDurations      = "fsync_durations_seconds"
+	metricWalBytesWrittenTotal = "bytes_written_total"
+	metricWalEntriesPerSegment = "entries_per_segment"
 )
 
 // Offset is a type alias to underlying wal implementation.
@@ -41,9 +46,10 @@ func DecodeOffset(b []byte) *Offset {
 
 // WalIO provides a write and read to underlying file based wal store.
 type WalIO struct {
-	appendLog   *walfs.WALog
-	namespace   string
-	taggedScope umetrics.Scope
+	appendLog        *walfs.WALog
+	namespace        string
+	taggedScope      umetrics.Scope
+	entriesInSegment atomic.Int64
 }
 
 func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
@@ -51,9 +57,18 @@ func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
 	taggedScope := umetrics.AutoScope().Tagged(map[string]string{
 		"namespace": namespace,
 	})
-	callbackOnRotate := func() {
-		taggedScope.Counter(metricsSegmentRotatedTotal).Inc(1)
+
+	w := &WalIO{
+		namespace:   namespace,
+		taggedScope: taggedScope,
 	}
+
+	callbackOnRotate := func() {
+		old := w.entriesInSegment.Swap(0)
+		taggedScope.Counter(metricsSegmentRotatedTotal).Inc(1)
+		taggedScope.Histogram(metricWalEntriesPerSegment, segmentEntryBuckets).RecordValue(float64(old))
+	}
+
 	wLog, err := walfs.NewWALog(dirname, ".seg", walfs.WithMaxSegmentSize(config.SegmentSize),
 		walfs.WithMSyncEveryWrite(config.FSync), walfs.WithBytesPerSync(int64(config.BytesPerSync)),
 		walfs.WithOnSegmentRotated(callbackOnRotate),
@@ -61,13 +76,8 @@ func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	return &WalIO{
-			appendLog:   wLog,
-			namespace:   namespace,
-			taggedScope: taggedScope,
-		},
-		err
+	w.appendLog = wLog
+	return w, err
 }
 
 func (w *WalIO) RunWalCleanup(ctx context.Context, interval time.Duration, predicate walfs.DeletionPredicate) {
@@ -131,13 +141,16 @@ func (w *WalIO) Append(data []byte) (*Offset, error) {
 		duration := time.Since(startTime)
 		w.taggedScope.Histogram(metricWalWriteDuration, writeLatencyBuckets).RecordDuration(duration)
 	}()
-
+	w.taggedScope.Counter(metricWalBytesWrittenTotal).Inc(int64(len(data)))
 	off, err := w.appendLog.Write(data)
 	if errors.Is(err, walfs.ErrFsync) {
 		log.Fatalf("[unisondb.wal] write to log file failed: %v", err)
 	}
 	if err != nil {
 		w.taggedScope.Counter(metricWalWriteError).Inc(1)
+	}
+	if err == nil {
+		w.entriesInSegment.Add(1)
 	}
 	return &off, err
 }
@@ -167,7 +180,7 @@ func (r *Reader) Next() ([]byte, *Offset, error) {
 	}
 	if err == nil {
 		duration := time.Since(startTime)
-		// we are sampling only 10% of fast-path reads, but always capture slow reads
+		// we are sampling only 5% of fast-path reads, but always capture slow reads
 		if rand.Float64() < 0.05 || duration > 10*time.Millisecond {
 			r.taggedScope.Histogram(metricsWalReadDuration, readLatencyBuckets).RecordDuration(duration)
 		}

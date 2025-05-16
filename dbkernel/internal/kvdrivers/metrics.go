@@ -48,7 +48,6 @@ func (m *MetricsTracker) RecordOp(op string, start time.Time) {
 func (m *MetricsTracker) RecordFlush(batchSize int, start time.Time) {
 	m.root.Counter("flush_total").Inc(1)
 	m.root.Timer("flush_latency").Record(time.Since(start))
-	m.root.Histogram("flush_batch_size", tally.DefaultBuckets).RecordValue(float64(batchSize))
 }
 
 // RecordSnapshot logs snapshot metrics.

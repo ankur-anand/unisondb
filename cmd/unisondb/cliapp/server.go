@@ -590,6 +590,7 @@ func (ms *Server) RunFuzzer(ctx context.Context) error {
 				ms.cfg.FuzzConfig.WorkersPerNamespace,
 				ms.fuzzStats,
 				engine.Namespace(),
+				ms.cfg.FuzzConfig.EnableReadOps,
 			)
 			return nil
 		})

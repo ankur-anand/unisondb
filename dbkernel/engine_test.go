@@ -812,17 +812,11 @@ func Test_ASyncFSync_Coalescing(t *testing.T) {
 		engine.fsyncReqSignal <- struct{}{}
 	}
 
-	for {
+	assert.Eventually(t, func() bool {
 		engine.pendingMetadata.mu.Lock()
-		pl := len(engine.pendingMetadata.pendingMetadataWrites)
-		engine.pendingMetadata.mu.Unlock()
-		if pl != 0 {
-			time.Sleep(10 * time.Millisecond)
-		} else {
-			break
-		}
-
-	}
+		defer engine.pendingMetadata.mu.Unlock()
+		return len(engine.pendingMetadata.pendingMetadataWrites) == 0
+	}, 2*time.Second, 30*time.Millisecond)
 
 	cancel()
 	wg.Wait()

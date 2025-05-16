@@ -2,11 +2,13 @@ package fuzzer
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math/rand"
 	"sync"
 	"time"
 
+	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/prometheus/common/helpers/templates"
 	"golang.org/x/sync/errgroup"
@@ -19,6 +21,9 @@ type Engine interface {
 	BatchDelete(keys [][]byte) error
 	PutColumnsForRow(rowKey []byte, columnEntries map[string][]byte) error
 	DeleteColumnsForRow(rowKey []byte, columnEntries map[string][]byte) error
+
+	Get(key []byte) ([]byte, error)
+	GetRowColumns(rowKey string, predicate func(columnKey string) bool) (map[string][]byte, error)
 }
 
 type KeyPool struct {
@@ -178,7 +183,7 @@ func (vp *ValuePool) Get() []byte {
 
 // FuzzEngineOps concurrently runs fuzzing operations against an Engine using multiple worker goroutines.
 func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
-	numWorkers int, stats *FuzzStats, namespace string) {
+	numWorkers int, stats *FuzzStats, namespace string, getOPs bool) {
 	keyPool := NewKeyPool(500, 5, 256)
 	rowKeyPool := NewKeyPool(500, 5, 256)
 	columnPool := NewColumnPool(50)
@@ -201,7 +206,7 @@ func FuzzEngineOps(ctx context.Context, e Engine, opsPerSec int,
 	for i := 0; i < numWorkers; i++ {
 		workerID := i
 		g.Go(func() error {
-			return runFuzzWorker(ctx, e, workerID, workerInterval, keyPool, rowKeyPool, columnPool, stats, namespace, valuePool)
+			return runFuzzWorker(ctx, e, workerID, workerInterval, keyPool, rowKeyPool, columnPool, stats, namespace, valuePool, getOPs)
 		})
 	}
 
@@ -236,7 +241,7 @@ func startMutationLoop(ctx context.Context, keyPool, rowKeyPool *KeyPool, column
 }
 
 func runFuzzWorker(ctx context.Context, e Engine, workerID int, interval time.Duration,
-	keyPool, rowKeyPool *KeyPool, columnPool *ColumnPool, stats *FuzzStats, namespace string, valuePool *ValuePool) error {
+	keyPool, rowKeyPool *KeyPool, columnPool *ColumnPool, stats *FuzzStats, namespace string, valuePool *ValuePool, getOps bool) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -245,13 +250,13 @@ func runFuzzWorker(ctx context.Context, e Engine, workerID int, interval time.Du
 		case <-ctx.Done():
 			return nil
 		case <-ticker.C:
-			executeRandomOp(e, keyPool, rowKeyPool, columnPool, stats, namespace, valuePool)
+			executeRandomOp(e, keyPool, rowKeyPool, columnPool, stats, namespace, valuePool, getOps)
 		}
 	}
 }
 
 func executeRandomOp(e Engine, keyPool, rowKeyPool *KeyPool, columnPool *ColumnPool,
-	stats *FuzzStats, namespace string, valuePool *ValuePool) {
+	stats *FuzzStats, namespace string, valuePool *ValuePool, getOPs bool) {
 	keys := keyPool.Get(3)
 	values := [][]byte{valuePool.Get(), valuePool.Get(), valuePool.Get()}
 
@@ -270,6 +275,30 @@ func executeRandomOp(e Engine, keyPool, rowKeyPool *KeyPool, columnPool *ColumnP
 		{"DeleteColumnsForRow", func() error { return e.DeleteColumnsForRow(rowKey, columns) }},
 	}
 
+	if getOPs {
+		ops = append(ops,
+			[]struct {
+				name string
+				fn   func() error
+			}{
+				{"Get", func() error {
+					_, err := e.Get(keys[0])
+					if !errors.Is(err, dbkernel.ErrKeyNotFound) {
+						return err
+					}
+					return nil
+				}},
+				{"GetRowColumns", func() error {
+					predicate := func(col string) bool { return rand.Float64() < 0.5 }
+					_, err := e.GetRowColumns(string(rowKey), predicate)
+					if !errors.Is(err, dbkernel.ErrKeyNotFound) {
+						return err
+					}
+					return nil
+				}},
+			}...,
+		)
+	}
 	op := ops[rand.Intn(len(ops))]
 	if err := op.fn(); err != nil {
 		slog.Error("[unisondb.fuzzer] Operation failed", "op", op.name, "err", err)
