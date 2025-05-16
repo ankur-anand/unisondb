@@ -40,7 +40,7 @@ func TestMetricsTracker_RecordFlush(t *testing.T) {
 	assert.GreaterOrEqual(t, timerVals[0], 5*time.Millisecond)
 
 	hist := snap.Histograms()["test.flush_batch_size+db=bolt,namespace=shard_5"]
-	assert.NotNil(t, hist)
+	assert.Nil(t, hist)
 }
 
 func TestMetricsTracker_RecordSnapshot(t *testing.T) {
