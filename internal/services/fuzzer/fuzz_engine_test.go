@@ -61,6 +61,14 @@ func (m *mockEngine) DeleteColumnsForRow(rowKey []byte, columnEntries map[string
 	return nil
 }
 
+func (m *mockEngine) Get(key []byte) ([]byte, error) {
+	return nil, nil
+}
+
+func (m *mockEngine) GetRowColumns(rowKey string, predicate func(columnKey string) bool) (map[string][]byte, error) {
+	return nil, nil
+}
+
 func TestFuzzEngineOps_Basic(t *testing.T) {
 	engine := &mockEngine{}
 
@@ -68,7 +76,7 @@ func TestFuzzEngineOps_Basic(t *testing.T) {
 	defer cancel()
 
 	stats := NewFuzzStats()
-	FuzzEngineOps(ctx, engine, 50, 3, stats, "test")
+	FuzzEngineOps(ctx, engine, 50, 3, stats, "test", true)
 
 	engine.mu.Lock()
 	defer engine.mu.Unlock()
@@ -95,6 +103,10 @@ func (n *noopEngine) Delete(key []byte) error                                   
 func (n *noopEngine) BatchDelete(keys [][]byte) error                                   { return nil }
 func (n *noopEngine) PutColumnsForRow(rowKey []byte, column map[string][]byte) error    { return nil }
 func (n *noopEngine) DeleteColumnsForRow(rowKey []byte, column map[string][]byte) error { return nil }
+func (n *noopEngine) Get(key []byte) ([]byte, error)                                    { return nil, nil }
+func (n *noopEngine) GetRowColumns(rowKey string, predicate func(columnKey string) bool) (map[string][]byte, error) {
+	return nil, nil
+}
 
 func BenchmarkExecuteRandomOp(b *testing.B) {
 	keyPool := NewKeyPool(500, 5, 64)
@@ -105,6 +117,6 @@ func BenchmarkExecuteRandomOp(b *testing.B) {
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		executeRandomOp(engine, keyPool, rowKeyPool, columnPool, NewFuzzStats(), "test", valuePool)
+		executeRandomOp(engine, keyPool, rowKeyPool, columnPool, NewFuzzStats(), "test", valuePool, false)
 	}
 }

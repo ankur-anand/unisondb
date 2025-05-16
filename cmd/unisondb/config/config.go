@@ -93,7 +93,8 @@ type FuzzConfig struct {
 	LocalRelayerCount   int `toml:"local_relayer_count"`
 	// this is delay that gets introduced in fuzzing.
 	// this lets the infra to come up.
-	StartupDelay string `toml:"startup_delay"`
+	StartupDelay  string `toml:"startup_delay"`
+	EnableReadOps bool   `toml:"enable_read_ops"`
 }
 
 type PProfConfig struct {
