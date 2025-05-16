@@ -12,6 +12,7 @@ import (
 var (
 	globalRegistry *Registry
 	once           sync.Once
+	lOnce          sync.Once
 )
 
 // Registry holds the global metrics configuration.
@@ -70,7 +71,9 @@ func Initialize(opts Options) (io.Closer, error) {
 func GetScope(packageName string) tally.Scope {
 	reg := globalRegistry
 	if reg == nil {
-		slog.Warn("[unsiondb.umetrics] globalRegistry is nil")
+		lOnce.Do(func() {
+			slog.Warn("[unsiondb.umetrics] globalRegistry is nil")
+		})
 		return tally.NoopScope.SubScope(packageName)
 	}
 	return reg.scope.SubScope(packageName)
