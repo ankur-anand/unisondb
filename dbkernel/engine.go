@@ -55,24 +55,25 @@ var (
 
 // Engine manages WAL, MemTable (SkipList), and BtreeStore for a given namespace.
 type Engine struct {
-	mu                sync.RWMutex
-	writeSeenCounter  atomic.Uint64
-	opsFlushedCounter atomic.Uint64
-	currentOffset     atomic.Pointer[wal.Offset]
-	namespace         string
-	dataStore         internal.BTreeStore
-	walIO             *wal.WalIO
-	walSyncer         walSyncer
-	config            *EngineConfig
-	metricsLabel      []metrics.Label
-	fileLock          *flock.Flock
-	wg                *sync.WaitGroup
-	bloom             *bloom.BloomFilter
-	activeMemTable    *memtable.MemTable
-	sealedMemTables   []*memtable.MemTable
-	flushReqSignal    chan struct{}
-	pendingMetadata   *pendingMetadata
-	fsyncReqSignal    chan struct{}
+	mu                    sync.RWMutex
+	writeSeenCounter      atomic.Uint64
+	opsFlushedCounter     atomic.Uint64
+	currentOffset         atomic.Pointer[wal.Offset]
+	namespace             string
+	dataStore             internal.BTreeStore
+	walIO                 *wal.WalIO
+	walSyncer             walSyncer
+	config                *EngineConfig
+	metricsLabel          []metrics.Label
+	fileLock              *flock.Flock
+	wg                    *sync.WaitGroup
+	bloom                 *bloom.BloomFilter
+	activeMemTable        *memtable.MemTable
+	sealedMemTables       []*memtable.MemTable
+	flushReqSignal        chan struct{}
+	pendingMetadata       *pendingMetadata
+	fsyncReqSignal        chan struct{}
+	disableEntryTypeCheck bool
 
 	recoveredEntriesCount int
 	startMetadata         internal.Metadata
@@ -116,6 +117,7 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		fsyncReqSignal:            make(chan struct{}, 1),
 		btreeFlushInterval:        btreeFlushInterval,
 		btreeFlushIntervalEnabled: btreeFlushIntervalEnabled,
+		disableEntryTypeCheck:     conf.DisableEntryTypeCheck,
 	}
 
 	if err := engine.initStorage(dataDir, namespace, conf); err != nil {
@@ -378,6 +380,9 @@ func (e *Engine) getEntryTypeForKey(key []byte) (logrecord.LogEntryType, bool) {
 }
 
 func (e *Engine) getEntryType(key []byte) (logrecord.LogEntryType, bool) {
+	if e.disableEntryTypeCheck {
+		return 0, false
+	}
 	valueType, ok := e.getEntryTypeForKeyFromMemTable(key)
 	if !ok {
 		valueType, ok = e.getEntryTypeForKey(key)

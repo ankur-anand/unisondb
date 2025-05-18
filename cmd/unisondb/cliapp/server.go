@@ -245,6 +245,7 @@ func (ms *Server) SetupStorageConfig(ctx context.Context) error {
 		storeConfig.WriteNotifyCoalescing.Duration = dur
 	}
 
+	ms.storageConfig.DisableEntryTypeCheck = ms.cfg.Storage.DisableEntryTypeCheck
 	ms.storageConfig = storeConfig
 	return ms.setupWalCleanup(ctx)
 }
