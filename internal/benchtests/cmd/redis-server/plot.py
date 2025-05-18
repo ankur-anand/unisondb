@@ -1,5 +1,8 @@
 import re
 import matplotlib.pyplot as plt
+import matplotlib.ticker as ticker
+ax = plt.gca()
+ax.xaxis.set_major_formatter(ticker.FuncFormatter(lambda x, _: f'{int(x):,}'))
 
 with open("benchmark_output.txt", "r") as f:
     data = f.read()
