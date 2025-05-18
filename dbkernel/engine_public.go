@@ -29,7 +29,7 @@ var (
 	mKeySnapshotTotal      = append(packageKey, "snapshot", "total")
 	mKeySnapshotDuration   = append(packageKey, "snapshot", "durations", "seconds")
 	mKeySnapshotBytesTotal = append(packageKey, "snapshot", "bytes", "total")
-	
+
 	mKeyRowSetTotal       = append(packageKey, "row", "put", "total")
 	mKeyRowGetTotal       = append(packageKey, "row", "get", "total")
 	mKeyRowDeleteTotal    = append(packageKey, "row", "delete", "total")
