@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"sync/atomic"
+	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
@@ -16,18 +17,29 @@ type BoltStore struct {
 	name          string
 	db            *bbolt.DB
 	globalCounter atomic.Uint64
+	ticker        *time.Ticker
 }
 
 func NewBoltStore(namespace, dir string) (*BoltStore, error) {
 	fp := filepath.Join(dir, namespace+".boltdb")
 	db, err := bbolt.Open(fp, 0600, nil)
 	db.NoSync = true
+	ticker := time.NewTicker(time.Second)
+	go func() {
+		for range ticker.C {
+			err := db.Sync()
+			if err != nil {
+				panic(err)
+			}
+		}
+	}()
 	if err != nil {
 		return nil, err
 	}
 	return &BoltStore{
-		name: namespace,
-		db:   db,
+		name:   namespace,
+		db:     db,
+		ticker: ticker,
 	}, nil
 }
 
@@ -93,6 +105,7 @@ func (s *BoltStore) Get(key []byte) ([]byte, error) {
 }
 
 func (s *BoltStore) Close() error {
+	s.ticker.Stop()
 	return s.db.Close()
 }
 
