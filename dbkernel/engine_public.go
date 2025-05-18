@@ -29,10 +29,7 @@ var (
 	mKeySnapshotTotal      = append(packageKey, "snapshot", "total")
 	mKeySnapshotDuration   = append(packageKey, "snapshot", "durations", "seconds")
 	mKeySnapshotBytesTotal = append(packageKey, "snapshot", "bytes", "total")
-
-	mKeyWaitForAppendTotal    = append(packageKey, "wait", "append", "total")
-	mKeyWaitForAppendDuration = append(packageKey, "wait", "append", "durations", "seconds")
-
+	
 	mKeyRowSetTotal       = append(packageKey, "row", "put", "total")
 	mKeyRowGetTotal       = append(packageKey, "row", "get", "total")
 	mKeyRowDeleteTotal    = append(packageKey, "row", "delete", "total")
@@ -207,14 +204,8 @@ func (e *Engine) BatchDelete(keys [][]byte) error {
 
 // WaitForAppend blocks until a put/delete operation occurs or timeout happens or context cancelled is done.
 func (e *Engine) WaitForAppend(ctx context.Context, timeout time.Duration, lastSeen *Offset) error {
-	metrics.IncrCounterWithLabels(mKeyWaitForAppendTotal, 1, e.metricsLabel)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mKeyWaitForAppendDuration, startTime, e.metricsLabel)
-	}()
-
 	currentPos := e.currentOffset.Load()
-	if currentPos != nil && isNewChunkPosition(currentPos, lastSeen) {
+	if currentPos != nil && hasNewWriteSince(currentPos, lastSeen) {
 		return nil
 	}
 
@@ -224,7 +215,7 @@ func (e *Engine) WaitForAppend(ctx context.Context, timeout time.Duration, lastS
 
 	// check again (ca)
 	currentPos = e.currentOffset.Load()
-	if currentPos != nil && isNewChunkPosition(currentPos, lastSeen) {
+	if currentPos != nil && hasNewWriteSince(currentPos, lastSeen) {
 		return nil
 	}
 
@@ -238,7 +229,7 @@ func (e *Engine) WaitForAppend(ctx context.Context, timeout time.Duration, lastS
 	}
 }
 
-func isNewChunkPosition(current, lastSeen *Offset) bool {
+func hasNewWriteSince(current, lastSeen *Offset) bool {
 	if lastSeen == nil {
 		return true
 	}
