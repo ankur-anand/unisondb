@@ -6,6 +6,7 @@ import (
 	"hash/crc32"
 	"path/filepath"
 	"sync/atomic"
+	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
@@ -19,6 +20,7 @@ type BadgerStore struct {
 	opsCount      atomic.Uint64
 	totalSize     atomic.Uint64
 	cancel        context.CancelFunc
+	ticker        *time.Ticker
 }
 
 func NewBadgerStore(dir string) (*BadgerStore, error) {
@@ -33,9 +35,18 @@ func NewBadgerStore(dir string) (*BadgerStore, error) {
 		return nil, err
 	}
 
+	ticker := time.NewTicker(time.Second)
+	go func() {
+		for range ticker.C {
+			err := badgerDB.Sync()
+			if err != nil {
+				panic(err)
+			}
+		}
+	}()
 	_, cancel := context.WithCancel(context.Background())
 
-	return &BadgerStore{db: badgerDB, cancel: cancel}, nil
+	return &BadgerStore{db: badgerDB, cancel: cancel, ticker: ticker}, nil
 }
 
 func (b *BadgerStore) Set(key, value []byte) error {
@@ -102,6 +113,7 @@ func (b *BadgerStore) Get(key []byte) ([]byte, error) {
 
 func (b *BadgerStore) Close() error {
 	b.cancel()
+	b.ticker.Stop()
 	return b.db.Close()
 }
 

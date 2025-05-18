@@ -41,13 +41,14 @@ type GrpcConfig struct {
 }
 
 type StorageConfig struct {
-	BaseDir          string           `toml:"base_dir"`
-	Namespaces       []string         `toml:"namespaces"`
-	BytesPerSync     string           `toml:"bytes_per_sync"`
-	SegmentSize      string           `toml:"segment_size"`
-	ArenaSize        string           `toml:"arena_size"`
-	WalFsyncInterval string           `toml:"wal_fsync_interval"`
-	WALCleanupConfig WALCleanupConfig `toml:"wal_cleanup_config"`
+	BaseDir               string           `toml:"base_dir"`
+	Namespaces            []string         `toml:"namespaces"`
+	BytesPerSync          string           `toml:"bytes_per_sync"`
+	SegmentSize           string           `toml:"segment_size"`
+	ArenaSize             string           `toml:"arena_size"`
+	WalFsyncInterval      string           `toml:"wal_fsync_interval"`
+	WALCleanupConfig      WALCleanupConfig `toml:"wal_cleanup_config"`
+	DisableEntryTypeCheck bool             `toml:"disable_entry_type_check"`
 }
 
 type WALCleanupConfig struct {
