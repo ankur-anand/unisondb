@@ -18,6 +18,8 @@ import (
 	"github.com/edsrzf/mmap-go"
 )
 
+var ErrNoNewData = errors.New("no new data yet")
+
 const (
 	StateOpen = iota
 	StateClosing
@@ -703,12 +705,23 @@ func (r *SegmentReader) Next() ([]byte, *RecordPosition, error) {
 	if r.closed.Load() {
 		return nil, nil, ErrSegmentReaderClosed
 	}
-	if r.readOffset >= r.segment.WriteOffset() {
-		return nil, nil, io.EOF
+	isSealed := r.segment.isSealed.Load()
+	writeOffset := r.segment.WriteOffset()
+
+	if r.readOffset >= writeOffset {
+		if isSealed {
+			return nil, nil, io.EOF
+		}
+		return nil, nil, ErrNoNewData
 	}
+
 	currentOffset := r.readOffset
 	data, next, err := r.segment.Read(r.readOffset)
 	if err != nil {
+		// If the read fails due to being too close to write head, treat as "no new data" if unsealed
+		if !isSealed && errors.Is(err, io.EOF) {
+			return nil, nil, ErrNoNewData
+		}
 		return nil, nil, err
 	}
 	r.lastRecordOffset = currentOffset
