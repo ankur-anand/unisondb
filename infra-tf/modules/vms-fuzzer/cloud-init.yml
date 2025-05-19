@@ -37,10 +37,22 @@ write_files:
       
       [storage_config]  
       base_dir = "/tmp/unisondb/server"  
-      namespaces = ["default", "tenant_1", "tenant_2"]  
+      namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector"]
       bytes_per_sync = "1MB"  
       segment_size = "16MB"  
       arena_size = "4MB"  
+      disable_entry_type_check = true
+  
+      [write_notify_config]
+      enabled = true
+      max_delay = "20ms"
+  
+      [storage_config.wal_cleanup_config]
+      interval = "5m"
+      enabled = true
+      max_age = "1h"
+      min_segments = 5
+      max_segments = 10
       
       [pprof_config]  
       enabled = true  
@@ -52,7 +64,7 @@ write_files:
       
       [log_config.min_level_percents]  
       debug = 100.0  
-      info  = 100.0  
+      info  = 10.0  
       warn  = 100.0  
       error = 100.0  
       
@@ -60,6 +72,7 @@ write_files:
       ops_per_namespace = ${ops_per_namespace}  
       workers_per_namespace = ${workers_per_namespace}
       local_relayer_count = ${local_relayer_count}
+      startup_delay = "5m"
 
   - path: /etc/systemd/system/unisondb.service
     permissions: '0644'
@@ -113,10 +126,7 @@ write_files:
                 role: "${role}"
 
       remote_write:
-        - url: "https://api.openobserve.ai/api/${ob_token}/prometheus/api/v1/write"
-          basic_auth:
-            username: "${ob_user}"
-            password: "${ob_pass}"
+        - url: "http://${central_prometheus_ip}:9090/api/v1/write"
 
   - path: /etc/systemd/system/prometheus.service
     permissions: '0644'

@@ -44,17 +44,6 @@ variable "vpc_id" {
   type        = string
 }
 
-variable "client_count" {
-  description = "Number of UnisonDB client VMs to create"
-  type        = number
-  default     = 1
-}
-
-variable "central_ip" {
-  description = "Private IP of central UnisonDB server"
-  type        = string
-}
-
 variable "ob_token" {
   description = "OpenObserve token"
   type        = string
@@ -68,7 +57,7 @@ variable "ob_user" {
 }
 
 variable "ob_pass" {
-  description = "OpenObserve user password"
+  description = "OpenVPN user password"
   type        = string
   sensitive   = true
 }
@@ -79,32 +68,23 @@ variable "prometheus_version" {
   default     = "2.53.4"
 }
 
-variable "git_branch" {
-  description = "The git branch to use"
-  type        = string
+variable "ops_per_namespace" {
+  default = 100
+  type    = number
 }
 
-variable "ssh_private_key_path" {
-  description = "Path to the SSH private key used for connecting to droplets."
-  type        = string
+variable "workers_per_namespace" {
+  default = 20
+  type    = number
 }
 
-variable "instance_count" {
-  description = "Number of instances to launch on each vm"
-  type        = number
-}
-
-variable "prom_ip" {
-  description = "Private IP of central prometheus server"
-  type        = string
+variable "local_relayer_count" {
+  type = number
 }
 
 locals {
-  group         = "unisondb.${var.region}-${var.env}"
-  firewall_name = "firewall-client-${local.group}"
-  clients = {
-    for i in range(1, var.client_count + 1) :
-    format("client-%02d.${local.group}", i) => i
-  }
-  tags = ["unisondb", "client", var.env, var.region]
+  group         = "prometheus.unisondb.${var.region}-${var.env}"
+  firewall_name = "firewall-fuzzer-${local.group}"
+  vm            = local.group
+  tags          = ["unisondb", "fuzzer", var.env, var.region]
 }

@@ -65,7 +65,7 @@ resource "digitalocean_droplet" "do_droplets" {
       "while [ ! -f /var/lib/cloud/instance/boot-finished ]; do sleep 5; done",
       "echo 'cloud-init completed.'",
       "chmod +x /tmp/setup_unisondb.sh",
-      "sudo CENTRAL_IP=${var.central_ip} INSTANCE_COUNT=${var.instance_count} USERNAME=ankur OB_TOKEN=${var.ob_token} OB_USER=${var.ob_user} OB_PASS=${var.ob_pass} ROLE=client /tmp/setup_unisondb.sh"
+      "sudo CENTRAL_IP=${var.central_ip} INSTANCE_COUNT=${var.instance_count} USERNAME=ankur PROM_IP=${var.prom_ip} ROLE=client /tmp/setup_unisondb.sh"
     ]
   }
 

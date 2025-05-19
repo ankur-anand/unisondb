@@ -78,6 +78,21 @@ variable "git_branch" {
   default     = "main"
 }
 
+module "prometheus" {
+  source = "./modules/vms-prometheus"
+
+  do_token            = var.do_token
+  vpc_id              = module.vpc.vpc_id
+  local_relayer_count = 0
+  ob_pass             = ""
+  ob_token            = ""
+  ob_user             = ""
+  ts_auth_key         = ""
+}
+
+output "prometheus" {
+  value = module.prometheus
+}
 
 module "fuzzer" {
   source              = "./modules/vms-fuzzer"
@@ -89,6 +104,7 @@ module "fuzzer" {
   ob_user             = var.ob_user
   droplet_size        = var.fuzzer_droplet_size
   local_relayer_count = var.local_relayer_count
+  prom_ip = module.prometheus.droplet_private_ip
 }
 
 output "fuzzer" {
@@ -132,24 +148,9 @@ module "client" {
   git_branch           = var.git_branch
   ssh_private_key_path = var.ssh_private_key_path
   instance_count       = var.instance_count
+  prom_ip = module.prometheus.droplet_private_ip
 }
 
 output "client" {
   value = module.client
 }
-
-locals {
-  scrape_targets_json = jsonencode([
-    for ip in concat([module.fuzzer.droplet_private_ip], values(module.client.droplet_private_ips)) : {
-      targets = ["${ip}:4000"]
-      labels  = { role = "unisondb" }
-    }
-  ])
-}
-
-
-resource "local_file" "scrape_targets" {
-  content  = local.scrape_targets_json
-  filename = "${path.module}/scrape_targets.json"
-}
-

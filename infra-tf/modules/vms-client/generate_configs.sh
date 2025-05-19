@@ -12,6 +12,7 @@ OB_TOKEN=${OB_TOKEN:-"ob_token"}
 OB_USER=${OB_USER:-"ob_user"}
 OB_PASS=${OB_PASS:-"ob_pass"}
 ROLE=${ROLE:-"client"}
+PROM_IP=${PROM_IP:"127.0.0.1"}
 PROM_CONFIG_PATH="/etc/prometheus/prometheus.yml"
 
 mkdir -p /etc/unisondb /etc/systemd/system /etc/prometheus
@@ -32,13 +33,13 @@ allow_insecure = true
 
 [storage_config]
 base_dir = "/tmp/unisondb/database_$i"
-namespaces = ["default", "tenant_1", "tenant_2"]
+namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector"]
 bytes_per_sync = "1MB"
 segment_size = "16MB"
 arena_size = "4MB"
 
 [relayer_config.relayer1]
-namespaces = ["default", "tenant_1", "tenant_2"]
+namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector"]
 upstream_address = "${CENTRAL_IP}:4001"
 segment_lag_threshold = 100
 allow_insecure = true
@@ -88,10 +89,8 @@ done
 cat <<EOF >> ${PROM_CONFIG_PATH}
 
 remote_write:
-  - url: "https://api.openobserve.ai/api/${OB_TOKEN}/prometheus/api/v1/write"
-    basic_auth:
-      username: "${OB_USER}"
-      password: "${OB_PASS}"
+  - url: "http://${PROM_IP}:9090/api/v1/write"
+
 EOF
 
 cat <<EOF > /etc/systemd/system/unisondb@.service

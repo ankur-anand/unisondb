@@ -40,11 +40,10 @@ resource "digitalocean_droplet" "do_droplets" {
     ob_token              = var.ob_token
     ob_user               = var.ob_user
     ob_pass               = var.ob_pass
-    role                  = "fuzzer"
+    role                  = "promtheus"
     local_relayer_count   = var.local_relayer_count
     workers_per_namespace = var.workers_per_namespace
     ops_per_namespace     = var.ops_per_namespace
-    central_prometheus_ip = var.prom_ip
   })
 
 }
