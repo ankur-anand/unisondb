@@ -534,3 +534,14 @@ func (e *Engine) NewReaderWithStart(startPos *Offset) (r *Reader, err error) {
 
 	return e.walIO.NewReaderWithStart(startPos)
 }
+
+// NewReaderWithTail returns a reader that starts from the provided offset,
+// and supports tail-following behavior.
+// It returns ErrNoNewData when no new entries are available *yet*,
+// instead of io.EOF.
+func (e *Engine) NewReaderWithTail(startPos *Offset) (*Reader, error) {
+	if startPos == nil {
+		return e.walIO.NewReader(wal.WithActiveTail(true))
+	}
+	return e.walIO.NewReaderWithStart(startPos, wal.WithActiveTail(true))
+}
