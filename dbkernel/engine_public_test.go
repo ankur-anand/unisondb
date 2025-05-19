@@ -179,11 +179,9 @@ func TestEngine_WaitForAppend(t *testing.T) {
 
 	timeout := 100 * time.Millisecond
 
-	err = engine.WaitForAppend(t.Context(), timeout, nil)
+	callerDone := make(chan struct{})
+	err = engine.WaitForAppendOrDone(callerDone, timeout, nil)
 	assert.ErrorIs(t, err, dbkernel.ErrWaitTimeoutExceeded, "no put op has been called should timeout")
-
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -194,36 +192,36 @@ func TestEngine_WaitForAppend(t *testing.T) {
 		assert.NoError(t, err, "Put operation should succeed")
 	}()
 
-	err = engine.WaitForAppend(ctx, 3*time.Second, nil)
-	assert.NoError(t, err, "WaitForAppend should return without timeout after Put")
+	err = engine.WaitForAppendOrDone(callerDone, 3*time.Second, nil)
+	assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after Put")
 
-	err = engine.WaitForAppend(ctx, timeout, nil)
-	assert.NoError(t, err, "WaitForAppend should return without timeout after Put and when last seen is nil")
+	err = engine.WaitForAppendOrDone(callerDone, timeout, nil)
+	assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after Put and when last seen is nil")
 
 	cancelErr := make(chan error)
 	go func() {
-		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		callerDone := make(chan struct{})
+		_, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		go func() {
 			time.Sleep(10 * time.Millisecond)
 			cancel()
+			close(callerDone)
 		}()
 		defer cancel()
-		err := engine.WaitForAppend(ctx, timeout, engine.CurrentOffset())
+		err := engine.WaitForAppendOrDone(callerDone, timeout, engine.CurrentOffset())
 		cancelErr <- err
 		close(cancelErr)
 	}()
 
 	err = <-cancelErr
-	assert.ErrorIs(t, err, context.Canceled, "WaitForAppend should return error for cancelled context")
+	assert.ErrorIs(t, err, context.Canceled, "WaitForAppendOrDone should return error for cancelled context")
 
 	lastOffset := engine.CurrentOffset()
 	err = engine.Put(key, value)
 	assert.NoError(t, err, "Put operation should succeed")
 
-	ctx, cancel = context.WithTimeout(t.Context(), 10*time.Second)
-	defer cancel()
-	err = engine.WaitForAppend(ctx, timeout, lastOffset)
-	assert.NoError(t, err, "WaitForAppend should return without error after Put")
+	err = engine.WaitForAppendOrDone(callerDone, timeout, lastOffset)
+	assert.NoError(t, err, "WaitForAppendOrDone should return without error after Put")
 	wg.Wait()
 }
 
@@ -250,12 +248,13 @@ func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
 	wg.Add(goroutines)
 	readyWg.Add(goroutines)
 
+	callerDone := make(chan struct{})
 	for i := 0; i < goroutines; i++ {
 		go func() {
 			defer wg.Done()
 			readyWg.Done()
-			err := engine.WaitForAppend(t.Context(), 10*time.Second, nil)
-			assert.NoError(t, err, "WaitForAppend should return without timeout after Put")
+			err := engine.WaitForAppendOrDone(callerDone, 10*time.Second, nil)
+			assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after Put")
 		}()
 	}
 
@@ -263,6 +262,7 @@ func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
 	err = engine.Put(key, value)
 	assert.NoError(t, err, "Put operation should succeed")
 	wg.Wait()
+	close(callerDone)
 }
 
 func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
@@ -285,9 +285,11 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 	putKV[string(putKey)] = putValue
 
 	eof := make(chan struct{})
+	callerDone := make(chan struct{})
+	defer close(callerDone)
 	read := func(reader *dbkernel.Reader) {
-		err := engine.WaitForAppend(t.Context(), 1*time.Minute, nil)
-		assert.NoError(t, err, "WaitForAppend should return without timeout after Put")
+		err := engine.WaitForAppendOrDone(callerDone, 1*time.Minute, nil)
+		assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after Put")
 		for {
 			value, _, err := reader.Next()
 			if err != nil {

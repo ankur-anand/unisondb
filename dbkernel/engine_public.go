@@ -202,8 +202,8 @@ func (e *Engine) BatchDelete(keys [][]byte) error {
 	return e.persistKeyValue(keys, nil, logrecord.LogOperationTypeDelete)
 }
 
-// WaitForAppend blocks until a put/delete operation occurs or timeout happens or context cancelled is done.
-func (e *Engine) WaitForAppend(ctx context.Context, timeout time.Duration, lastSeen *Offset) error {
+// WaitForAppendOrDone blocks until a put/delete operation occurs or timeout happens or context cancelled is done.
+func (e *Engine) WaitForAppendOrDone(callerDone chan struct{}, timeout time.Duration, lastSeen *Offset) error {
 	currentPos := e.currentOffset.Load()
 	if currentPos != nil && hasNewWriteSince(currentPos, lastSeen) {
 		return nil
@@ -220,8 +220,8 @@ func (e *Engine) WaitForAppend(ctx context.Context, timeout time.Duration, lastS
 	}
 
 	select {
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-callerDone:
+		return context.Canceled
 	case <-done:
 		return nil
 	case <-time.After(timeout):
