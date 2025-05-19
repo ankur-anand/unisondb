@@ -74,6 +74,7 @@ const (
 var (
 	ErrWalNextOffset = errors.New("wal next offset out of range")
 	ErrWalFSync      = walfs.ErrFsync
+	ErrNoNewData     = walfs.ErrNoNewData
 )
 
 // Config stores all tunable parameters for WAL.
