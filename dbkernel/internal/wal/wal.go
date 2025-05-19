@@ -195,7 +195,6 @@ func (r *Reader) Next() ([]byte, *Offset, error) {
 		return nil, nil, err
 
 	case err != nil:
-		r.taggedScope.Counter(metricsWalReadTotal).Inc(1)
 		r.taggedScope.Counter(metricsWalReadErrorTotal).Inc(1)
 		return nil, nil, err
 	}
@@ -205,8 +204,6 @@ func (r *Reader) Next() ([]byte, *Offset, error) {
 	if rand.Float64() < 0.05 || dur > 10*time.Millisecond {
 		r.taggedScope.Histogram(metricsWalReadDuration, readLatencyBuckets).RecordDuration(dur)
 	}
-	r.taggedScope.Counter(metricsWalReadTotal).Inc(1)
-
 	return data, pos, nil
 }
 
@@ -227,6 +224,7 @@ func (w *WalIO) NewReader(options ...ReaderOption) (*Reader, error) {
 	for _, opt := range options {
 		opt(reader)
 	}
+
 	return reader, nil
 }
 
