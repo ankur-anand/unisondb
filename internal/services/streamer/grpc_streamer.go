@@ -125,6 +125,11 @@ func (s *GrpcStreamer) StreamWalRecords(request *v1.StreamWalRecordsRequest, g g
 		batchSize,
 		batchWaitTime, meta, "grpc")
 
+	currentOffset := engine.CurrentOffset()
+	if meta != nil && currentOffset == nil {
+		return services.ToGRPCError(namespace, reqID, method, services.ErrInvalidMetadata)
+	}
+
 	// when server is closed, the goroutine would be closed upon
 	// cancel of ctx.
 	// walReceiver should be closed only when Replicate method returns.

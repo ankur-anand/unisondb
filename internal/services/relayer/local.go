@@ -15,29 +15,9 @@ import (
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	llhist "github.com/openhistogram/circonusllhist"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 const segmentLagEmitThreshold = 3
-
-var (
-	localSegmentLagGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: "unisondb",
-		Subsystem: "local_relayer",
-		Name:      "wal_segment_lag",
-		Help:      "Difference in segment IDs between upstream and noop replica",
-		// id can really increment cardinality of the metrics, should only be used in test or controlled
-		// env.
-	}, []string{"namespace", "id"})
-
-	localWALReplicatedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "unisondb",
-		Subsystem: "local_relayer",
-		Name:      "wal_records_replicated_total",
-		Help:      "Cumulative count of WAL records successfully replicated locally.",
-	}, []string{"namespace"})
-)
 
 // LocalWalRelayer encodes all the parameter needed to start local relayer and used for testing purpose only.
 type LocalWalRelayer struct {
@@ -60,10 +40,10 @@ func NewLocalWalRelayer(id int) *LocalWalRelayer {
 func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metricsTickInterval time.Duration,
 	once *sync.Once, hist *llhist.Histogram) error {
 	rpInstance := replicator.NewReplicator(engine,
-		20,
+		50,
 		1*time.Second, n.lastOffset, "local")
 
-	walReceiver := make(chan []*v1.WALRecord, 100)
+	walReceiver := make(chan []*v1.WALRecord, 1000)
 	replicatorErrors := make(chan error, 2)
 	go func() {
 		err := rpInstance.Replicate(ctx, walReceiver)
@@ -106,7 +86,6 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 				continue
 			}
 			for _, record := range records {
-				localWALReplicatedTotal.WithLabelValues(namespace).Inc()
 				fbRecord := logrecord.GetRootAsLogRecord(record.Record, 0)
 				receivedLSN := fbRecord.Lsn()
 				remoteHLC := fbRecord.Hlc()
@@ -134,7 +113,6 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 			if n.lastOffset != nil {
 				segmentLag := int(engine.CurrentOffset().SegmentID) - int(n.lastOffset.SegmentID)
 				if segmentLag >= segmentLagEmitThreshold {
-					localSegmentLagGauge.WithLabelValues(namespace, n.id).Set(float64(segmentLag))
 					slog.Info("[unisondb.relayer]",
 						slog.String("event_type", "local.relayer.sync.stats"),
 						slog.String("namespace", namespace),
@@ -142,8 +120,6 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 						slog.Int("segment_lag", segmentLag),
 						slog.Int("replicated", n.replicatedCount),
 					)
-				} else {
-					localSegmentLagGauge.DeleteLabelValues(namespace, n.id)
 				}
 			}
 		}

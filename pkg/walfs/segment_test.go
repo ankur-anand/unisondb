@@ -3,6 +3,7 @@ package walfs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -107,7 +108,7 @@ func TestSegment_SequentialWrites(t *testing.T) {
 	}
 
 	_, _, err = reader.Next()
-	assert.ErrorIs(t, err, io.EOF)
+	assert.True(t, errors.Is(err, io.EOF) || errors.Is(err, ErrNoNewData))
 }
 
 func TestSegment_ConcurrentReads(t *testing.T) {
@@ -304,7 +305,7 @@ func TestSegment_CorruptData(t *testing.T) {
 	copy(seg.mmapData[pos.Offset+recordHeaderSize:], []byte{})
 	seg.writeOffset.Store(pos.Offset + recordHeaderSize - 1)
 	_, _, err = seg.Read(pos.Offset)
-	assert.ErrorIs(t, err, io.EOF)
+	assert.True(t, errors.Is(err, io.EOF) || errors.Is(err, ErrNoNewData))
 }
 
 func TestSegment_ReadAfterClose(t *testing.T) {
@@ -409,7 +410,7 @@ func TestSegment_ConcurrentReadWhileWriting(t *testing.T) {
 		defer reader.Close()
 		for {
 			_, _, err := reader.Next()
-			if err == io.EOF {
+			if err == io.EOF || errors.Is(err, ErrNoNewData) {
 				break
 			}
 		}
@@ -441,7 +442,7 @@ func TestSegment_EmptyReaderEOF(t *testing.T) {
 
 	reader := seg.NewReader()
 	_, _, err = reader.Next()
-	assert.ErrorIs(t, err, io.EOF)
+	assert.True(t, errors.Is(err, io.EOF) || errors.Is(err, ErrNoNewData))
 	reader.Close()
 }
 
@@ -760,7 +761,7 @@ func TestSegmentReader_Next_AlignedOffsets(t *testing.T) {
 	i := 0
 	for {
 		data, current, err := reader.Next()
-		if err == io.EOF {
+		if err == io.EOF || errors.Is(err, ErrNoNewData) {
 			break
 		}
 		assert.NoError(t, err)
@@ -829,7 +830,7 @@ func TestSegment_ParallelStreamReaders(t *testing.T) {
 			var count int
 			for {
 				data, _, err := reader.Next()
-				if err == io.EOF {
+				if err == io.EOF || errors.Is(err, ErrNoNewData) {
 					break
 				}
 				assert.NoError(t, err)
@@ -975,7 +976,7 @@ func TestSegmentReader_LastRecordPosition(t *testing.T) {
 	data, pos, err := reader.Next()
 	assert.Nil(t, data)
 	assert.Nil(t, pos)
-	assert.ErrorIs(t, err, io.EOF)
+	assert.True(t, errors.Is(err, io.EOF) || errors.Is(err, ErrNoNewData))
 }
 
 func TestSegment_Reader_MarkForDeletion(t *testing.T) {
@@ -1107,6 +1108,84 @@ func TestSegment_Close_WaitsForReaders_AndBroadcastIsSafe(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("Close() did not finish; possibly stuck waiting on reader cleanup")
 	}
+}
+
+func TestSegmentReader_WaitForNewData(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	defer seg.Close()
+
+	reader := seg.NewReader()
+	assert.NotNil(t, reader)
+	defer reader.Close()
+
+	data, pos, err := reader.Next()
+	assert.Nil(t, data)
+	assert.Nil(t, pos)
+	assert.ErrorIs(t, err, ErrNoNewData)
+
+	payload := []byte("new-wal-entry")
+	_, err = seg.Write(payload)
+	assert.NoError(t, err)
+
+	data, pos, err = reader.Next()
+	assert.NoError(t, err)
+	assert.Equal(t, payload, data)
+	assert.NotNil(t, pos)
+
+	data, pos, err = reader.Next()
+	assert.Nil(t, data)
+	assert.Nil(t, pos)
+	assert.ErrorIs(t, err, ErrNoNewData)
+
+	err = seg.SealSegment()
+	assert.NoError(t, err)
+
+	data, pos, err = reader.Next()
+	assert.Nil(t, data)
+	assert.Nil(t, pos)
+	assert.ErrorIs(t, err, io.EOF)
+}
+
+func TestSegmentReader_ReadAfterSealHasNewData(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	defer seg.Close()
+
+	entry1 := []byte("entry-before-seal-1")
+	entry2 := []byte("entry-before-seal-2")
+
+	_, err = seg.Write(entry1)
+	assert.NoError(t, err)
+
+	_, err = seg.Write(entry2)
+	assert.NoError(t, err)
+
+	err = seg.SealSegment()
+	assert.NoError(t, err)
+
+	reader := seg.NewReader()
+	assert.NotNil(t, reader)
+	defer reader.Close()
+
+	data, pos, err := reader.Next()
+	assert.NoError(t, err)
+	assert.Equal(t, entry1, data)
+	assert.NotNil(t, pos)
+
+	data, pos, err = reader.Next()
+	assert.NoError(t, err)
+	assert.Equal(t, entry2, data)
+	assert.NotNil(t, pos)
+
+	data, pos, err = reader.Next()
+	assert.Nil(t, data)
+	assert.Nil(t, pos)
+	assert.ErrorIs(t, err, io.EOF)
 }
 
 func calculateAlignedFrameSize(dataLen int) int64 {

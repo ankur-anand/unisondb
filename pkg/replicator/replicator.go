@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"io"
+	"sync"
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+const (
+	waitForAppendDefaultTimeout = 30 * time.Second
 )
 
 var (
@@ -26,13 +31,6 @@ var (
 		Name:      "records_total",
 		Help:      "Total number of WAL records processed",
 	}, []string{"namespace", "replicator_engine"})
-
-	mKeyReplicatorBatchesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "unisondb",
-		Subsystem: "replicator",
-		Name:      "batches_total",
-		Help:      "Total number of WAL batches processed",
-	}, []string{"namespace", "replicator_engine"})
 )
 
 // Replicator replicates from the engine and send batched wal records,
@@ -43,6 +41,9 @@ type Replicator struct {
 	batchDuration    time.Duration
 	lastOffset       *dbkernel.Offset
 	replicatorEngine string
+	reader           *dbkernel.Reader
+	ctxDone          chan struct{}
+	namespace        string
 }
 
 // NewReplicator returns an initialized Replicator that could be used for replicating
@@ -56,6 +57,8 @@ func NewReplicator(e *dbkernel.Engine, batchSize int,
 		batchDuration:    batchDuration,
 		lastOffset:       startOffset,
 		replicatorEngine: replicatorEngine,
+		ctxDone:          make(chan struct{}),
+		namespace:        e.Namespace(),
 	}
 }
 
@@ -66,76 +69,90 @@ func (r *Replicator) Replicate(ctx context.Context, recordsChan chan<- []*v1.WAL
 	mKeyActiveReplicator.WithLabelValues(namespace, r.replicatorEngine).Inc()
 	defer mKeyActiveReplicator.WithLabelValues(namespace, r.replicatorEngine).Dec()
 
+	// Start A Goroutine that will monitor the ctx check
+	// If it happens it will close the reader first if any.
+	once := sync.Once{}
+	closeChannel := func() {
+		once.Do(func() {
+			close(r.ctxDone)
+		})
+	}
+	go func() {
+		<-ctx.Done()
+		closeChannel()
+		if r.reader != nil {
+			r.reader.Close()
+		}
+	}()
+
+	// just being safe.
+	defer func() {
+		closeChannel()
+		if r.reader != nil {
+			r.reader.Close()
+		}
+	}()
+
 	for {
-		select {
-		case <-ctx.Done():
+		if ctx.Err() != nil {
+			closeChannel()
+			if r.reader != nil {
+				r.reader.Close()
+			}
 			return ctx.Err()
-		default:
 		}
 
-		err := r.engine.WaitForAppend(ctx, r.batchDuration, r.lastOffset)
+		err := r.engine.WaitForAppendOrDone(r.ctxDone, waitForAppendDefaultTimeout, r.lastOffset)
 
 		if err != nil && !errors.Is(err, dbkernel.ErrWaitTimeoutExceeded) {
+			if r.reader != nil {
+				r.reader.Close()
+			}
 			return err
 		}
 
 		err = r.replicateFromReader(ctx, recordsChan)
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
-				return err
+			if errors.Is(err, io.EOF) || errors.Is(err, dbkernel.ErrNoNewData) {
+				continue
 			}
+			return err
 		}
 	}
 }
 
 // replicateFromReader reads the underlying wal until an err is encountered.
 func (r *Replicator) replicateFromReader(ctx context.Context, recordsChan chan<- []*v1.WALRecord) error {
-	timer := time.NewTimer(r.batchDuration)
-	defer timer.Stop()
-
-	namespace := r.engine.Namespace()
-
 	var batch []*v1.WALRecord
-
 	sendFunc := func() {
 		if len(batch) > 0 {
-			mKeyReplicatorRecordsTotal.WithLabelValues(namespace, r.replicatorEngine).Add(float64(len(batch)))
-			mKeyReplicatorBatchesTotal.WithLabelValues(namespace, r.replicatorEngine).Add(1)
+			mKeyReplicatorRecordsTotal.WithLabelValues(r.namespace, r.replicatorEngine).Add(float64(len(batch)))
 			select {
 			case recordsChan <- batch:
 				batch = []*v1.WALRecord{}
-			case <-ctx.Done():
+			case <-r.ctxDone:
+				if r.reader != nil {
+					r.reader.Close()
+				}
 				return
 			}
 		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		timer.Reset(r.batchDuration)
 	}
 
 	reader, err := r.getReader()
 	if err != nil {
 		return err
 	}
-	defer reader.Close()
 
+	r.reader = reader
 	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timer.C:
-			sendFunc()
-		default:
-		}
-
 		value, pos, err := reader.Next()
 		if err != nil {
+			// irrespective of the error clear the batch
+			sendFunc()
 			if errors.Is(err, io.EOF) {
-				sendFunc()
+				reader.Close()
+				r.reader = nil
 				break
 			}
 
@@ -160,12 +177,15 @@ func (r *Replicator) replicateFromReader(ctx context.Context, recordsChan chan<-
 }
 
 func (r *Replicator) getReader() (*dbkernel.Reader, error) {
+	if r.reader != nil {
+		return r.reader, nil
+	}
 	if r.lastOffset == nil {
-		reader, err := r.engine.NewReader()
+		reader, err := r.engine.NewReaderWithTail(nil)
 		return reader, err
 	}
 
-	reader, err := r.engine.NewReaderWithStart(r.lastOffset)
+	reader, err := r.engine.NewReaderWithTail(r.lastOffset)
 	if err != nil {
 		return nil, err
 	}

@@ -155,11 +155,20 @@ func (w *WalIO) Append(data []byte) (*Offset, error) {
 	return &off, err
 }
 
+type ReaderOption func(*Reader)
+
+func WithActiveTail(enabled bool) ReaderOption {
+	return func(r *Reader) {
+		r.withActiveTail = enabled
+	}
+}
+
 type Reader struct {
-	appendReader *walfs.Reader
-	closed       atomic.Bool
-	namespace    string
-	taggedScope  umetrics.Scope
+	appendReader   *walfs.Reader
+	closed         atomic.Bool
+	namespace      string
+	taggedScope    umetrics.Scope
+	withActiveTail bool
 }
 
 // Next returns the next chunk data and its position in the WAL.
@@ -169,24 +178,33 @@ func (r *Reader) Next() ([]byte, *Offset, error) {
 	if r.closed.Load() {
 		return nil, nil, io.EOF
 	}
-	startTime := time.Now()
-	value, off, err := r.appendReader.Next()
-	if err != nil && !errors.Is(err, io.EOF) {
-		r.taggedScope.Counter(metricsWalReadTotal).Inc(1)
-		r.taggedScope.Counter(metricsWalReadErrorTotal).Inc(1)
-	}
-	if errors.Is(err, io.EOF) {
-		r.Close()
-	}
-	if err == nil {
-		duration := time.Since(startTime)
-		// we are sampling only 5% of fast-path reads, but always capture slow reads
-		if rand.Float64() < 0.05 || duration > 10*time.Millisecond {
-			r.taggedScope.Histogram(metricsWalReadDuration, readLatencyBuckets).RecordDuration(duration)
+
+	start := time.Now()
+	data, pos, err := r.appendReader.Next()
+
+	switch {
+	case errors.Is(err, walfs.ErrNoNewData):
+		if !r.withActiveTail {
+			r.Close()
+			return nil, nil, io.EOF
 		}
-		r.taggedScope.Counter(metricsWalReadTotal).Inc(1)
+		return nil, nil, err
+
+	case errors.Is(err, io.EOF):
+		r.Close()
+		return nil, nil, err
+
+	case err != nil:
+		r.taggedScope.Counter(metricsWalReadErrorTotal).Inc(1)
+		return nil, nil, err
 	}
-	return value, off, err
+
+	// Successful read
+	dur := time.Since(start)
+	if rand.Float64() < 0.05 || dur > 10*time.Millisecond {
+		r.taggedScope.Histogram(metricsWalReadDuration, readLatencyBuckets).RecordDuration(dur)
+	}
+	return data, pos, nil
 }
 
 func (r *Reader) Close() {
@@ -197,22 +215,34 @@ func (r *Reader) Close() {
 
 // NewReader returns a new instance of WIOReader, allowing the caller to
 // access WAL logs for replication, recovery, or log processing.
-func (w *WalIO) NewReader() (*Reader, error) {
-	return &Reader{
+func (w *WalIO) NewReader(options ...ReaderOption) (*Reader, error) {
+	reader := &Reader{
 		appendReader: w.appendLog.NewReader(),
 		namespace:    w.namespace,
 		taggedScope:  w.taggedScope,
-	}, nil
+	}
+	for _, opt := range options {
+		opt(reader)
+	}
+
+	return reader, nil
 }
 
 // NewReaderWithStart returns a new instance of WIOReader from the provided Offset.
-func (w *WalIO) NewReaderWithStart(offset *Offset) (*Reader, error) {
-	reader, err := w.appendLog.NewReaderWithStart(*offset)
-	return &Reader{
-		appendReader: reader,
+func (w *WalIO) NewReaderWithStart(offset *Offset, options ...ReaderOption) (*Reader, error) {
+	underlyingReader, err := w.appendLog.NewReaderWithStart(*offset)
+	if err != nil {
+		return nil, err
+	}
+	reader := &Reader{
+		appendReader: underlyingReader,
 		namespace:    w.namespace,
 		taggedScope:  w.taggedScope,
-	}, err
+	}
+	for _, opt := range options {
+		opt(reader)
+	}
+	return reader, nil
 }
 
 // GetTransactionRecords returns all the WalRecord that is part of the particular Txn.

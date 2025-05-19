@@ -2,6 +2,8 @@ package replicator
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -61,7 +63,8 @@ func TestReplicator_Replicate(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		err := replicatorInstance.Replicate(ctx, recvChan)
-		assert.ErrorIs(t, err, context.DeadlineExceeded, "ctx deadline should be the only error")
+		assert.True(t, errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled),
+			"expected context deadline or cancel, got: %v", err)
 	}()
 
 	var recvRecords []*v1.WALRecord
@@ -97,50 +100,112 @@ outer:
 		expected, engine.OpsReceivedCount())
 }
 
-func TestReplicator_ReplicateReaderTimer(t *testing.T) {
-
+func TestReplicator_StartFromNonZeroOffset(t *testing.T) {
 	baseDir := t.TempDir()
-	namespace := "test_timer"
+	namespace := "test_start_offset"
 
 	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
-
 	t.Cleanup(func() {
-		err := engine.Close(context.Background())
-		assert.NoError(t, err, "Failed to close engine")
+		_ = engine.Close(context.Background())
 	})
 
-	for i := 0; i < 10000; i++ {
-		key := gofakeit.UUID()
-		value := gofakeit.Sentence(100)
-		assert.NoError(t, engine.Put([]byte(key), []byte(value)), "put should not fail")
+	var offsets []*dbkernel.Offset
+	for i := 0; i < 10; i++ {
+		key := []byte("key" + strconv.Itoa(i))
+		value := []byte("value" + strconv.Itoa(i))
+		assert.NoError(t, engine.Put(key, value))
+		time.Sleep(10 * time.Millisecond)
+		last := engine.CurrentOffset()
+		offsets = append(offsets, last)
 	}
 
-	batchDuration := 2 * time.Millisecond
-	replicatorInstance := NewReplicator(engine, 20000,
-		batchDuration, nil, "testing")
+	startOffset := offsets[4]
 
-	recvChan := make(chan []*v1.WALRecord, 10)
+	rep := NewReplicator(engine, 3, 2*time.Second, startOffset, "start-from-offset")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	wg := &sync.WaitGroup{}
-	wg.Add(1)
+	recvChan := make(chan []*v1.WALRecord, 5)
 
 	go func() {
-		defer wg.Done()
-		_ = replicatorInstance.replicateFromReader(ctx, recvChan)
+		_ = rep.Replicate(ctx, recvChan)
 	}()
 
-	for i := 0; i < 2; i++ {
+	var all []*v1.WALRecord
+collect:
+	for {
 		select {
-		case records := <-recvChan:
-			assert.Less(t, len(records), 10000, "replicator batch size should be less")
-		case <-time.After(20 * time.Millisecond):
-			t.Errorf("failed waiting for replicator batch")
+		case batch := <-recvChan:
+			all = append(all, batch...)
+		case <-ctx.Done():
+			break collect
 		}
 	}
+
+	assert.Len(t, all, 5, "should receive only records after start offset")
+
+	for i, record := range all {
+		offset := dbkernel.DecodeOffset(record.Offset)
+		assert.True(t, isOffsetGreater(offset, startOffset),
+			"record %d offset %v should be > %v", i, offset, startOffset)
+	}
+}
+
+func isOffsetGreater(a, b *dbkernel.Offset) bool {
+	if a.SegmentID > b.SegmentID {
+		return true
+	}
+	if a.SegmentID == b.SegmentID && a.Offset > b.Offset {
+		return true
+	}
+	return false
+}
+
+func TestReplicator_ContextCancelledBeforeLoop(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_ctx_cancel"
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() { _ = engine.Close(context.Background()) })
+
+	assert.NoError(t, engine.Put([]byte("key"), []byte("value")))
+
+	rep := NewReplicator(engine, 5, 1*time.Second, nil, "testing")
+	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	wg.Wait()
+
+	recvChan := make(chan []*v1.WALRecord)
+
+	err = rep.Replicate(ctx, recvChan)
+	assert.Error(t, err)
+	assert.True(t, errors.Is(err, context.Canceled), "expected context.Canceled, got %v", err)
+}
+
+func TestReplicator_SendFuncBlockedCtxDone(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_sendfunc_ctxdone"
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() { _ = engine.Close(context.Background()) })
+
+	for i := 0; i < 10; i++ {
+		key := gofakeit.UUID()
+		value := gofakeit.Sentence(10)
+		assert.NoError(t, engine.Put([]byte(key), []byte(value)))
+	}
+
+	recvChan := make(chan []*v1.WALRecord)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	rep := NewReplicator(engine, 3, 1*time.Second, nil, "test-engine")
+	close(rep.ctxDone)
+
+	err = rep.replicateFromReader(ctx, recvChan)
+	assert.NoError(t, err)
+	assert.Nil(t, rep.reader, "reader should be nil after close")
 }

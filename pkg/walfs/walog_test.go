@@ -131,7 +131,7 @@ func TestSegmentManager_NewReader(t *testing.T) {
 	var seen []string
 	for {
 		data, _, err := reader.Next()
-		if errors.Is(err, io.EOF) {
+		if errors.Is(err, io.EOF) || errors.Is(err, walfs.ErrNoNewData) {
 			break
 		}
 		assert.NoError(t, err)
@@ -167,7 +167,7 @@ func TestSegmentManager_NewReaderWithStart(t *testing.T) {
 	var results []string
 	for {
 		data, _, err := reader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) || errors.Is(err, walfs.ErrNoNewData) {
 			break
 		}
 		assert.NoError(t, err)
@@ -341,7 +341,7 @@ func TestSegmentManager_Rotation_NoDataLoss(t *testing.T) {
 	var results []string
 	for {
 		data, _, err := reader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) || errors.Is(err, walfs.ErrNoNewData) {
 			break
 		}
 		assert.NoError(t, err)
@@ -411,7 +411,7 @@ func TestSegmentManager_ConcurrentReadWrite(t *testing.T) {
 			reader := manager.NewReader()
 			for {
 				data, _, err := reader.Next()
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) || errors.Is(err, walfs.ErrNoNewData) {
 					break
 				}
 				assert.NoError(t, err)
@@ -475,7 +475,7 @@ retryRead:
 
 		for {
 			data, pos, err := reader.Next()
-			if errors.Is(err, io.EOF) {
+			if errors.Is(err, io.EOF) || errors.Is(err, walfs.ErrNoNewData) {
 				retries++
 				time.Sleep(10 * time.Millisecond)
 				continue retryRead
@@ -533,6 +533,7 @@ func TestManagerReader_LastRecordPosition(t *testing.T) {
 	}
 
 	reader := manager.NewReader()
+	defer reader.Close()
 
 	var allEntries [][]byte
 	allEntries = append(allEntries, entriesSeg1...)
@@ -553,7 +554,7 @@ func TestManagerReader_LastRecordPosition(t *testing.T) {
 	data, pos, err := reader.Next()
 	assert.Nil(t, data)
 	assert.Nil(t, pos)
-	assert.ErrorIs(t, err, io.EOF)
+	assert.True(t, errors.Is(err, io.EOF) || errors.Is(err, walfs.ErrNoNewData))
 }
 
 func TestWALog_NewReaderAfter(t *testing.T) {
@@ -578,7 +579,7 @@ func TestWALog_NewReaderAfter(t *testing.T) {
 	var actual []string
 	for {
 		data, _, err := reader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) || errors.Is(err, walfs.ErrNoNewData) {
 			break
 		}
 		assert.NoError(t, err)
@@ -633,38 +634,25 @@ func TestReader_NextClosesOlderSegmentReaders(t *testing.T) {
 	}
 
 	segmentRefs := walog.Segments()
+	currSegID := walog.Current().ID()
 
 	reader := walog.NewReader()
 	defer reader.Close()
 
-	var lastSegID walfs.SegmentID
-	seenSegments := make(map[walfs.SegmentID]bool)
-
 	for {
 		data, pos, err := reader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) || errors.Is(err, walfs.ErrNoNewData) {
 			break
 		}
 		assert.NoError(t, err)
 		assert.NotNil(t, pos)
-
-		if pos.SegmentID != lastSegID {
-			if lastSegID != 0 {
-				seg := segmentRefs[lastSegID]
-				hasReaders := seg.HasActiveReaders()
-				assert.Falsef(t, hasReaders,
-					"segment %d should not have any active readers after moving to segment %d",
-					lastSegID, pos.SegmentID)
-			}
-			lastSegID = pos.SegmentID
-			seenSegments[pos.SegmentID] = true
-		}
-
 		assert.True(t, bytes.HasPrefix(data, []byte("entry-")))
 	}
 
 	for _, seg := range segmentRefs {
-		assert.False(t, seg.HasActiveReaders())
+		if seg.ID() != currSegID {
+			assert.False(t, seg.HasActiveReaders())
+		}
 	}
 }
 
@@ -826,6 +814,75 @@ func TestWALog_SegmentRotationCallback(t *testing.T) {
 		t.Errorf("error waiting for the RotateSegment Callback")
 	}
 
+}
+
+func TestWALog_SealedSegmentReturnsEOFAndHasNoActiveReaders(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(1024))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	payload := []byte("hello-world")
+	pos, err := wal.Write(payload)
+	assert.NoError(t, err)
+	reader, err := wal.NewReaderWithStart(pos)
+	assert.NoError(t, err)
+
+	data, next, err := reader.Next()
+	assert.NoError(t, err)
+	assert.Equal(t, payload, data)
+	assert.NotNil(t, next)
+
+	data, next, err = reader.Next()
+	assert.Nil(t, data)
+	assert.Nil(t, next)
+	assert.ErrorIs(t, err, walfs.ErrNoNewData)
+
+	err = wal.RotateSegment()
+	assert.NoError(t, err)
+
+	data, next, err = reader.Next()
+	assert.Nil(t, data)
+	assert.Nil(t, next)
+	assert.ErrorIs(t, err, io.EOF)
+
+	reader.Close()
+
+	seg1 := wal.Current().ID() - 1
+	segMap := wal.Segments()
+	seg, ok := segMap[seg1]
+	assert.True(t, ok, "Segment 1 should still exist")
+	assert.False(t, seg.HasActiveReaders(), "Segment 1 should have no active readers after Close")
+	assert.True(t, walfs.IsSealed(seg.GetFlags()), "Segment 1 should be sealed after rotation")
+}
+
+func TestWALogReader_ErrNoNewDataOnActiveTail(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	wal, err := walfs.NewWALog(tmpDir, ".wal")
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	payload := []byte("test-record")
+	pos, err := wal.Write(payload)
+	assert.NoError(t, err)
+
+	reader, err := wal.NewReaderWithStart(walfs.RecordPosition{
+		SegmentID: 0,
+	})
+	assert.NoError(t, err)
+	defer reader.Close()
+
+	data, current, err := reader.Next()
+	assert.NoError(t, err)
+	assert.Equal(t, payload, data)
+	assert.Equal(t, pos.SegmentID, current.SegmentID)
+
+	data, current, err = reader.Next()
+	assert.Nil(t, data)
+	assert.Nil(t, current)
+	assert.ErrorIs(t, err, walfs.ErrNoNewData)
 }
 
 func BenchmarkSegmentManager_Write_NoSync(b *testing.B) {

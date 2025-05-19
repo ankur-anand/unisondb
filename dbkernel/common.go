@@ -25,6 +25,7 @@ var (
 	ErrDatabaseDirInUse = errors.New("pid.lock is held by another process")
 	ErrInternalError    = errors.New("internal error")
 	ErrMisMatchKeyType  = errors.New("mismatch key type with existing value")
+	ErrNoNewData        = wal.ErrNoNewData
 )
 
 var (

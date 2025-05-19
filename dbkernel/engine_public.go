@@ -202,8 +202,8 @@ func (e *Engine) BatchDelete(keys [][]byte) error {
 	return e.persistKeyValue(keys, nil, logrecord.LogOperationTypeDelete)
 }
 
-// WaitForAppend blocks until a put/delete operation occurs or timeout happens or context cancelled is done.
-func (e *Engine) WaitForAppend(ctx context.Context, timeout time.Duration, lastSeen *Offset) error {
+// WaitForAppendOrDone blocks until a put/delete operation occurs or timeout happens or context cancelled is done.
+func (e *Engine) WaitForAppendOrDone(callerDone chan struct{}, timeout time.Duration, lastSeen *Offset) error {
 	currentPos := e.currentOffset.Load()
 	if currentPos != nil && hasNewWriteSince(currentPos, lastSeen) {
 		return nil
@@ -220,8 +220,8 @@ func (e *Engine) WaitForAppend(ctx context.Context, timeout time.Duration, lastS
 	}
 
 	select {
-	case <-ctx.Done():
-		return ctx.Err()
+	case <-callerDone:
+		return context.Canceled
 	case <-done:
 		return nil
 	case <-time.After(timeout):
@@ -533,4 +533,15 @@ func (e *Engine) NewReaderWithStart(startPos *Offset) (r *Reader, err error) {
 	}
 
 	return e.walIO.NewReaderWithStart(startPos)
+}
+
+// NewReaderWithTail returns a reader that starts from the provided offset,
+// and supports tail-following behavior.
+// It returns ErrNoNewData when no new entries are available *yet*,
+// instead of io.EOF.
+func (e *Engine) NewReaderWithTail(startPos *Offset) (*Reader, error) {
+	if startPos == nil {
+		return e.walIO.NewReader(wal.WithActiveTail(true))
+	}
+	return e.walIO.NewReaderWithStart(startPos, wal.WithActiveTail(true))
 }

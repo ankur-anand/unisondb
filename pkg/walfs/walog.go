@@ -441,6 +441,17 @@ func (wl *WALog) MarkSegmentsForDeletion() {
 
 	var candidates []*Segment
 	for _, seg := range clonedSegments {
+		if seg.closed.Load() {
+			// already closed
+			continue
+		}
+		if seg.markedForDeletion.Load() {
+			// already queued
+			continue
+		}
+		if len(seg.mmapData) < segmentHeaderSize {
+			continue
+		}
 		if IsSealed(seg.GetFlags()) {
 			candidates = append(candidates, seg)
 		}
