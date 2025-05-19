@@ -117,6 +117,7 @@ runcmd:
   - echo "deb [signed-by=/usr/share/keyrings/grafana.gpg] https://packages.grafana.com/oss/deb stable main" | tee /etc/apt/sources.list.d/grafana.list
   - apt-get update
   - apt-get install -y grafana
+  - echo "GF_SECURITY_ADMIN_PASSWORD=unison" >> /etc/default/grafana-server
   - systemctl enable grafana-server
   - systemctl start grafana-server
 
