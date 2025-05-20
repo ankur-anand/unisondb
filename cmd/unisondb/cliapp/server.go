@@ -371,7 +371,7 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 	statsHandler := grpcutils.NewGRPCStatsHandler(grpcMethods)
 	ms.statsHandler = statsHandler
 
-	ir := grpcutils.NewStatefulInterceptor(ms.pl, enabledMethodsLogs)
+	//ir := grpcutils.NewStatefulInterceptor(ms.pl, enabledMethodsLogs)
 	var serverOpts []grpc.ServerOption
 
 	if ms.cfg.Grpc.AllowInsecure {
@@ -388,16 +388,16 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 	}
 
 	serverOpts = append(serverOpts,
-		grpc.StatsHandler(statsHandler),
-		grpc.ChainStreamInterceptor(grpcutils.RequireNamespaceInterceptor,
-			grpcutils.RequestIDStreamInterceptor,
-			grpcutils.MethodInterceptor,
-			ir.TelemetryStreamInterceptor),
-
-		grpc.ChainUnaryInterceptor(grpcutils.RequireNamespaceUnaryInterceptor,
-			grpcutils.RequestIDUnaryInterceptor,
-			grpcutils.MethodUnaryInterceptor,
-			ir.TelemetryUnaryInterceptor),
+		//grpc.StatsHandler(statsHandler),
+		//grpc.ChainStreamInterceptor(grpcutils.RequireNamespaceInterceptor,
+		//	grpcutils.RequestIDStreamInterceptor,
+		//	grpcutils.MethodInterceptor,
+		//	ir.TelemetryStreamInterceptor),
+		//
+		//grpc.ChainUnaryInterceptor(grpcutils.RequireNamespaceUnaryInterceptor,
+		//	grpcutils.RequestIDUnaryInterceptor,
+		//	grpcutils.MethodUnaryInterceptor,
+		//	ir.TelemetryUnaryInterceptor),
 
 		grpc.KeepaliveEnforcementPolicy(kAlv),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
@@ -405,7 +405,7 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 			Time: 5 * time.Minute,
 		}),
 		// https://github.com/grpc/grpc-go/pull/6922
-		grpc.WaitForHandlers(true),
+		//grpc.WaitForHandlers(true),
 	)
 
 	gS := grpc.NewServer(
