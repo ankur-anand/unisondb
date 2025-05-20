@@ -398,6 +398,8 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 		//	grpcutils.RequestIDUnaryInterceptor,
 		//	grpcutils.MethodUnaryInterceptor,
 		//	ir.TelemetryUnaryInterceptor),
+		grpc.InitialWindowSize(16<<20),     // 16 MB per stream
+		grpc.InitialConnWindowSize(32<<20), // 32 MB per connection
 
 		grpc.KeepaliveEnforcementPolicy(kAlv),
 		grpc.KeepaliveParams(keepalive.ServerParameters{

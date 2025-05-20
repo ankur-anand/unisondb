@@ -168,7 +168,9 @@ func NewRelayerGRPCConn(cfg *RelayConfig) (*grpc.ClientConn, error) {
 	if cfg.GrpcServiceConfig == "" {
 		cfg.GrpcServiceConfig = svcutils.BuildDefaultRelayerServiceConfigJSON()
 	}
-	opts = append(opts, grpc.WithDefaultServiceConfig(cfg.GrpcServiceConfig))
+	opts = append(opts, grpc.WithDefaultServiceConfig(cfg.GrpcServiceConfig),
+		grpc.WithInitialWindowSize(16<<20),     // 16 MB stream window
+		grpc.WithInitialConnWindowSize(32<<20)) // 32 MB connection window)
 
 	return grpc.NewClient(cfg.UpstreamAddress,
 		opts...)
