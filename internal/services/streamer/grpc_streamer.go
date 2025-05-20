@@ -235,6 +235,9 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 			for _, walRecord := range walRecords {
 				lastReceivedRecordTime = time.Now()
 				totalBatchSize += len(walRecord.Record)
+				buf := make([]byte, len(walRecord.Record)-1)
+				copy(buf, walRecord.Record[1:])
+				walRecord.Record = buf
 				batch = append(batch, walRecord)
 
 				if totalBatchSize >= grpcMaxMsgSize {
