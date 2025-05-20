@@ -80,9 +80,6 @@ func (r *Replicator) Replicate(ctx context.Context, recordsChan chan<- []*v1.WAL
 	go func() {
 		<-ctx.Done()
 		closeChannel()
-		if r.reader != nil {
-			r.reader.Close()
-		}
 	}()
 
 	// just being safe.
