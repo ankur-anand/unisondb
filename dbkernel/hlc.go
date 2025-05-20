@@ -1,6 +1,7 @@
 package dbkernel
 
 import (
+	"sync/atomic"
 	"time"
 )
 
@@ -40,7 +41,7 @@ func IsConcurrent(hlc1, hlc2 uint64) bool {
 	return lastTime1 == lastTime2 && counter1 != counter2
 }
 
-var lastHLC uint64
+var lastHLC atomic.Uint64
 
 // HLCNow returns an encoded hybrid logical clock. 41 bits = ms timestamp since custom epoch and 23 bits = logical counter.
 func HLCNow() uint64 {
@@ -53,7 +54,7 @@ func HLCNow() uint64 {
 	ms := uint64(now.Add(adjustment).UnixMilli()) - CustomEpochMs
 	ms &= timeMask
 
-	prev := lastHLC
+	prev := lastHLC.Load()
 	prevTS, prevCounter := HLCDecode(prev)
 
 	var newTS uint64
@@ -78,6 +79,8 @@ func HLCNow() uint64 {
 	}
 
 	hlc := (newTS << logicalBits) | (newCounter & logicalMask)
-	lastHLC = hlc
+	if lastHLC.CompareAndSwap(prev, hlc) {
+		return hlc
+	}
 	return hlc
 }
