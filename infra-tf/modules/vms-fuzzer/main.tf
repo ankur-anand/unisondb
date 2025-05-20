@@ -45,6 +45,7 @@ resource "digitalocean_droplet" "do_droplets" {
     workers_per_namespace = var.workers_per_namespace
     ops_per_namespace     = var.ops_per_namespace
     central_prometheus_ip = var.prom_ip
+    branch                = var.git_branch
   })
 
 }

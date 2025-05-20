@@ -82,6 +82,11 @@ variable "local_relayer_count" {
   type = number
 }
 
+variable "git_branch" {
+  description = "The git branch to use"
+  type        = string
+}
+
 variable "prom_ip" {
   description = "Private IP of central prometheus server"
   type        = string

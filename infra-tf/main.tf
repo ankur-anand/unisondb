@@ -104,7 +104,8 @@ module "fuzzer" {
   ob_user             = var.ob_user
   droplet_size        = var.fuzzer_droplet_size
   local_relayer_count = var.local_relayer_count
-  prom_ip = module.prometheus.droplet_private_ip
+  prom_ip             = module.prometheus.droplet_private_ip
+  git_branch          = var.git_branch
 }
 
 output "fuzzer" {
@@ -148,7 +149,7 @@ module "client" {
   git_branch           = var.git_branch
   ssh_private_key_path = var.ssh_private_key_path
   instance_count       = var.instance_count
-  prom_ip = module.prometheus.droplet_private_ip
+  prom_ip              = module.prometheus.droplet_private_ip
 }
 
 output "client" {

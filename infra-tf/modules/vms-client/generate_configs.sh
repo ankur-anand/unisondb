@@ -47,7 +47,7 @@ interval = "5m"
 enabled = true
 max_age = "1h"
 min_segments = 5
-max_segments = 10
+max_segments = 30
 
 [relayer_config.relayer1]
 namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector"]
@@ -70,9 +70,9 @@ warn  = 100.0
 error = 100.0
 
 [wal_io_global_limiter]
-enable = true
-burst = 400
-rate_limit = 1200
+enable = false
+burst = 5000
+rate_limit = 5000
 EOF
 done
 
