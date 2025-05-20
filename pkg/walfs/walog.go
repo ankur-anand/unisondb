@@ -14,6 +14,18 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+var (
+	mKeyActiveSegments = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: "unisondb",
+		Subsystem: "walfs",
+		Name:      "active_segments",
+		Help:      "Number of active WAL segments after cleanup",
+	})
 )
 
 var (
@@ -534,6 +546,7 @@ func (wl *WALog) CleanupStalePendingSegments() {
 		)
 	}
 	wl.snapshotSegments()
+	mKeyActiveSegments.Set(float64(len(wl.segments)))
 	wl.mu.Unlock()
 }
 

@@ -16,6 +16,30 @@ import (
 	"time"
 
 	"github.com/edsrzf/mmap-go"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+)
+
+var (
+	mKeySegmentCloseCount = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "unisondb",
+			Subsystem: "walfs",
+			Name:      "segment_close_total",
+			Help:      "Total number of segments closed",
+		},
+		[]string{"status"},
+	)
+
+	mKeySegmentCloseDuration = promauto.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "unisondb",
+			Subsystem: "walfs",
+			Name:      "segment_close_duration_seconds",
+			Help:      "Duration of segment close operations",
+			Buckets:   prometheus.DefBuckets,
+		},
+	)
 )
 
 var ErrNoNewData = errors.New("no new data yet")
@@ -556,13 +580,22 @@ func (seg *Segment) Close() error {
 		return nil
 	}
 
+	start := time.Now()
+
 	seg.closeCond.L.Lock()
 	for seg.refCount.Load() > 0 {
 		seg.closeCond.Wait()
 	}
 	seg.closeCond.L.Unlock()
 
+	var status = "success"
+	defer func() {
+		mKeySegmentCloseDuration.Observe(time.Since(start).Seconds())
+		mKeySegmentCloseCount.WithLabelValues(status).Inc()
+	}()
+
 	if err := seg.Sync(); err != nil {
+		status = "sync_error"
 		defer func() {
 			_ = seg.mmapData.Unmap()
 			_ = seg.fd.Close()
@@ -572,11 +605,13 @@ func (seg *Segment) Close() error {
 	seg.closed.Store(true)
 
 	if err := seg.mmapData.Unmap(); err != nil {
+		status = "unmap_error"
 		_ = seg.fd.Close()
 		return fmt.Errorf("unmap error: %w", err)
 	}
 
 	if err := seg.fd.Close(); err != nil {
+		status = "close_error"
 		return fmt.Errorf("file close error: %w", err)
 	}
 
