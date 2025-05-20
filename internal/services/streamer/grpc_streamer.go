@@ -30,7 +30,7 @@ var (
 	batchWaitTime = time.Millisecond * 100
 
 	// batchSize defines a size of batch.
-	batchSize = 20
+	batchSize = 100
 
 	grpcMaxMsgSize = 1 << 20
 )
