@@ -36,7 +36,18 @@ base_dir = "/tmp/unisondb/database_$i"
 namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector"]
 bytes_per_sync = "1MB"
 segment_size = "16MB"
-arena_size = "4MB"
+disable_entry_type_check = true
+
+[write_notify_config]
+enabled = true
+max_delay = "20ms"
+
+[storage_config.wal_cleanup_config]
+interval = "5m"
+enabled = true
+max_age = "1h"
+min_segments = 5
+max_segments = 10
 
 [relayer_config.relayer1]
 namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector"]
