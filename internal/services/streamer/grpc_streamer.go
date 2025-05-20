@@ -30,9 +30,20 @@ var (
 	batchWaitTime = time.Millisecond * 100
 
 	// batchSize defines a size of batch.
-	batchSize = 1
+	batchSize = 20
 
 	grpcMaxMsgSize = 1 << 20
+)
+
+var metricsWalReadLatency = promauto.NewHistogramVec(
+	prometheus.HistogramOpts{
+		Namespace: "unisondb",
+		Subsystem: "streamer",
+		Name:      "wal_batch_read_latency_seconds",
+		Help:      "Latency between reads of WAL batches from the receiver",
+		Buckets:   prometheus.ExponentialBuckets(0.001, 2, 15), // 1ms to ~16s
+	},
+	[]string{"namespace", "method"},
 )
 
 // GrpcStreamer implements gRPC-based WalStreamerService.
@@ -244,7 +255,7 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 
 func (s *GrpcStreamer) flushBatch(batch []*v1.WALRecord, g grpc.ServerStream) error {
 	namespace, reqID, method := grpcutils.GetRequestInfo(g.Context())
-	//metricsStreamSendTotal.WithLabelValues(namespace, string(method), "grpc").Add(float64(len(batch)))
+	metricsStreamSendTotal.WithLabelValues(namespace, string(method), "grpc").Add(float64(len(batch)))
 	if len(batch) == 0 {
 		return nil
 	}
@@ -252,10 +263,10 @@ func (s *GrpcStreamer) flushBatch(batch []*v1.WALRecord, g grpc.ServerStream) er
 	slog.Debug("[unisondb.streamer.grpc] Batch flushing", "size", len(batch))
 	response := &v1.StreamWalRecordsResponse{Records: batch, ServerTimestamp: timestamppb.Now()}
 
-	//start := time.Now()
-	//defer func() {
-	//	metricsStreamSendLatency.WithLabelValues(namespace, string(method), "grpc").Observe(time.Since(start).Seconds())
-	//}()
+	start := time.Now()
+	defer func() {
+		metricsStreamSendLatency.WithLabelValues(namespace, string(method), "grpc").Observe(time.Since(start).Seconds())
+	}()
 
 	if err := g.SendMsg(response); err != nil {
 		slog.Error("[unisondb.streamer.grpc]",
