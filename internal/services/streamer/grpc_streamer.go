@@ -13,6 +13,8 @@ import (
 	"github.com/ankur-anand/unisondb/internal/services"
 	"github.com/ankur-anand/unisondb/pkg/replicator"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -187,6 +189,7 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 		batch                  []*v1.WALRecord
 		totalBatchSize         int
 		lastReceivedRecordTime = time.Now()
+		lastBatchReadTime      = time.Now()
 	)
 
 	flusher := func() error {
@@ -201,6 +204,12 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 	dynamicTimeoutTicker := time.NewTicker(s.dynamicTimeout)
 	defer dynamicTimeoutTicker.Stop()
 
+	ctxDoneSignal := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		close(ctxDoneSignal)
+	}()
+
 	for {
 		select {
 		case <-dynamicTimeoutTicker.C:
@@ -210,7 +219,7 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 		case <-s.shutdown:
 			return status.Error(codes.Unavailable, internal.GracefulShutdownMsg)
 
-		case <-ctx.Done():
+		case <-ctxDoneSignal:
 			err := ctx.Err()
 			if errors.Is(err, services.ErrStreamTimeout) {
 				return services.ToGRPCError(namespace, reqID, method, services.ErrStreamTimeout)
@@ -220,6 +229,9 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 			}
 			return ctx.Err()
 		case walRecords := <-walReceiver:
+			readDelta := time.Since(lastBatchReadTime)
+			lastBatchReadTime = time.Now()
+			metricsWalReadLatency.WithLabelValues(namespace, string(method)).Observe(readDelta.Seconds())
 			for _, walRecord := range walRecords {
 				lastReceivedRecordTime = time.Now()
 				totalBatchSize += len(walRecord.Record)

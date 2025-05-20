@@ -72,9 +72,15 @@ func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 	backoff := initialBackoff
 	streamStartTime := time.Now()
 
+	ctxDoneSignal := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		close(ctxDoneSignal)
+	}()
+
 	for {
 		select {
-		case <-ctx.Done():
+		case <-ctxDoneSignal:
 			return ctx.Err()
 		default:
 		}
@@ -96,7 +102,7 @@ func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 					"namespace", c.namespace, "error", err,
 					"retry_count", retryCount)
 				select {
-				case <-ctx.Done():
+				case <-ctxDoneSignal:
 					return ctx.Err()
 				case <-time.After(getJitteredBackoff(&backoff)):
 				}
@@ -112,7 +118,7 @@ func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 					"namespace", c.namespace, "error", err,
 					"retry_count", retryCount)
 				select {
-				case <-ctx.Done():
+				case <-ctxDoneSignal:
 					return ctx.Err()
 				case <-time.After(getJitteredBackoff(&backoff)):
 				}
