@@ -513,12 +513,12 @@ func (wl *WALog) CleanupStalePendingSegments() {
 	toRemove := make(map[SegmentID]*Segment)
 
 	wl.deletionMu.Lock()
+	defer wl.deletionMu.Unlock()
 	for id, seg := range wl.pendingDeletion {
 		if _, err := os.Stat(seg.path); os.IsNotExist(err) {
 			toRemove[id] = seg
 		}
 	}
-	wl.deletionMu.Unlock()
 
 	if len(toRemove) == 0 {
 		return
