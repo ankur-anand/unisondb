@@ -56,6 +56,7 @@ func NewReplicaWALHandler(engine *Engine) *ReplicaWALHandler {
 
 // ApplyRecord validates and applies a WAL record to the mem table which later get flushed to Btree Store.
 func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byte) error {
+	//return nil
 	if receivedOffset == nil {
 		slog.Error("[unisondb.dbkernal]",
 			slog.String("event_type", "apply.record.errored"),
@@ -79,32 +80,32 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 	if lsn != decoded.Lsn() {
 		return fmt.Errorf("%w %d, expected %d", ErrInvalidLSN, decoded.Lsn(), lsn)
 	}
-
+	
 	wh.engine.writeSeenCounter.Add(1)
-	offset, err := wh.engine.walIO.Append(encodedWal)
-	if err != nil {
-		return err
-	}
-
-	if !isEqualOffset(offset, DecodeOffset(receivedOffset)) {
-		slog.Error("[unisondb.dbkernal]",
-			slog.String("event_type", "apply.record.errored"),
-			slog.String("error", " expected offset of wal entry didn't matched the received offset"),
-			slog.Group("engine",
-				slog.String("namespace", wh.engine.namespace),
-			),
-			slog.Group("ops",
-				slog.Uint64("received", wh.engine.writeSeenCounter.Load()),
-				slog.Uint64("flushed", wh.engine.opsFlushedCounter.Load()),
-			),
-			slog.Group("offset",
-				slog.Any("received", wal.DecodeOffset(receivedOffset)),
-				slog.Any("inserted", offset),
-				slog.Int("entry_size", len(encodedWal))),
-		)
-
-		return ErrInvalidOffset
-	}
+	//offset, err := wh.engine.walIO.Append(encodedWal)
+	//if err != nil {
+	//	return err
+	//}
+	//
+	//if !isEqualOffset(offset, DecodeOffset(receivedOffset)) {
+	//	slog.Error("[unisondb.dbkernal]",
+	//		slog.String("event_type", "apply.record.errored"),
+	//		slog.String("error", " expected offset of wal entry didn't matched the received offset"),
+	//		slog.Group("engine",
+	//			slog.String("namespace", wh.engine.namespace),
+	//		),
+	//		slog.Group("ops",
+	//			slog.Uint64("received", wh.engine.writeSeenCounter.Load()),
+	//			slog.Uint64("flushed", wh.engine.opsFlushedCounter.Load()),
+	//		),
+	//		slog.Group("offset",
+	//			slog.Any("received", wal.DecodeOffset(receivedOffset)),
+	//			slog.Any("inserted", offset),
+	//			slog.Int("entry_size", len(encodedWal))),
+	//	)
+	//
+	//	return ErrInvalidOffset
+	//}
 
 	// measure physical latency
 	remoteHLC := decoded.Hlc()
@@ -151,7 +152,8 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 		slog.Uint64("causal_lag_ms", causalLagMs),
 	)
 
-	return wh.handleRecord(decoded, offset)
+	return nil
+	//return wh.handleRecord(decoded, offset)
 }
 
 func isEqualOffset(local, remote *Offset) bool {

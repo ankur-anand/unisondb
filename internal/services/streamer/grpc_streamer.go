@@ -16,7 +16,6 @@ import (
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
-	"github.com/valyala/bytebufferpool"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -253,8 +252,8 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 		}
 		lastSeen = pos
 		//
-		buf := bytebufferpool.Get()         // *ByteBuffer
-		buf.B = append(buf.B[:0], value...) // safely copy mmap-backed value
+		//buf := bytebufferpool.Get()         // *ByteBuffer
+		//buf.B = append(buf.B[:0], value...) // safely copy mmap-backed value
 
 		offsetBuf := offsetPool.Get().([]byte)
 		encodedOffset := walfs.EncodeRecordPositionTo(pos, offsetBuf)
@@ -264,7 +263,7 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 
 		//offsetPool.Put(offsetBuf[:0]) // optional truncate for hygiene
 		walRecord.Offset = encodedOffset
-		walRecord.Record = buf.B
+		walRecord.Record = value
 		// TODO: Get From the WAL Reader itself. Don't calculate here.
 		//Crc32Checksum: crc32.Checksum(value, crcTable),
 
@@ -280,7 +279,7 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 				r.Record = nil
 				walRecordPool.Put(r)
 			}
-			bytebufferpool.Put(buf)
+			//bytebufferpool.Put(buf)
 			batch = nil
 		}
 	}

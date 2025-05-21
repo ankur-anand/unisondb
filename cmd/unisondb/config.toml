@@ -13,7 +13,7 @@ allow_insecure = true
 # StorageConfig stores all tunable parameters.
 [storage_config]
 base_dir = "/tmp/unisondb/server"   # Base directory for storage
-namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector", "audience-segments", "channel-allocation"]
+namespaces = ["ad-campaign"]
 bytes_per_sync = "1MB"
 segment_size = "16MB"
 arena_size = "4MB"
@@ -45,7 +45,7 @@ warn  = 100.0
 error = 100.0
 
 [fuzz_config]
-ops_per_namespace = 100
-workers_per_namespace = 50
+ops_per_namespace = 500
+workers_per_namespace = 20
 local_relayer_count = 0
-startup_delay = "30s"
+startup_delay = "2m"

@@ -2,8 +2,8 @@
 
 set -euo pipefail
 
-HOSTNAME="unisondb.client"
-INSTANCE_COUNT=${INSTANCE_COUNT:-50}
+HOSTNAME="unisondb"
+INSTANCE_COUNT=${INSTANCE_COUNT:-100}
 BASE_HTTP_PORT=6000
 BASE_GRPC_PORT=5000
 BASE_PPROF_PORT=6080
@@ -13,9 +13,9 @@ ROLE=${ROLE:-"client"}
 PROM_IP=${PROM_IP:-"127.0.0.1"}
 
 CONFIG_DIR="./configs"
-DATA_DIR="./data"
-LOG_DIR="./logs"
-PID_DIR="./pids"
+DATA_DIR="/tmp/unisondb/local/client/data"
+LOG_DIR="/tmp/unisondb/local/client/logs"
+PID_DIR="/tmp/unisondb/local/client//pids"
 PROM_CONFIG_PATH="./local/prometheus/prometheus.yml"
 
 mkdir -p "$CONFIG_DIR" "$DATA_DIR" "$LOG_DIR" "$PID_DIR" ./prometheus_data
@@ -36,7 +36,7 @@ allow_insecure = true
 
 [storage_config]
 base_dir = "${DATA_DIR}/database_$i"
-namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector", "audience-segments", "channel-allocation"]
+namespaces = ["ad-campaign"]
 bytes_per_sync = "1MB"
 segment_size = "16MB"
 disable_entry_type_check = true
@@ -53,7 +53,7 @@ min_segments = 5
 max_segments = 30
 
 [relayer_config.relayer1]
-namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector", "audience-segments", "channel-allocation"]
+namespaces = ["ad-campaign"]
 upstream_address = "${CENTRAL_IP}:4001"
 segment_lag_threshold = 10000
 allow_insecure = true
@@ -91,7 +91,7 @@ scrape_configs:
     static_configs:
       - targets: ["192.168.0.103:4000"]
         labels:
-          instance: "${HOSTNAME}_fuzzer"
+          instance: "${HOSTNAME}.fuzzer.do.blr.dev"
           role: "fuzzer"
 EOF
 
@@ -100,7 +100,7 @@ for i in $(seq 0 $(($INSTANCE_COUNT - 1))); do
   cat <<EOF >> ${PROM_CONFIG_PATH}
       - targets: ["192.168.0.103:${HTTP_PORT}"]
         labels:
-          instance: "${HOSTNAME}_relayer_${i}"
+          instance: "${HOSTNAME}.client.${i}.do.blr.dev"
           role: "${ROLE}"
 EOF
 done
