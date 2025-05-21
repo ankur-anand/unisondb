@@ -2,14 +2,12 @@ package grpcutils
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/common/helpers/templates"
@@ -161,60 +159,60 @@ func NewGRPCStatsHandler(methodInfo map[string]string) *GRPCStatsHandler {
 }
 
 func (h *GRPCStatsHandler) TagRPC(ctx context.Context, st *stats.RPCTagInfo) context.Context {
-	rpcID := uuid.New().String()
-
-	service, method := parseFullMethodName(st.FullMethodName)
-	ctx = context.WithValue(ctx, ctxKeyRPCMethod, method)
-	ctx = context.WithValue(ctx, ctxKeyRPCService, service)
-	ctx = context.WithValue(ctx, ctxKeyRPCID, rpcID)
+	//rpcID := uuid.New().String()
+	//
+	//service, method := parseFullMethodName(st.FullMethodName)
+	//ctx = context.WithValue(ctx, ctxKeyRPCMethod, method)
+	//ctx = context.WithValue(ctx, ctxKeyRPCService, service)
+	//ctx = context.WithValue(ctx, ctxKeyRPCID, rpcID)
 	return ctx
 }
 
 func (h *GRPCStatsHandler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
-	service, _ := ctx.Value(ctxKeyRPCService).(string)
-	method, _ := ctx.Value(ctxKeyRPCMethod).(string)
-	rpcID, _ := ctx.Value(ctxKeyRPCID).(string)
-
-	methodType := "unary"
-	fullMethod := fmt.Sprintf("/%s/%s", service, method)
-	if mType, ok := h.methodInfo[fullMethod]; ok {
-		methodType = mType
-	}
-
-	switch rpcStats := rs.(type) {
-	case *stats.Begin:
-		h.rpcHandled.WithLabelValues(service, method, methodType).Inc()
-		h.rpcInFlight.WithLabelValues(service, method, methodType).Inc()
-
-		if methodType != unary {
-			h.activeStreamsMap.Store(rpcID, streamInfo{
-				service:    service,
-				method:     method,
-				start:      rpcStats.BeginTime,
-				streamType: methodType,
-			})
-			h.activeStreamCount.WithLabelValues(service, method, methodType).Inc()
-		}
-
-	case *stats.End:
-		statusCode := getStatusCode(rpcStats.Error)
-		if rpcStats.Error != nil && !isGracefulShutdown(rpcStats.Error) {
-			h.rpcErrorCounter.WithLabelValues(service, method, methodType, statusCode).Inc()
-		}
-		h.rpcInFlight.WithLabelValues(service, method, methodType).Dec()
-		h.rpcDuration.WithLabelValues(service, method, methodType, statusCode).Observe(rpcStats.EndTime.Sub(rpcStats.BeginTime).Seconds())
-		if methodType != unary {
-			h.activeStreamsMap.Delete(rpcID)
-			h.activeStreamCount.WithLabelValues(service, method, methodType).Dec()
-		}
-
-	case *stats.InPayload:
-		h.recvMessage.WithLabelValues(service, method, methodType).Inc()
-		h.messageSize.WithLabelValues(service, method, methodType, "received").Observe(float64(rpcStats.WireLength))
-	case *stats.OutPayload:
-		h.sentMessage.WithLabelValues(service, method, methodType).Inc()
-		h.messageSize.WithLabelValues(service, method, methodType, "sent").Observe(float64(rpcStats.WireLength))
-	}
+	//service, _ := ctx.Value(ctxKeyRPCService).(string)
+	//method, _ := ctx.Value(ctxKeyRPCMethod).(string)
+	//rpcID, _ := ctx.Value(ctxKeyRPCID).(string)
+	//
+	//methodType := "unary"
+	//fullMethod := fmt.Sprintf("/%s/%s", service, method)
+	//if mType, ok := h.methodInfo[fullMethod]; ok {
+	//	methodType = mType
+	//}
+	//
+	//switch rpcStats := rs.(type) {
+	//case *stats.Begin:
+	//	h.rpcHandled.WithLabelValues(service, method, methodType).Inc()
+	//	h.rpcInFlight.WithLabelValues(service, method, methodType).Inc()
+	////
+	////	if methodType != unary {
+	////		h.activeStreamsMap.Store(rpcID, streamInfo{
+	////			service:    service,
+	////			method:     method,
+	////			start:      rpcStats.BeginTime,
+	////			streamType: methodType,
+	////		})
+	////		h.activeStreamCount.WithLabelValues(service, method, methodType).Inc()
+	////}
+	////
+	//case *stats.End:
+	//	statusCode := getStatusCode(rpcStats.Error)
+	//	//	if rpcStats.Error != nil && !isGracefulShutdown(rpcStats.Error) {
+	//	//		h.rpcErrorCounter.WithLabelValues(service, method, methodType, statusCode).Inc()
+	//	//	}
+	//	//	h.rpcInFlight.WithLabelValues(service, method, methodType).Dec()
+	//	//	h.rpcDuration.WithLabelValues(service, method, methodType, statusCode).Observe(rpcStats.EndTime.Sub(rpcStats.BeginTime).Seconds())
+	//	//	if methodType != unary {
+	//	//		h.activeStreamsMap.Delete(rpcID)
+	//	//		h.activeStreamCount.WithLabelValues(service, method, methodType).Dec()
+	//	//}
+	//	//
+	//	//case *stats.InPayload:
+	//	//	h.recvMessage.WithLabelValues(service, method, methodType).Inc()
+	//	//	h.messageSize.WithLabelValues(service, method, methodType, "received").Observe(float64(rpcStats.WireLength))
+	//	//case *stats.OutPayload:
+	//	//	h.sentMessage.WithLabelValues(service, method, methodType).Inc()
+	//	//	h.messageSize.WithLabelValues(service, method, methodType, "sent").Observe(float64(rpcStats.WireLength))
+	//}
 }
 
 func getStatusCode(err error) string {
