@@ -37,6 +37,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/channelz/service"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/keepalive"
@@ -388,16 +389,6 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 	}
 
 	serverOpts = append(serverOpts,
-		//grpc.StatsHandler(statsHandler),
-		//grpc.ChainStreamInterceptor(grpcutils.RequireNamespaceInterceptor,
-		//	grpcutils.RequestIDStreamInterceptor,
-		//	grpcutils.MethodInterceptor,
-		//	ir.TelemetryStreamInterceptor),
-		//
-		//grpc.ChainUnaryInterceptor(grpcutils.RequireNamespaceUnaryInterceptor,
-		//	grpcutils.RequestIDUnaryInterceptor,
-		//	grpcutils.MethodUnaryInterceptor,
-		//	ir.TelemetryUnaryInterceptor),
 		grpc.InitialWindowSize(16<<20),     // 16 MB per stream
 		grpc.InitialConnWindowSize(32<<20), // 32 MB per connection
 		grpc.MaxConcurrentStreams(1000),
@@ -407,8 +398,6 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 			// send ping frames when client is idle.
 			Time: 5 * time.Minute,
 		}),
-		// https://github.com/grpc/grpc-go/pull/6922
-		//grpc.WaitForHandlers(true),
 	)
 
 	gS := grpc.NewServer(
@@ -424,7 +413,7 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 	if ms.mode == modeReplicator {
 		v1.RegisterKVStoreWriteServiceServer(gS, kvw)
 	}
-
+	service.RegisterChannelzServiceToServer(gS)
 	if ms.env != "prod" {
 		reflection.Register(gS)
 	}
