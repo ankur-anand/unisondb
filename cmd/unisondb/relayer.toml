@@ -12,7 +12,7 @@ ca_path = "../../certs/ca.crt"
 # StorageConfig stores all tunable parameters.
 [storage_config]
 base_dir = "/tmp/unisondb/relayer"   # Base directory for storage
-namespaces = ["default", "tenant_1", "tenant_2"]
+namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector", "audience-segments", "channel-allocation"]
 bytes_per_sync = "1MB"
 ## segment_size config should be in sync with the upstream
 ## else the entire sync will fail.
@@ -23,11 +23,18 @@ arena_size = "4MB"
 ops_per_namespace = 10
 workers_per_namespace = 2
 
+[storage_config.wal_cleanup_config]
+interval = "5m"
+enabled = true
+max_age = "1h"
+min_segments = 5
+max_segments = 30
+
 # Relayer Configuration
 [relayer_config]
 
 [relayer_config.relayer1]
-namespaces = ["default", "tenant_1", "tenant_2"]
+namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector", "audience-segments", "channel-allocation"]
 cert_path = "../../certs/client.crt"
 key_path = "../../certs/client.key"
 ca_path = "../../certs/ca.crt"

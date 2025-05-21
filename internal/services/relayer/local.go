@@ -137,6 +137,8 @@ func StartNLocalRelayer(ctx context.Context, engine *dbkernel.Engine, num int, m
 		slog.Int("num", num),
 	)
 
+	// These log linear histogram are not thread safe. so sometime you many see panic.
+	// TODO: Create Log Linear Histogram per go routine.
 	once := sync.Once{}
 	hist := llhist.New()
 	for i := 0; i < num; i++ {

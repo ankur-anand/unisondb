@@ -1,3 +1,11 @@
 unisondb
 unisondb_fuzz
 
+# Local runtime data
+/configs/
+/data/
+/logs/
+/pids/
+prometheus.yml
+/prometheus_data/
+/grafana_data/

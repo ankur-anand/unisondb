@@ -168,6 +168,19 @@ type RecordPosition struct {
 	Offset    int64
 }
 
+// EncodeRecordPositionTo serializes a RecordPosition into the provided buffer.
+// The buffer must be at least 12 bytes long. If it's shorter, a new 12-byte slice is allocated.
+func EncodeRecordPositionTo(pos RecordPosition, buf []byte) []byte {
+	if len(buf) < 12 {
+		buf = make([]byte, 12)
+	} else {
+		buf = buf[:12]
+	}
+	binary.LittleEndian.PutUint32(buf[0:4], pos.SegmentID)
+	binary.LittleEndian.PutUint64(buf[4:12], uint64(pos.Offset))
+	return buf
+}
+
 func (cp RecordPosition) String() string {
 	return fmt.Sprintf("SegmentID=%d, Offset=%d", cp.SegmentID, cp.Offset)
 }
@@ -479,16 +492,18 @@ func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
 	}, nil
 }
 
+var NilRecordPosition = RecordPosition{}
+
 // Read reads the record data at the specified offset within the segment.
 // IMP: Don't retain any data.
 // This method returns a slice of the mmap'd file content corresponding to the record payload.
 // so slice becomes invalid immediately after the segment is closed or unmapped.
-func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
+func (seg *Segment) Read(offset int64) ([]byte, RecordPosition, error) {
 	if seg.closed.Load() {
-		return nil, nil, ErrClosed
+		return nil, NilRecordPosition, ErrClosed
 	}
 	if offset+recordHeaderSize > seg.mmapSize {
-		return nil, nil, io.EOF
+		return nil, NilRecordPosition, io.EOF
 	}
 
 	header := seg.mmapData[offset : offset+recordHeaderSize]
@@ -499,11 +514,11 @@ func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
 	entrySize := alignUp(rawSize)
 
 	if length > uint32(seg.WriteOffset()-offset-recordHeaderSize) {
-		return nil, nil, ErrCorruptHeader
+		return nil, NilRecordPosition, ErrCorruptHeader
 	}
 
 	if offset+entrySize > seg.WriteOffset() {
-		return nil, nil, io.EOF
+		return nil, NilRecordPosition, io.EOF
 	}
 
 	// validating  the trailer before reading data
@@ -512,7 +527,7 @@ func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
 	trailer := seg.mmapData[trailerOffset : trailerOffset+recordTrailerMarkerSize]
 
 	if !bytes.Equal(trailer, trailerMarker) {
-		return nil, nil, ErrIncompleteChunk
+		return nil, NilRecordPosition, ErrIncompleteChunk
 	}
 
 	data := seg.mmapData[offset+recordHeaderSize : offset+recordHeaderSize+dataSize]
@@ -528,11 +543,11 @@ func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
 		savedSum := binary.LittleEndian.Uint32(header[:4])
 		computedSum := crc32Checksum(header[4:], data)
 		if savedSum != computedSum {
-			return nil, nil, ErrInvalidCRC
+			return nil, NilRecordPosition, ErrInvalidCRC
 		}
 	}
 
-	next := &RecordPosition{
+	next := RecordPosition{
 		SegmentID: seg.id,
 		Offset:    offset + entrySize,
 	}
@@ -736,18 +751,18 @@ func (seg *Segment) NewReader() *SegmentReader {
 	return reader
 }
 
-func (r *SegmentReader) Next() ([]byte, *RecordPosition, error) {
+func (r *SegmentReader) Next() ([]byte, RecordPosition, error) {
 	if r.closed.Load() {
-		return nil, nil, ErrSegmentReaderClosed
+		return nil, NilRecordPosition, ErrSegmentReaderClosed
 	}
 	isSealed := r.segment.isSealed.Load()
 	writeOffset := r.segment.WriteOffset()
 
 	if r.readOffset >= writeOffset {
 		if isSealed {
-			return nil, nil, io.EOF
+			return nil, NilRecordPosition, io.EOF
 		}
-		return nil, nil, ErrNoNewData
+		return nil, NilRecordPosition, ErrNoNewData
 	}
 
 	currentOffset := r.readOffset
@@ -755,14 +770,14 @@ func (r *SegmentReader) Next() ([]byte, *RecordPosition, error) {
 	if err != nil {
 		// If the read fails due to being too close to write head, treat as "no new data" if unsealed
 		if !isSealed && errors.Is(err, io.EOF) {
-			return nil, nil, ErrNoNewData
+			return nil, NilRecordPosition, ErrNoNewData
 		}
-		return nil, nil, err
+		return nil, NilRecordPosition, err
 	}
 	r.lastRecordOffset = currentOffset
 	r.readOffset = next.Offset
 
-	currentPos := &RecordPosition{
+	currentPos := RecordPosition{
 		SegmentID: r.segment.ID(),
 		Offset:    currentOffset,
 	}
@@ -770,8 +785,8 @@ func (r *SegmentReader) Next() ([]byte, *RecordPosition, error) {
 	return data, currentPos, nil
 }
 
-func (r *SegmentReader) LastRecordPosition() *RecordPosition {
-	return &RecordPosition{
+func (r *SegmentReader) LastRecordPosition() RecordPosition {
+	return RecordPosition{
 		SegmentID: r.segment.ID(),
 		Offset:    r.lastRecordOffset,
 	}

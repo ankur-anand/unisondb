@@ -8,25 +8,26 @@ port = 4001
 cert_path = "../../certs/server.crt"
 key_path = "../../certs/server.key"
 ca_path = "../../certs/ca.crt"
+allow_insecure = true
 
 # StorageConfig stores all tunable parameters.
 [storage_config]
 base_dir = "/tmp/unisondb/server"   # Base directory for storage
-namespaces = ["default", "tenant_1", "tenant_2", "tenant_3", "tenant_4"]
+namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector", "audience-segments", "channel-allocation"]
 bytes_per_sync = "1MB"
 segment_size = "16MB"
 arena_size = "4MB"
 
 [write_notify_config]
-enabled = false
+enabled = true
 max_delay = "20ms"
 
 [storage_config.wal_cleanup_config]
 interval = "5m"
 enabled = false
-max_age = "1h"
-min_segments = 5
-max_segments = 10
+max_age = "5h"
+min_segments = 50
+max_segments = 1000
 
 [pprof_config]
 enabled = true
@@ -34,15 +35,17 @@ port = 6070
 
 [log_config]
 log_level = "info"
+disable_timestamp = false
 
 ## this is for grpc logging only
 [log_config.min_level_percents]
 debug = 100.0
-info  = 50.0
+info  = 100.0
 warn  = 100.0
 error = 100.0
 
 [fuzz_config]
-ops_per_namespace = 400
+ops_per_namespace = 100
 workers_per_namespace = 50
-local_relayer_count = 1000
+local_relayer_count = 0
+startup_delay = "30s"

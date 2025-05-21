@@ -4,27 +4,39 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
-	"github.com/ankur-anand/unisondb/internal"
 	"github.com/ankur-anand/unisondb/internal/grpcutils"
 	"github.com/ankur-anand/unisondb/internal/services"
-	"github.com/ankur-anand/unisondb/pkg/replicator"
+	"github.com/ankur-anand/unisondb/pkg/walfs"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/valyala/bytebufferpool"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
 	reqIDKey = "request_id"
 )
+
+var offsetPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 12) // Fixed size for RecordPosition
+	},
+}
+
+var walRecordPool = sync.Pool{
+	New: func() any {
+		return new(v1.WALRecord)
+	},
+}
 
 var (
 	// batchWaitTime defines a timeout value after which even if batch size,
@@ -138,15 +150,15 @@ func (s *GrpcStreamer) StreamWalRecords(request *v1.StreamWalRecordsRequest, g g
 		"offset", meta,
 	)
 
-	walReceiver := make(chan []*v1.WALRecord, 1000)
-	replicatorErr := make(chan error, 1)
+	//walReceiver := make(chan []*v1.WALRecord, 1000)
+	//replicatorErr := make(chan error, 1)
 
 	ctx, cancel := context.WithCancel(g.Context())
 	defer cancel()
 
-	rpInstance := replicator.NewReplicator(engine,
-		batchSize,
-		batchWaitTime, meta, "grpc")
+	//rpInstance := replicator.NewReplicator(engine,
+	//	batchSize,
+	//	batchWaitTime, meta, "grpc")
 
 	currentOffset := engine.CurrentOffset()
 	if meta != nil && currentOffset == nil {
@@ -156,25 +168,25 @@ func (s *GrpcStreamer) StreamWalRecords(request *v1.StreamWalRecordsRequest, g g
 	// when server is closed, the goroutine would be closed upon
 	// cancel of ctx.
 	// walReceiver should be closed only when Replicate method returns.
-	s.errGrp.Go(func() error {
-		defer func() {
-			close(walReceiver)
-			close(replicatorErr)
-		}()
-
-		err := rpInstance.Replicate(ctx, walReceiver)
-		select {
-		case replicatorErr <- err:
-		case <-ctx.Done():
-			return nil
-		}
-
-		return nil
-	})
+	//s.errGrp.Go(func() error {
+	//	defer func() {
+	//		close(walReceiver)
+	//		close(replicatorErr)
+	//	}()
+	//
+	//	err := rpInstance.Replicate(ctx, walReceiver)
+	//	select {
+	//	case replicatorErr <- err:
+	//	case <-ctx.Done():
+	//		return nil
+	//	}
+	//
+	//	return nil
+	//})
 
 	metricsActiveStreamTotal.WithLabelValues(namespace, string(method), "grpc").Inc()
 	defer metricsActiveStreamTotal.WithLabelValues(namespace, string(method), "grpc").Dec()
-	return s.streamWalRecords(ctx, g, walReceiver, replicatorErr)
+	return s.streamWalRecords(ctx, g, meta)
 }
 
 // streamWalRecords streams namespaced Write-Ahead Log (WAL) records to the client in batches
@@ -191,92 +203,162 @@ func (s *GrpcStreamer) StreamWalRecords(request *v1.StreamWalRecordsRequest, g g
 //nolint:gocognit
 func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 	g grpc.ServerStreamingServer[v1.StreamWalRecordsResponse],
-	walReceiver chan []*v1.WALRecord,
-	replicatorErr chan error) error {
-	namespace, reqID, method := grpcutils.GetRequestInfo(g.Context())
+	meta *dbkernel.Offset) error {
+	namespace, _, _ := grpcutils.GetRequestInfo(g.Context())
 
 	var (
-		batch                  []*v1.WALRecord
-		totalBatchSize         int
-		lastReceivedRecordTime = time.Now()
-		lastBatchReadTime      = time.Now()
+		batch []*v1.WALRecord
+		//	//totalBatchSize         int
+		//	//lastReceivedRecordTime = time.Now()
+		//	//lastBatchReadTime      = time.Now()
 	)
 
-	flusher := func() error {
-		if err := s.flushBatch(batch, g); err != nil {
-			return err
-		}
-		batch = []*v1.WALRecord{}
-		totalBatchSize = 0
-		return nil
+	engine := s.storageEngines[namespace]
+	reader, err := getReader(nil, engine, meta)
+	if err != nil {
+		return err
 	}
-
-	dynamicTimeoutTicker := time.NewTicker(s.dynamicTimeout)
-	defer dynamicTimeoutTicker.Stop()
-
 	ctxDoneSignal := make(chan struct{})
 	go func() {
 		<-ctx.Done()
 		close(ctxDoneSignal)
+
 	}()
-
+	defer func() {
+		if reader != nil {
+			reader.Close()
+		}
+	}()
+	var lastSeen walfs.RecordPosition
 	for {
-		select {
-		case <-dynamicTimeoutTicker.C:
-			if time.Since(lastReceivedRecordTime) > s.dynamicTimeout {
-				return services.ToGRPCError(namespace, reqID, method, services.ErrStreamTimeout)
-			}
-		case <-s.shutdown:
-			return status.Error(codes.Unavailable, internal.GracefulShutdownMsg)
-
-		case <-ctxDoneSignal:
-			err := ctx.Err()
-			if errors.Is(err, services.ErrStreamTimeout) {
-				return services.ToGRPCError(namespace, reqID, method, services.ErrStreamTimeout)
-			}
-			if errors.Is(err, context.Canceled) {
-				return nil
-			}
-			return ctx.Err()
-		case walRecords := <-walReceiver:
-			metricsWalReceiverQueueSize.WithLabelValues(namespace).Set(float64(len(walReceiver)))
-			readDelta := time.Since(lastBatchReadTime)
-			lastBatchReadTime = time.Now()
-			metricsWalReadLatency.WithLabelValues(namespace, string(method)).Observe(readDelta.Seconds())
-			for _, walRecord := range walRecords {
-				lastReceivedRecordTime = time.Now()
-				totalBatchSize += len(walRecord.Record)
-				//buf := make([]byte, len(walRecord.Record)-1)
-				//copy(buf, walRecord.Record[1:])
-				//walRecord.Record = buf
-				batch = append(batch, walRecord)
-
-				if totalBatchSize >= grpcMaxMsgSize {
-					if err := flusher(); err != nil {
-						return services.ToGRPCError(namespace, reqID, method, err)
-					}
+		value, pos, err := reader.Next()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				reader.Close()
+				reader = nil
+				if ctx.Err() != nil {
+					return ctx.Err()
 				}
 			}
-			// flush remaining
-			if err := flusher(); err != nil {
-				return services.ToGRPCError(namespace, reqID, method, err)
+			err := engine.WaitForAppendOrDone(ctxDoneSignal, 2*time.Minute, &lastSeen)
+			if err != nil && !errors.Is(err, dbkernel.ErrWaitTimeoutExceeded) {
+				return err
 			}
-		case err := <-replicatorErr:
-			if errors.Is(err, dbkernel.ErrInvalidOffset) {
-				slog.Error("[unisondb.streamer.grpc]",
-					slog.String("event_type", "replicator.offset.invalid"),
-					slog.Any("error", err),
-					slog.Group("request",
-						slog.String("namespace", namespace),
-						slog.String("id", string(reqID)),
-					),
-				)
+			reader, err = getReader(reader, engine, &lastSeen)
+			if err != nil {
+				slog.Error("[unisondb.streamer.grpc]", "err", err, "namespace", namespace)
+				return err
+			}
+			continue
+		}
+		lastSeen = pos
+		//
+		buf := bytebufferpool.Get()         // *ByteBuffer
+		buf.B = append(buf.B[:0], value...) // safely copy mmap-backed value
 
-				return services.ToGRPCError(namespace, reqID, method, services.ErrInvalidMetadata)
+		offsetBuf := offsetPool.Get().([]byte)
+		encodedOffset := walfs.EncodeRecordPositionTo(pos, offsetBuf)
+
+		walRecord := walRecordPool.Get().(*v1.WALRecord)
+		// use encodedOffset (e.g., assign to WALRecord.Offset)
+
+		//offsetPool.Put(offsetBuf[:0]) // optional truncate for hygiene
+		walRecord.Offset = encodedOffset
+		walRecord.Record = buf.B
+		// TODO: Get From the WAL Reader itself. Don't calculate here.
+		//Crc32Checksum: crc32.Checksum(value, crcTable),
+
+		batch = append(batch, walRecord)
+		if len(batch) >= batchSize {
+			err := s.flushBatch(batch, g)
+			if err != nil {
+				return err
 			}
-			return services.ToGRPCError(namespace, reqID, method, err)
+			for _, r := range batch {
+				offsetPool.Put(r.Offset[:0])
+				r.Offset = nil
+				r.Record = nil
+				walRecordPool.Put(r)
+			}
+			bytebufferpool.Put(buf)
+			batch = nil
 		}
 	}
+	//flusher := func() error {
+	//	if err := s.flushBatch(batch, g); err != nil {
+	//		return err
+	//	}
+	//	batch = []*v1.WALRecord{}
+	//	totalBatchSize = 0
+	//	return nil
+	//}
+
+	//dynamicTimeoutTicker := time.NewTicker(s.dynamicTimeout)
+	//defer dynamicTimeoutTicker.Stop()
+	//
+	//ctxDoneSignal := make(chan struct{})
+	//go func() {
+	//	<-ctx.Done()
+	//	close(ctxDoneSignal)
+	//}()
+	//
+	//for {
+	//	select {
+	//	case <-dynamicTimeoutTicker.C:
+	//		if time.Since(lastReceivedRecordTime) > s.dynamicTimeout {
+	//			return services.ToGRPCError(namespace, reqID, method, services.ErrStreamTimeout)
+	//		}
+	//	case <-s.shutdown:
+	//		return status.Error(codes.Unavailable, internal.GracefulShutdownMsg)
+	//
+	//	case <-ctxDoneSignal:
+	//		err := ctx.Err()
+	//		if errors.Is(err, services.ErrStreamTimeout) {
+	//			return services.ToGRPCError(namespace, reqID, method, services.ErrStreamTimeout)
+	//		}
+	//		if errors.Is(err, context.Canceled) {
+	//			return nil
+	//		}
+	//		return ctx.Err()
+	//	case walRecords := <-walReceiver:
+	//		metricsWalReceiverQueueSize.WithLabelValues(namespace).Set(float64(len(walReceiver)))
+	//		readDelta := time.Since(lastBatchReadTime)
+	//		lastBatchReadTime = time.Now()
+	//		metricsWalReadLatency.WithLabelValues(namespace, string(method)).Observe(readDelta.Seconds())
+	//		for _, walRecord := range walRecords {
+	//			lastReceivedRecordTime = time.Now()
+	//			totalBatchSize += len(walRecord.Record)
+	//			//buf := make([]byte, len(walRecord.Record)-1)
+	//			//copy(buf, walRecord.Record[1:])
+	//			//walRecord.Record = buf
+	//			batch = append(batch, walRecord)
+	//
+	//			if totalBatchSize >= grpcMaxMsgSize {
+	//				if err := flusher(); err != nil {
+	//					return services.ToGRPCError(namespace, reqID, method, err)
+	//				}
+	//			}
+	//		}
+	//		// flush remaining
+	//		if err := flusher(); err != nil {
+	//			return services.ToGRPCError(namespace, reqID, method, err)
+	//		}
+	//	case err := <-replicatorErr:
+	//		if errors.Is(err, dbkernel.ErrInvalidOffset) {
+	//			slog.Error("[unisondb.streamer.grpc]",
+	//				slog.String("event_type", "replicator.offset.invalid"),
+	//				slog.Any("error", err),
+	//				slog.Group("request",
+	//					slog.String("namespace", namespace),
+	//					slog.String("id", string(reqID)),
+	//				),
+	//			)
+	//
+	//			return services.ToGRPCError(namespace, reqID, method, services.ErrInvalidMetadata)
+	//		}
+	//		return services.ToGRPCError(namespace, reqID, method, err)
+	//	}
+	//}
 }
 
 func (s *GrpcStreamer) flushBatch(batch []*v1.WALRecord, g grpc.ServerStream) error {
@@ -323,4 +405,28 @@ func decodeMetadata(data []byte) (o *dbkernel.Offset, err error) {
 	}
 	o = dbkernel.DecodeOffset(data)
 	return o, err
+}
+
+func getReader(existing *dbkernel.Reader, e *dbkernel.Engine, lastOffset *dbkernel.Offset) (*dbkernel.Reader, error) {
+	if existing != nil {
+		return existing, nil
+	}
+
+	if lastOffset == nil {
+		reader, err := e.NewReaderWithTail(nil)
+		return reader, err
+	}
+
+	reader, err := e.NewReaderWithTail(lastOffset)
+	if err != nil {
+		return nil, err
+	}
+
+	// we consume the first record.
+	_, _, err = reader.Next()
+	if err != nil {
+		return nil, err
+	}
+
+	return reader, err
 }

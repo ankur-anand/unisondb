@@ -174,9 +174,9 @@ type Reader struct {
 // Next returns the next chunk data and its position in the WAL.
 // If there is no data, io. EOF will be returned.
 // The position can be used to read the data from the segment file.
-func (r *Reader) Next() ([]byte, *Offset, error) {
+func (r *Reader) Next() ([]byte, Offset, error) {
 	if r.closed.Load() {
-		return nil, nil, io.EOF
+		return nil, walfs.NilRecordPosition, io.EOF
 	}
 
 	start := time.Now()
@@ -186,17 +186,17 @@ func (r *Reader) Next() ([]byte, *Offset, error) {
 	case errors.Is(err, walfs.ErrNoNewData):
 		if !r.withActiveTail {
 			r.Close()
-			return nil, nil, io.EOF
+			return nil, walfs.NilRecordPosition, io.EOF
 		}
-		return nil, nil, err
+		return nil, walfs.NilRecordPosition, err
 
 	case errors.Is(err, io.EOF):
 		r.Close()
-		return nil, nil, err
+		return nil, walfs.NilRecordPosition, err
 
 	case err != nil:
 		r.taggedScope.Counter(metricsWalReadErrorTotal).Inc(1)
-		return nil, nil, err
+		return nil, walfs.NilRecordPosition, err
 	}
 
 	// Successful read

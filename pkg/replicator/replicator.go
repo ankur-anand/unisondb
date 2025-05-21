@@ -165,7 +165,7 @@ func (r *Replicator) replicateFromReader(ctx context.Context, recordsChan chan<-
 		}
 
 		batch = append(batch, walRecord)
-		r.lastOffset = pos
+		r.lastOffset = &pos
 		if len(batch) >= r.batchSize {
 			sendFunc()
 		}
