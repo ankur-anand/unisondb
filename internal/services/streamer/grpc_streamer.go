@@ -48,6 +48,16 @@ var metricsWalReadLatency = promauto.NewHistogramVec(
 	[]string{"namespace", "method"},
 )
 
+var metricsWalReceiverQueueSize = promauto.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Namespace: "unisondb",
+		Subsystem: "streamer",
+		Name:      "wal_receiver_queue_size",
+		Help:      "Number of WAL record batches currently buffered in the walReceiver channel",
+	},
+	[]string{"namespace"},
+)
+
 // GrpcStreamer implements gRPC-based WalStreamerService.
 type GrpcStreamer struct {
 	// namespace mapped engine
@@ -229,6 +239,7 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 			}
 			return ctx.Err()
 		case walRecords := <-walReceiver:
+			metricsWalReceiverQueueSize.WithLabelValues(namespace).Set(float64(len(walReceiver)))
 			readDelta := time.Since(lastBatchReadTime)
 			lastBatchReadTime = time.Now()
 			metricsWalReadLatency.WithLabelValues(namespace, string(method)).Observe(readDelta.Seconds())
