@@ -299,12 +299,15 @@ func executeRandomOp(e Engine, keyPool, rowKeyPool *KeyPool, columnPool *ColumnP
 			}...,
 		)
 	}
+	start := time.Now()
 	op := ops[rand.Intn(len(ops))]
 	if err := op.fn(); err != nil {
 		slog.Error("[unisondb.fuzzer] Operation failed", "op", op.name, "err", err)
 	}
 
 	if stats != nil {
+		elapsed := time.Since(start)
+		stats.ObserveLatency(namespace, elapsed)
 		stats.Inc(namespace, op.name)
 	}
 }

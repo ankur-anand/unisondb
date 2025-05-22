@@ -42,8 +42,11 @@ func TestLocalWalRelayer(t *testing.T) {
 			}
 		}
 	}()
-	err = StartNLocalRelayer(t.Context(), engine, 10, 10*time.Millisecond)
+	startTime := time.Now()
+	hist, err := StartNLocalRelayer(t.Context(), engine, 10, 10*time.Millisecond)
 	assert.NoError(t, err)
 	time.Sleep(2 * time.Second)
 	cancel()
+
+	ReportReplicationStats(hist, engine.Namespace(), startTime)
 }

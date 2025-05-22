@@ -3,7 +3,6 @@ package replicator
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"sync"
 	"time"
@@ -177,9 +176,6 @@ func (r *Replicator) replicateFromReader(ctx context.Context, recordsChan chan<-
 func (r *Replicator) getReader() (*dbkernel.Reader, error) {
 	if r.reader != nil {
 		return r.reader, nil
-	}
-	if r.lastOffset == nil {
-		fmt.Println("nil offset")
 	}
 	if r.lastOffset == nil {
 		reader, err := r.engine.NewReaderWithTail(nil)

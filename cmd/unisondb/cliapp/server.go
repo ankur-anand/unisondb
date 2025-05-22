@@ -571,7 +571,11 @@ func (ms *Server) RunFuzzer(ctx context.Context) error {
 		slog.Info("[unisondb.cliapp]",
 			slog.String("event_type", "FUZZER.start.delayed"),
 			slog.Duration("delay", delay))
-		time.Sleep(delay)
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil
+		}
 	}
 
 	g, ctx := errgroup.WithContext(ctx)
@@ -600,7 +604,14 @@ func (ms *Server) RunFuzzer(ctx context.Context) error {
 		for _, engine := range ms.engines {
 			eng := engine
 			g.Go(func() error {
-				return relayer.StartNLocalRelayer(ctx, eng, ms.cfg.FuzzConfig.LocalRelayerCount, 1*time.Minute)
+				startTime := time.Now()
+				hist, err := relayer.StartNLocalRelayer(ctx, eng, ms.cfg.FuzzConfig.LocalRelayerCount, 1*time.Minute)
+				if err != nil {
+					return err
+				}
+				<-ctx.Done()
+				relayer.ReportReplicationStats(hist, eng.Namespace(), startTime)
+				return nil
 			})
 		}
 	}
