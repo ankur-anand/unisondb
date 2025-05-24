@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"log"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -352,6 +353,14 @@ func (seg *Segment) prepareSegmentFile(path string) (*os.File, mmap.MMap, error)
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// Get current file size
+	_, err = fd.Stat()
+	if err != nil {
+		fd.Close()
+		return nil, nil, fmt.Errorf("stat error: %w", err)
+	}
+
 	if err := fd.Truncate(seg.mmapSize); err != nil {
 		fd.Close()
 		return nil, nil, fmt.Errorf("truncate error: %w", err)
@@ -361,6 +370,15 @@ func (seg *Segment) prepareSegmentFile(path string) (*os.File, mmap.MMap, error)
 		fd.Close()
 		return nil, nil, fmt.Errorf("mmap error: %w", err)
 	}
+
+	// Verify mapped size
+	if len(mmapData) != int(seg.mmapSize) {
+		mmapData.Unmap()
+		fd.Close()
+		err := fmt.Errorf("mapped size %d doesn't match expected size %d", len(mmapData), seg.mmapSize)
+		log.Fatal(err)
+	}
+
 	return fd, mmapData, nil
 }
 
