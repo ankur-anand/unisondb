@@ -379,6 +379,12 @@ func (seg *Segment) prepareSegmentFile(path string) (*os.File, mmap.MMap, error)
 		log.Fatal(err)
 	}
 
+	// Pre-touch pages to ensure they're mapped
+	pageSize := int64(os.Getpagesize())
+	for offset := int64(0); offset < seg.mmapSize; offset += pageSize {
+		mmapData[offset] = mmapData[offset]
+	}
+
 	return fd, mmapData, nil
 }
 
