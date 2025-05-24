@@ -277,6 +277,7 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 	if isNew {
 		// for a new Segment file we initialize it with default metadata.
 		writeInitialMetadata(mmapData)
+		slog.Info("[unisondb.walfs]", "event_type", "segment.opened", id)
 	} else {
 		// decode the Segment metadata header
 		meta, err := decodeSegmentHeader(mmapData[:segmentHeaderSize])
@@ -630,6 +631,7 @@ func (seg *Segment) Close() error {
 		return fmt.Errorf("file close error: %w", err)
 	}
 
+	slog.Info("[unisondb.walfs]", "event_type", "segment.closed", "id", seg.id)
 	return nil
 }
 
