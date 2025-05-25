@@ -44,6 +44,14 @@ func DecodeOffset(b []byte) *Offset {
 	return &pos
 }
 
+const (
+	// We are sampling the read duration in the reader hot path.
+	// we are avoiding random as one its more intensive than CPU masking in power2.
+	// 16383 mask gives us sampling in the range of (1 in 16,384) 0.006%
+	// So we only record few in hot reader path for each reader.
+	samplingMask = 16383
+)
+
 // WalIO provides a write and read to underlying file based wal store.
 type WalIO struct {
 	appendLog        *walfs.WALog
@@ -169,6 +177,7 @@ type Reader struct {
 	namespace      string
 	taggedScope    umetrics.Scope
 	withActiveTail bool
+	readCount      int
 }
 
 // Next returns the next chunk data and its position in the WAL.
@@ -199,11 +208,13 @@ func (r *Reader) Next() ([]byte, Offset, error) {
 		return nil, walfs.NilRecordPosition, err
 	}
 
+	r.readCount++
 	// Successful read
 	dur := time.Since(start)
-	if rand.Float64() < 0.05 || dur > 10*time.Millisecond {
+	if r.readCount&samplingMask == 0 || dur > 10*time.Millisecond {
 		r.taggedScope.Histogram(metricsWalReadDuration, readLatencyBuckets).RecordDuration(dur)
 	}
+
 	return data, pos, nil
 }
 
