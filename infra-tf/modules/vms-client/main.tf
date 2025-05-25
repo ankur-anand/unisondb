@@ -24,7 +24,7 @@ resource "digitalocean_droplet" "do_droplets" {
   size              = var.droplet_size
   region            = var.region
   monitoring        = true # comes free of cost.
-  ipv6              = true
+  ipv6              = false
   graceful_shutdown = true
   ssh_keys          = [data.digitalocean_ssh_key.do_ssh_key.fingerprint]
   vpc_uuid          = var.vpc_id
@@ -36,13 +36,9 @@ resource "digitalocean_droplet" "do_droplets" {
     id                 = each.key
     region             = var.region
     env                = var.env
-    ts_auth_key        = var.ts_auth_key
     go_version         = var.go_version
     central_ip         = var.central_ip
     prometheus_version = var.prometheus_version
-    ob_token           = var.ob_token
-    ob_user            = var.ob_user
-    ob_pass            = var.ob_pass
     role               = "client"
     branch             = var.git_branch
   })
@@ -65,12 +61,11 @@ resource "digitalocean_droplet" "do_droplets" {
       "while [ ! -f /var/lib/cloud/instance/boot-finished ]; do sleep 5; done",
       "echo 'cloud-init completed.'",
       "chmod +x /tmp/setup_unisondb.sh",
-      "sudo CENTRAL_IP=${var.central_ip} INSTANCE_COUNT=${var.instance_count} USERNAME=ankur OB_TOKEN=${var.ob_token} OB_USER=${var.ob_user} OB_PASS=${var.ob_pass} ROLE=client /tmp/setup_unisondb.sh"
+      "sudo CENTRAL_IP=${var.central_ip} INSTANCE_COUNT=${var.instance_count} USERNAME=${var.user_name} PROM_IP=${var.prom_ip} ROLE=client /tmp/setup_unisondb.sh"
     ]
   }
 
   lifecycle {
     ignore_changes = [user_data]
   }
-
 }

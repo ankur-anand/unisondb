@@ -12,6 +12,7 @@ OB_TOKEN=${OB_TOKEN:-"ob_token"}
 OB_USER=${OB_USER:-"ob_user"}
 OB_PASS=${OB_PASS:-"ob_pass"}
 ROLE=${ROLE:-"client"}
+PROM_IP=${PROM_IP:-"127.0.0.1"}
 PROM_CONFIG_PATH="/etc/prometheus/prometheus.yml"
 
 mkdir -p /etc/unisondb /etc/systemd/system /etc/prometheus
@@ -31,16 +32,27 @@ port = $GRPC_PORT
 allow_insecure = true
 
 [storage_config]
-base_dir = "/tmp/unisondb/database_$i"
-namespaces = ["default", "tenant_1", "tenant_2"]
+base_dir = "/var/lib/unisondb/data/database_$i"
+namespaces = ["ad-campaign"]
 bytes_per_sync = "1MB"
 segment_size = "16MB"
-arena_size = "4MB"
+disable_entry_type_check = true
+
+[write_notify_config]
+enabled = true
+max_delay = "20ms"
+
+[storage_config.wal_cleanup_config]
+interval = "5m"
+enabled = true
+max_age = "1h"
+min_segments = 5
+max_segments = 30
 
 [relayer_config.relayer1]
-namespaces = ["default", "tenant_1", "tenant_2"]
+namespaces = ["ad-campaign"]
 upstream_address = "${CENTRAL_IP}:4001"
-segment_lag_threshold = 100
+segment_lag_threshold = 10000
 allow_insecure = true
 
 [pprof_config]
@@ -58,9 +70,9 @@ warn  = 100.0
 error = 100.0
 
 [wal_io_global_limiter]
-enable = true
-burst = 400
-rate_limit = 1200
+enable = false
+burst = 5000
+rate_limit = 5000
 EOF
 done
 
@@ -88,10 +100,8 @@ done
 cat <<EOF >> ${PROM_CONFIG_PATH}
 
 remote_write:
-  - url: "https://api.openobserve.ai/api/${OB_TOKEN}/prometheus/api/v1/write"
-    basic_auth:
-      username: "${OB_USER}"
-      password: "${OB_PASS}"
+  - url: "http://${PROM_IP}:9090/api/v1/write"
+
 EOF
 
 cat <<EOF > /etc/systemd/system/unisondb@.service
@@ -134,6 +144,8 @@ EOF
 systemctl daemon-reload
 
 for i in $(seq 0 $(($INSTANCE_COUNT - 1))); do
+  mkdir -p /var/lib/unisondb/data/database_$i
+  chown "${USERNAME}":"${USERNAME}" /var/lib/unisondb/data/database_$i
   systemctl enable unisondb@$i.service
   systemctl start unisondb@$i.service
 done

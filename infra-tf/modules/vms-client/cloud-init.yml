@@ -50,10 +50,6 @@ runcmd:
   - bash -c "$(curl -fsSL https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh)" > /var/log/omb-install.log 2>&1
   - sed -i 's/OSH_THEME="font"/OSH_THEME="powerline-naked"/' /root/.bashrc
 
-  #- curl -fsSL https://tailscale.com/install.sh | sh
-  #- sysctl -p /etc/sysctl.d/99-tailscale.conf
-  #- tailscale up --hostname=${id} --authkey=${ts_auth_key}
-
   - wget -q https://go.dev/dl/go${go_version}.linux-amd64.tar.gz
   - rm -rf /usr/local/go && tar -C /usr/local -xzf go${go_version}.linux-amd64.tar.gz
   - echo "export PATH=\$PATH:/usr/local/go/bin" >> /etc/profile.d/go.sh

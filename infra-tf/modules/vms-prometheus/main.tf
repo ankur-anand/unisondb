@@ -29,20 +29,13 @@ resource "digitalocean_droplet" "do_droplets" {
   tags              = local.tags
 
   user_data = templatefile("${path.module}/cloud-init.yml", {
-    username              = var.user_name,
-    ssh_public_key        = data.digitalocean_ssh_key.do_ssh_key.public_key,
-    id                    = local.vm
-    region                = var.region
-    env                   = var.env
-    go_version            = var.go_version
-    prometheus_version    = var.prometheus_version
-    role                  = "fuzzer"
-    local_relayer_count   = var.local_relayer_count
-    workers_per_namespace = var.workers_per_namespace
-    ops_per_namespace     = var.ops_per_namespace
-    central_prometheus_ip = var.prom_ip
-    branch                = var.git_branch
-    fuzzing_start_delay   = var.fuzzing_start_delay
+    username           = var.user_name,
+    ssh_public_key     = data.digitalocean_ssh_key.do_ssh_key.public_key,
+    id                 = local.vm
+    region             = var.region
+    env                = var.env
+    prometheus_version = var.prometheus_version
+    role               = "promtheus"
   })
 
 }

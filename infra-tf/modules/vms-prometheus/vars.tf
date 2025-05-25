@@ -28,26 +28,8 @@ variable "droplet_image" {
   default     = "ubuntu-24-04-x64"
 }
 
-
-variable "go_version" {
-  description = "Go version to install"
-  type        = string
-  default     = "1.24.2"
-}
-
 variable "vpc_id" {
   description = "The ID of the VPC to deploy into."
-  type        = string
-}
-
-variable "client_count" {
-  description = "Number of UnisonDB client VMs to create"
-  type        = number
-  default     = 1
-}
-
-variable "central_ip" {
-  description = "Private IP of central UnisonDB server"
   type        = string
 }
 
@@ -57,36 +39,13 @@ variable "prometheus_version" {
   default     = "2.53.4"
 }
 
-variable "git_branch" {
-  description = "The git branch to use"
-  type        = string
-}
-
-variable "ssh_private_key_path" {
-  description = "Path to the SSH private key used for connecting to droplets."
-  type        = string
-}
-
-variable "instance_count" {
-  description = "Number of instances to launch on each vm"
-  type        = number
-}
-
-variable "prom_ip" {
-  description = "Private IP of central prometheus server"
-  type        = string
-}
-
 variable "user_name" {
   description = "Username to log in to the droplets."
   type        = string
 }
 
 locals {
-  group = "unisondb.${var.region}-${var.env}"
-  clients = {
-    for i in range(1, var.client_count + 1) :
-    format("client-%02d.${local.group}", i) => i
-  }
-  tags = ["unisondb", "client", var.env, var.region]
+  group = "prometheus.unisondb.${var.region}-${var.env}"
+  vm    = local.group
+  tags  = ["unisondb", "fuzzer", var.env, var.region]
 }

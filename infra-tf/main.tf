@@ -14,13 +14,6 @@ variable "do_token" {
   sensitive   = true
 }
 
-variable "ts_auth_key" {
-  description = "Tail Scale AUTH Key"
-  type        = string
-  sensitive   = true
-  default     = ""
-}
-
 variable "region" {
   description = "The region in which to deploy the infrastructure"
   type        = string
@@ -44,24 +37,6 @@ output "vpc-out" {
   value = module.vpc
 }
 
-variable "ob_token" {
-  description = "OpenObserve token"
-  type        = string
-  sensitive   = true
-}
-
-variable "ob_user" {
-  description = "Openobserve user"
-  type        = string
-  sensitive   = true
-}
-
-variable "ob_pass" {
-  description = "OpenVPN user password"
-  type        = string
-  sensitive   = true
-}
-
 variable "fuzzer_droplet_size" {
   type        = string
   description = "The size slug of a droplet size"
@@ -78,17 +53,39 @@ variable "git_branch" {
   default     = "main"
 }
 
+variable "user_name" {
+  description = "Username to log in to the droplets."
+  type        = string
+  default     = "ankur"
+}
+
+module "prometheus" {
+  source = "./modules/vms-prometheus"
+
+  do_token  = var.do_token
+  vpc_id    = module.vpc.vpc_id
+  user_name = var.user_name
+}
+
+output "prometheus" {
+  value = module.prometheus
+}
+
+variable "fuzzing_start_delay" {
+  description = "Duration  to wait before fuzzing the Unisondb."
+  type        = string
+}
 
 module "fuzzer" {
   source              = "./modules/vms-fuzzer"
   do_token            = var.do_token
-  ts_auth_key         = var.ts_auth_key
   vpc_id              = module.vpc.vpc_id
-  ob_token            = var.ob_token
-  ob_pass             = var.ob_pass
-  ob_user             = var.ob_user
   droplet_size        = var.fuzzer_droplet_size
   local_relayer_count = var.local_relayer_count
+  prom_ip             = module.prometheus.droplet_private_ip
+  git_branch          = var.git_branch
+  user_name           = var.user_name
+  fuzzing_start_delay = var.fuzzing_start_delay
 }
 
 output "fuzzer" {
@@ -121,35 +118,17 @@ variable "instance_count" {
 module "client" {
   source               = "./modules/vms-client"
   do_token             = var.do_token
-  ts_auth_key          = var.ts_auth_key
   vpc_id               = module.vpc.vpc_id
   central_ip           = module.fuzzer.droplet_private_ip
   client_count         = var.client_count
-  ob_token             = var.ob_token
-  ob_pass              = var.ob_pass
-  ob_user              = var.ob_user
   droplet_size         = var.client_droplet_size
   git_branch           = var.git_branch
   ssh_private_key_path = var.ssh_private_key_path
   instance_count       = var.instance_count
+  prom_ip              = module.prometheus.droplet_private_ip
+  user_name            = var.user_name
 }
 
 output "client" {
   value = module.client
 }
-
-locals {
-  scrape_targets_json = jsonencode([
-    for ip in concat([module.fuzzer.droplet_private_ip], values(module.client.droplet_private_ips)) : {
-      targets = ["${ip}:4000"]
-      labels  = { role = "unisondb" }
-    }
-  ])
-}
-
-
-resource "local_file" "scrape_targets" {
-  content  = local.scrape_targets_json
-  filename = "${path.module}/scrape_targets.json"
-}
-
