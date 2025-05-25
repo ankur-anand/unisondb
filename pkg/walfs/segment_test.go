@@ -3,6 +3,7 @@ package walfs
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -53,7 +54,7 @@ func TestSegment_BasicOperations(t *testing.T) {
 	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
-	var positions []*RecordPosition
+	var positions []RecordPosition
 	for _, tt := range tests {
 		pos, err := seg.Write(tt.data)
 		assert.NoError(t, err)
@@ -87,7 +88,7 @@ func TestSegment_SequentialWrites(t *testing.T) {
 		assert.NoError(t, seg.Close())
 	})
 
-	var positions []*RecordPosition
+	var positions []RecordPosition
 	for i := 0; i < 10; i++ {
 		data := []byte(fmt.Sprintf("entry-%d", i))
 		pos, err := seg.Write(data)
@@ -120,7 +121,7 @@ func TestSegment_ConcurrentReads(t *testing.T) {
 		assert.NoError(t, seg.Close())
 	})
 
-	testData := make([]*RecordPosition, 100)
+	testData := make([]RecordPosition, 100)
 	for i := 0; i < 100; i++ {
 		data := []byte(fmt.Sprintf("test-%d", i))
 		pos, err := seg.Write(data)
@@ -253,7 +254,7 @@ func TestSegment_WriteRead_1KBTo1MB(t *testing.T) {
 		1 << 20,
 	}
 
-	var positions []*RecordPosition
+	var positions []RecordPosition
 	var original [][]byte
 
 	for i, sz := range sizes {
@@ -718,7 +719,7 @@ func TestSegment_WriteRead_UnalignedEntriesAlignedOffsets(t *testing.T) {
 		bytes.Repeat([]byte("P"), 1023),
 	}
 
-	var positions []*RecordPosition
+	var positions []RecordPosition
 
 	for _, data := range inputs {
 		pos, err := seg.Write(data)
@@ -813,7 +814,7 @@ func TestSegment_ParallelStreamReaders(t *testing.T) {
 	t.Cleanup(func() { assert.NoError(t, seg.Close()) })
 
 	payload := []byte("concurrent-read-entry")
-	var positions []*RecordPosition
+	var positions []RecordPosition
 	for i := 0; i < 500; i++ {
 		pos, err := seg.Write(payload)
 		assert.NoError(t, err)
@@ -975,7 +976,7 @@ func TestSegmentReader_LastRecordPosition(t *testing.T) {
 
 	data, pos, err := reader.Next()
 	assert.Nil(t, data)
-	assert.Nil(t, pos)
+	assert.Equal(t, pos, NilRecordPosition)
 	assert.True(t, errors.Is(err, io.EOF) || errors.Is(err, ErrNoNewData))
 }
 
@@ -1123,7 +1124,7 @@ func TestSegmentReader_WaitForNewData(t *testing.T) {
 
 	data, pos, err := reader.Next()
 	assert.Nil(t, data)
-	assert.Nil(t, pos)
+	assert.Equal(t, pos, NilRecordPosition)
 	assert.ErrorIs(t, err, ErrNoNewData)
 
 	payload := []byte("new-wal-entry")
@@ -1137,7 +1138,7 @@ func TestSegmentReader_WaitForNewData(t *testing.T) {
 
 	data, pos, err = reader.Next()
 	assert.Nil(t, data)
-	assert.Nil(t, pos)
+	assert.Equal(t, pos, NilRecordPosition)
 	assert.ErrorIs(t, err, ErrNoNewData)
 
 	err = seg.SealSegment()
@@ -1145,7 +1146,7 @@ func TestSegmentReader_WaitForNewData(t *testing.T) {
 
 	data, pos, err = reader.Next()
 	assert.Nil(t, data)
-	assert.Nil(t, pos)
+	assert.Equal(t, pos, NilRecordPosition)
 	assert.ErrorIs(t, err, io.EOF)
 }
 
@@ -1184,8 +1185,37 @@ func TestSegmentReader_ReadAfterSealHasNewData(t *testing.T) {
 
 	data, pos, err = reader.Next()
 	assert.Nil(t, data)
-	assert.Nil(t, pos)
+	assert.Equal(t, pos, NilRecordPosition)
 	assert.ErrorIs(t, err, io.EOF)
+}
+
+func TestEncodeRecordPositionTo(t *testing.T) {
+	pos := RecordPosition{
+		SegmentID: 0x11223344,
+		Offset:    0x5566778899AABBCC,
+	}
+
+	buf := EncodeRecordPositionTo(pos, nil)
+	if len(buf) != 12 {
+		t.Fatalf("expected 12-byte buffer, got %d", len(buf))
+	}
+
+	segID := binary.LittleEndian.Uint32(buf[0:4])
+	offset := binary.LittleEndian.Uint64(buf[4:12])
+
+	if segID != pos.SegmentID {
+		t.Errorf("SegmentID mismatch: got %x, want %x", segID, pos.SegmentID)
+	}
+	if offset != uint64(pos.Offset) {
+		t.Errorf("Offset mismatch: got %x, want %x", offset, pos.Offset)
+	}
+
+	dst := make([]byte, 20)
+	buf2 := EncodeRecordPositionTo(pos, dst)
+
+	if &buf2[0] != &dst[0] {
+		t.Errorf("expected in-place write to reuse buffer")
+	}
 }
 
 func calculateAlignedFrameSize(dataLen int) int64 {

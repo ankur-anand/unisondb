@@ -293,7 +293,7 @@ func BenchmarkConcurrent(b *testing.B) {
 					for pb.Next() {
 						if globalRand.Intn(2) == 0 {
 							if v, ok := positions.Load(globalRand.Intn(numbRewrites)); ok {
-								pos := v.(*RecordPosition)
+								pos := v.(RecordPosition)
 								if _, _, err := seg.Read(pos.Offset); err != nil {
 									b.Fatal(err)
 								}
@@ -362,5 +362,26 @@ func BenchmarkSyncLatency(b *testing.B) {
 				}
 			})
 		}
+	}
+}
+
+var sink []byte
+
+func BenchmarkEncodeRecordPositionTo(b *testing.B) {
+	pos := RecordPosition{SegmentID: 123456789, Offset: 9876543210}
+	buf := make([]byte, 12)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sink = EncodeRecordPositionTo(pos, buf)
+	}
+}
+
+var sink1 []byte
+
+func BenchmarkEncodeRecordPosition(b *testing.B) {
+	pos := RecordPosition{SegmentID: 123456789, Offset: 9876543210}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		sink1 = pos.Encode()
 	}
 }
