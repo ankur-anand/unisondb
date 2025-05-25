@@ -147,15 +147,15 @@ type RecordPosition struct {
 	Offset    int64
 }
 
-func (cp RecordPosition) String() string {
-	return fmt.Sprintf("SegmentID=%d, Offset=%d", cp.SegmentID, cp.Offset)
+func (rp RecordPosition) String() string {
+	return fmt.Sprintf("SegmentID=%d, Offset=%d", rp.SegmentID, rp.Offset)
 }
 
 // Encode serializes the RecordPosition into a fixed-length byte slice.
-func (cp RecordPosition) Encode() []byte {
+func (rp RecordPosition) Encode() []byte {
 	buf := make([]byte, 12)
-	binary.LittleEndian.PutUint32(buf[0:4], cp.SegmentID)
-	binary.LittleEndian.PutUint64(buf[4:12], uint64(cp.Offset))
+	binary.LittleEndian.PutUint32(buf[0:4], rp.SegmentID)
+	binary.LittleEndian.PutUint64(buf[4:12], uint64(rp.Offset))
 	return buf
 }
 
@@ -170,6 +170,12 @@ func EncodeRecordPositionTo(pos RecordPosition, buf []byte) []byte {
 	binary.LittleEndian.PutUint32(buf[0:4], pos.SegmentID)
 	binary.LittleEndian.PutUint64(buf[4:12], uint64(pos.Offset))
 	return buf
+}
+
+// IsZero returns true if the RecordPosition is uninitialized,
+// meaning both SegmentID and Offset are zero.
+func (rp RecordPosition) IsZero() bool {
+	return rp.SegmentID == 0 && rp.Offset == 0
 }
 
 // DecodeRecordPosition deserializes a byte slice into a RecordPosition.
