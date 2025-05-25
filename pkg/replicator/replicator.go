@@ -39,7 +39,7 @@ type Replicator struct {
 	engine           *dbkernel.Engine
 	batchSize        int
 	batchDuration    time.Duration
-	lastOffset       *dbkernel.Offset
+	lastOffset       dbkernel.Offset
 	replicatorEngine string
 	reader           *dbkernel.Reader
 	ctxDone          chan struct{}
@@ -51,11 +51,14 @@ type Replicator struct {
 func NewReplicator(e *dbkernel.Engine, batchSize int,
 	batchDuration time.Duration,
 	startOffset *dbkernel.Offset, replicatorEngine string) *Replicator {
+	if startOffset == nil {
+		startOffset = &dbkernel.Offset{}
+	}
 	return &Replicator{
 		engine:           e,
 		batchSize:        batchSize,
 		batchDuration:    batchDuration,
-		lastOffset:       startOffset,
+		lastOffset:       *startOffset,
 		replicatorEngine: replicatorEngine,
 		ctxDone:          make(chan struct{}),
 		namespace:        e.Namespace(),
@@ -99,7 +102,7 @@ func (r *Replicator) Replicate(ctx context.Context, recordsChan chan<- []*v1.WAL
 			return ctx.Err()
 		}
 
-		err := r.engine.WaitForAppendOrDone(r.ctxDone, waitForAppendDefaultTimeout, r.lastOffset)
+		err := r.engine.WaitForAppendOrDone(r.ctxDone, waitForAppendDefaultTimeout, &r.lastOffset)
 
 		if err != nil && !errors.Is(err, dbkernel.ErrWaitTimeoutExceeded) {
 			if r.reader != nil {
@@ -177,12 +180,12 @@ func (r *Replicator) getReader() (*dbkernel.Reader, error) {
 	if r.reader != nil {
 		return r.reader, nil
 	}
-	if r.lastOffset == nil {
+	if r.lastOffset.IsZero() {
 		reader, err := r.engine.NewReaderWithTail(nil)
 		return reader, err
 	}
 
-	reader, err := r.engine.NewReaderWithTail(r.lastOffset)
+	reader, err := r.engine.NewReaderWithTail(&r.lastOffset)
 	if err != nil {
 		return nil, err
 	}

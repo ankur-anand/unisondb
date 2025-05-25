@@ -87,7 +87,7 @@ func (wr *walRecovery) recoverWAL(checkPoint []byte) error {
 		}
 		record := logrecord.GetRootAsLogRecord(value, 0)
 		err = wr.handleRecord(record)
-		wr.lastRecoveredPos = pos
+		wr.lastRecoveredPos = &pos
 		if err != nil {
 			return fmt.Errorf("recover WAL failed %w", err)
 		}

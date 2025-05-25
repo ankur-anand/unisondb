@@ -52,7 +52,7 @@ func TestWalIO_Suite(t *testing.T) {
 
 		_, pos, err = reader.Next()
 		assert.ErrorIs(t, err, io.EOF)
-		assert.Nil(t, pos)
+		assert.Equal(t, pos.IsZero(), true)
 	})
 
 	t.Run("wal_reader_with_start", func(t *testing.T) {
@@ -68,9 +68,9 @@ func TestWalIO_Suite(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, appendData2, string(value))
 
-		_, pos, err = reader.Next()
+		_, pos1, err := reader.Next()
 		assert.ErrorIs(t, err, io.EOF)
-		assert.Nil(t, pos)
+		assert.Equal(t, pos1.IsZero(), true)
 	})
 
 	t.Run("wal_fsync", func(t *testing.T) {
