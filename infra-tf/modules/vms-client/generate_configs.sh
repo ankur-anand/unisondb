@@ -12,7 +12,7 @@ OB_TOKEN=${OB_TOKEN:-"ob_token"}
 OB_USER=${OB_USER:-"ob_user"}
 OB_PASS=${OB_PASS:-"ob_pass"}
 ROLE=${ROLE:-"client"}
-PROM_IP=${PROM_IP:"127.0.0.1"}
+PROM_IP=${PROM_IP:-"127.0.0.1"}
 PROM_CONFIG_PATH="/etc/prometheus/prometheus.yml"
 
 mkdir -p /etc/unisondb /etc/systemd/system /etc/prometheus
@@ -32,8 +32,8 @@ port = $GRPC_PORT
 allow_insecure = true
 
 [storage_config]
-base_dir = "/tmp/unisondb/database_$i"
-namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector"]
+base_dir = "/var/lib/unisondb/data/database_$i"
+namespaces = ["ad-campaign"]
 bytes_per_sync = "1MB"
 segment_size = "16MB"
 disable_entry_type_check = true
@@ -50,9 +50,9 @@ min_segments = 5
 max_segments = 30
 
 [relayer_config.relayer1]
-namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector"]
+namespaces = ["ad-campaign"]
 upstream_address = "${CENTRAL_IP}:4001"
-segment_lag_threshold = 100
+segment_lag_threshold = 10000
 allow_insecure = true
 
 [pprof_config]
@@ -144,6 +144,8 @@ EOF
 systemctl daemon-reload
 
 for i in $(seq 0 $(($INSTANCE_COUNT - 1))); do
+  mkdir -p /var/lib/unisondb/data/database_$i
+  chown "${USERNAME}":"${USERNAME}" /var/lib/unisondb/data/database_$i
   systemctl enable unisondb@$i.service
   systemctl start unisondb@$i.service
 done

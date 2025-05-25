@@ -28,11 +28,6 @@ variable "droplet_image" {
   default     = "ubuntu-24-04-x64"
 }
 
-variable "ts_auth_key" {
-  description = "Tail Scale AUTH Key"
-  type        = string
-}
-
 variable "go_version" {
   description = "Go version to install"
   type        = string
@@ -44,24 +39,6 @@ variable "vpc_id" {
   type        = string
 }
 
-variable "ob_token" {
-  description = "OpenObserve token"
-  type        = string
-  sensitive   = true
-}
-
-variable "ob_user" {
-  description = "Openobserve user"
-  type        = string
-  sensitive   = true
-}
-
-variable "ob_pass" {
-  description = "OpenVPN user password"
-  type        = string
-  sensitive   = true
-}
-
 variable "prometheus_version" {
   description = "The Prometheus version to install"
   type        = string
@@ -69,12 +46,12 @@ variable "prometheus_version" {
 }
 
 variable "ops_per_namespace" {
-  default = 100
+  default = 1000
   type    = number
 }
 
 variable "workers_per_namespace" {
-  default = 20
+  default = 50
   type    = number
 }
 
@@ -92,9 +69,18 @@ variable "prom_ip" {
   type        = string
 }
 
+variable "user_name" {
+  description = "Username to log in to the droplets."
+  type        = string
+}
+
+variable "fuzzing_start_delay" {
+  description = "Duration  to wait before fuzzing the Unisondb."
+  type        = string
+}
+
 locals {
-  group         = "fuzzer.unisondb.${var.region}-${var.env}"
-  firewall_name = "firewall-fuzzer-${local.group}"
-  vm            = local.group
-  tags          = ["unisondb", "fuzzer", var.env, var.region]
+  group = "fuzzer.unisondb.${var.region}-${var.env}"
+  vm    = local.group
+  tags  = ["unisondb", "fuzzer", var.env, var.region]
 }

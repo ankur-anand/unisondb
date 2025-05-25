@@ -28,10 +28,6 @@ variable "droplet_image" {
   default     = "ubuntu-24-04-x64"
 }
 
-variable "ts_auth_key" {
-  description = "Tail Scale AUTH Key"
-  type        = string
-}
 
 variable "go_version" {
   description = "Go version to install"
@@ -53,24 +49,6 @@ variable "client_count" {
 variable "central_ip" {
   description = "Private IP of central UnisonDB server"
   type        = string
-}
-
-variable "ob_token" {
-  description = "OpenObserve token"
-  type        = string
-  sensitive   = true
-}
-
-variable "ob_user" {
-  description = "Openobserve user"
-  type        = string
-  sensitive   = true
-}
-
-variable "ob_pass" {
-  description = "OpenObserve user password"
-  type        = string
-  sensitive   = true
 }
 
 variable "prometheus_version" {
@@ -99,9 +77,13 @@ variable "prom_ip" {
   type        = string
 }
 
+variable "user_name" {
+  description = "Username to log in to the droplets."
+  type        = string
+}
+
 locals {
-  group         = "unisondb.${var.region}-${var.env}"
-  firewall_name = "firewall-client-${local.group}"
+  group = "unisondb.${var.region}-${var.env}"
   clients = {
     for i in range(1, var.client_count + 1) :
     format("client-%02d.${local.group}", i) => i

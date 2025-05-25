@@ -3,10 +3,6 @@ output "vpc_name" {
   value       = data.digitalocean_vpc.do_vpc.name
 }
 
-output "firewall" {
-  value = local.firewall_name
-}
-
 output "droplet_ips" {
   value = {
     for name, droplet in digitalocean_droplet.do_droplets :

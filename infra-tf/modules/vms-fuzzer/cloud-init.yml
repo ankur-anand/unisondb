@@ -36,8 +36,8 @@ write_files:
       allow_insecure = true  
       
       [storage_config]  
-      base_dir = "/tmp/unisondb/server"  
-      namespaces = ["ad-campaign", "user-targeting-profile", "ad-vector"]
+      base_dir = "/var/lib/unisondb/data"
+      namespaces = ["ad-campaign"]
       bytes_per_sync = "1MB"  
       segment_size = "16MB"  
       arena_size = "4MB"  
@@ -50,7 +50,7 @@ write_files:
       [storage_config.wal_cleanup_config]
       interval = "5m"
       enabled = true
-      max_age = "1h"
+      max_age = "5h"
       min_segments = 50
       max_segments = 1000
       
@@ -72,7 +72,7 @@ write_files:
       ops_per_namespace = ${ops_per_namespace}  
       workers_per_namespace = ${workers_per_namespace}
       local_relayer_count = ${local_relayer_count}
-      startup_delay = "2m"
+      startup_delay = "${fuzzing_start_delay}"
 
   - path: /etc/systemd/system/unisondb.service
     permissions: '0644'
@@ -93,12 +93,6 @@ write_files:
 
       [Install]
       WantedBy=multi-user.target
-
-  - path: /etc/sysctl.d/99-tailscale.conf
-    permissions: '0644'
-    content: |
-      net.ipv4.ip_forward = 1
-      net.ipv6.conf.all.forwarding = 1
 
   - path: /etc/systemd/journald.conf
     permissions: '0644'
@@ -158,10 +152,6 @@ runcmd:
   - bash -c "$(curl -fsSL https://raw.githubusercontent.com/ohmybash/oh-my-bash/master/tools/install.sh)" > /var/log/omb-install.log 2>&1
   - sed -i 's/OSH_THEME="font"/OSH_THEME="powerline-naked"/' /root/.bashrc
 
-  #- curl -fsSL https://tailscale.com/install.sh | sh
-  #- sysctl -p /etc/sysctl.d/99-tailscale.conf
-  #- tailscale up --hostname=${id} --authkey=${ts_auth_key}
-
   - wget -q https://go.dev/dl/go${go_version}.linux-amd64.tar.gz
   - rm -rf /usr/local/go && tar -C /usr/local -xzf go${go_version}.linux-amd64.tar.gz
   - echo "export PATH=\$PATH:/usr/local/go/bin" >> /etc/profile.d/go.sh
@@ -190,6 +180,8 @@ runcmd:
   - cd /opt/unisondb && git checkout ${branch}
   - cd /opt/unisondb/cmd/unisondb && go build -tags fuzz -o /usr/local/bin/unisondb
   - chown ${username}:${username} /usr/local/bin/unisondb
+  - mkdir -p /var/lib/unisondb/data
+  - chown ${username}:${username} /var/lib/unisondb/data
 
   - systemctl daemon-reload
   - systemctl enable unisondb
