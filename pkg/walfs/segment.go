@@ -20,6 +20,9 @@ import (
 
 var ErrNoNewData = errors.New("no new data yet")
 
+// NilRecordPosition is a sentinel value representing an nil RecordPosition.
+var NilRecordPosition = RecordPosition{}
+
 const (
 	StateOpen = iota
 	StateClosing
@@ -144,16 +147,35 @@ type RecordPosition struct {
 	Offset    int64
 }
 
-func (cp RecordPosition) String() string {
-	return fmt.Sprintf("SegmentID=%d, Offset=%d", cp.SegmentID, cp.Offset)
+func (rp RecordPosition) String() string {
+	return fmt.Sprintf("SegmentID=%d, Offset=%d", rp.SegmentID, rp.Offset)
 }
 
 // Encode serializes the RecordPosition into a fixed-length byte slice.
-func (cp RecordPosition) Encode() []byte {
+func (rp RecordPosition) Encode() []byte {
 	buf := make([]byte, 12)
-	binary.LittleEndian.PutUint32(buf[0:4], cp.SegmentID)
-	binary.LittleEndian.PutUint64(buf[4:12], uint64(cp.Offset))
+	binary.LittleEndian.PutUint32(buf[0:4], rp.SegmentID)
+	binary.LittleEndian.PutUint64(buf[4:12], uint64(rp.Offset))
 	return buf
+}
+
+// EncodeRecordPositionTo serializes a RecordPosition into the provided buffer.
+// The buffer must be at least 12 bytes long. If it's shorter, a new 12-byte slice is allocated.
+func EncodeRecordPositionTo(pos RecordPosition, buf []byte) []byte {
+	if len(buf) < 12 {
+		buf = make([]byte, 12)
+	} else {
+		buf = buf[:12]
+	}
+	binary.LittleEndian.PutUint32(buf[0:4], pos.SegmentID)
+	binary.LittleEndian.PutUint64(buf[4:12], uint64(pos.Offset))
+	return buf
+}
+
+// IsZero returns true if the RecordPosition is uninitialized,
+// meaning both SegmentID and Offset are zero.
+func (rp RecordPosition) IsZero() bool {
+	return rp.SegmentID == 0 && rp.Offset == 0
 }
 
 // DecodeRecordPosition deserializes a byte slice into a RecordPosition.
@@ -186,9 +208,10 @@ type Segment struct {
 	activeReaders     *readerTracker
 	closeCond         *sync.Cond
 
-	isSealed   atomic.Bool
-	writeMu    sync.RWMutex
-	syncOption MsyncOption
+	isSealed       atomic.Bool
+	inMemorySealed atomic.Bool
+	writeMu        sync.RWMutex
+	syncOption     MsyncOption
 }
 
 // WithSyncOption sets the sync option for the Segment.
@@ -300,6 +323,9 @@ func (seg *Segment) SealSegment() error {
 	return nil
 }
 
+func (seg *Segment) MarkSealedInMemory() {
+
+}
 func isNewSegment(path string) (bool, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return true, nil
@@ -389,9 +415,9 @@ func alignUp(n int64) int64 {
 }
 
 // Write writes the provided slice of bytes to the open mmap file.
-func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
+func (seg *Segment) Write(data []byte) (RecordPosition, error) {
 	if seg.closed.Load() || seg.state.Load() != StateOpen {
-		return nil, ErrClosed
+		return NilRecordPosition, ErrClosed
 	}
 
 	seg.writeMu.Lock()
@@ -399,7 +425,7 @@ func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
 
 	flags := binary.LittleEndian.Uint32(seg.mmapData[40:44])
 	if IsSealed(flags) {
-		return nil, ErrSegmentSealed
+		return NilRecordPosition, ErrSegmentSealed
 	}
 
 	offset := seg.writeOffset.Load()
@@ -411,7 +437,7 @@ func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
 	entrySize := alignUp(rawSize)
 
 	if offset+entrySize > seg.mmapSize {
-		return nil, errors.New("write exceeds Segment size")
+		return NilRecordPosition, errors.New("write exceeds Segment size")
 	}
 
 	binary.LittleEndian.PutUint32(seg.header[4:8], uint32(len(data)))
@@ -445,11 +471,11 @@ func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
 	// MSync if option is set
 	if seg.syncOption == MsyncOnWrite {
 		if err := seg.mmapData.Flush(); err != nil {
-			return nil, fmt.Errorf("mmap flush error after write: %w", err)
+			return NilRecordPosition, fmt.Errorf("mmap flush error after write: %w", err)
 		}
 	}
 
-	return &RecordPosition{
+	return RecordPosition{
 		SegmentID: seg.id,
 		Offset:    offset,
 	}, nil
@@ -459,12 +485,12 @@ func (seg *Segment) Write(data []byte) (*RecordPosition, error) {
 // IMP: Don't retain any data.
 // This method returns a slice of the mmap'd file content corresponding to the record payload.
 // so slice becomes invalid immediately after the segment is closed or unmapped.
-func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
+func (seg *Segment) Read(offset int64) ([]byte, RecordPosition, error) {
 	if seg.closed.Load() {
-		return nil, nil, ErrClosed
+		return nil, NilRecordPosition, ErrClosed
 	}
 	if offset+recordHeaderSize > seg.mmapSize {
-		return nil, nil, io.EOF
+		return nil, NilRecordPosition, io.EOF
 	}
 
 	header := seg.mmapData[offset : offset+recordHeaderSize]
@@ -475,11 +501,11 @@ func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
 	entrySize := alignUp(rawSize)
 
 	if length > uint32(seg.WriteOffset()-offset-recordHeaderSize) {
-		return nil, nil, ErrCorruptHeader
+		return nil, NilRecordPosition, ErrCorruptHeader
 	}
 
 	if offset+entrySize > seg.WriteOffset() {
-		return nil, nil, io.EOF
+		return nil, NilRecordPosition, io.EOF
 	}
 
 	// validating  the trailer before reading data
@@ -488,7 +514,7 @@ func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
 	trailer := seg.mmapData[trailerOffset : trailerOffset+recordTrailerMarkerSize]
 
 	if !bytes.Equal(trailer, trailerMarker) {
-		return nil, nil, ErrIncompleteChunk
+		return nil, NilRecordPosition, ErrIncompleteChunk
 	}
 
 	data := seg.mmapData[offset+recordHeaderSize : offset+recordHeaderSize+dataSize]
@@ -504,11 +530,11 @@ func (seg *Segment) Read(offset int64) ([]byte, *RecordPosition, error) {
 		savedSum := binary.LittleEndian.Uint32(header[:4])
 		computedSum := crc32Checksum(header[4:], data)
 		if savedSum != computedSum {
-			return nil, nil, ErrInvalidCRC
+			return nil, NilRecordPosition, ErrInvalidCRC
 		}
 	}
 
-	next := &RecordPosition{
+	next := RecordPosition{
 		SegmentID: seg.id,
 		Offset:    offset + entrySize,
 	}
@@ -657,6 +683,7 @@ func (seg *Segment) cleanup() {
 	if err := os.Remove(seg.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		slog.Error("segment file delete failed", slog.String("path", seg.path), slog.Any("err", err))
 	}
+	slog.Info("[unisondb.walfs]", "event_type", "segment.removed", "segment_id", seg.id)
 }
 
 func (seg *Segment) ID() SegmentID {
@@ -701,18 +728,18 @@ func (seg *Segment) NewReader() *SegmentReader {
 	return reader
 }
 
-func (r *SegmentReader) Next() ([]byte, *RecordPosition, error) {
+func (r *SegmentReader) Next() ([]byte, RecordPosition, error) {
 	if r.closed.Load() {
-		return nil, nil, ErrSegmentReaderClosed
+		return nil, NilRecordPosition, ErrSegmentReaderClosed
 	}
 	isSealed := r.segment.isSealed.Load()
 	writeOffset := r.segment.WriteOffset()
 
 	if r.readOffset >= writeOffset {
 		if isSealed {
-			return nil, nil, io.EOF
+			return nil, NilRecordPosition, io.EOF
 		}
-		return nil, nil, ErrNoNewData
+		return nil, NilRecordPosition, ErrNoNewData
 	}
 
 	currentOffset := r.readOffset
@@ -720,14 +747,14 @@ func (r *SegmentReader) Next() ([]byte, *RecordPosition, error) {
 	if err != nil {
 		// If the read fails due to being too close to write head, treat as "no new data" if unsealed
 		if !isSealed && errors.Is(err, io.EOF) {
-			return nil, nil, ErrNoNewData
+			return nil, NilRecordPosition, ErrNoNewData
 		}
-		return nil, nil, err
+		return nil, NilRecordPosition, err
 	}
 	r.lastRecordOffset = currentOffset
 	r.readOffset = next.Offset
 
-	currentPos := &RecordPosition{
+	currentPos := RecordPosition{
 		SegmentID: r.segment.ID(),
 		Offset:    currentOffset,
 	}
@@ -735,8 +762,8 @@ func (r *SegmentReader) Next() ([]byte, *RecordPosition, error) {
 	return data, currentPos, nil
 }
 
-func (r *SegmentReader) LastRecordPosition() *RecordPosition {
-	return &RecordPosition{
+func (r *SegmentReader) LastRecordPosition() RecordPosition {
+	return RecordPosition{
 		SegmentID: r.segment.ID(),
 		Offset:    r.lastRecordOffset,
 	}

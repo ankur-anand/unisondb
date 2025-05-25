@@ -296,7 +296,7 @@ func (wl *WALog) Write(data []byte) (RecordPosition, error) {
 		wl.bytesPerSyncCalled.Add(1)
 	}
 
-	return *pos, nil
+	return pos, nil
 }
 
 func recordOverhead(dataLen int64) int64 {
@@ -513,12 +513,12 @@ func (wl *WALog) CleanupStalePendingSegments() {
 	toRemove := make(map[SegmentID]*Segment)
 
 	wl.deletionMu.Lock()
+	defer wl.deletionMu.Unlock()
 	for id, seg := range wl.pendingDeletion {
 		if _, err := os.Stat(seg.path); os.IsNotExist(err) {
 			toRemove[id] = seg
 		}
 	}
-	wl.deletionMu.Unlock()
 
 	if len(toRemove) == 0 {
 		return
@@ -545,7 +545,6 @@ type Reader struct {
 	// index in segments
 	segmentIndex  int
 	currentReader *SegmentReader
-	lastPos       *RecordPosition
 	startOffset   int64
 }
 
@@ -571,11 +570,11 @@ func (r *Reader) Close() {
 // Next returns the next available WAL record data and its current position.
 // IMPORTANT: The returned `[]byte` is a slice of a memory-mapped file, so data must not be retained or modified.
 // If the data needs to be used beyond the lifetime of the segment, the caller MUST copy it.
-func (r *Reader) Next() ([]byte, *RecordPosition, error) {
+func (r *Reader) Next() ([]byte, RecordPosition, error) {
 	for {
 		if r.currentReader == nil {
 			if r.segmentIndex >= len(r.segments) {
-				return nil, nil, io.EOF
+				return nil, NilRecordPosition, io.EOF
 			}
 			seg := r.segments[r.segmentIndex]
 			r.segmentIndex++
@@ -594,7 +593,6 @@ func (r *Reader) Next() ([]byte, *RecordPosition, error) {
 		reader := r.currentReader
 		data, pos, err := reader.Next()
 		if err == nil {
-			r.lastPos = reader.LastRecordPosition()
 			return data, pos, nil
 		}
 		if errors.Is(err, io.EOF) {
@@ -602,7 +600,7 @@ func (r *Reader) Next() ([]byte, *RecordPosition, error) {
 			r.currentReader = nil
 			continue
 		}
-		return nil, nil, err
+		return nil, NilRecordPosition, err
 	}
 }
 
@@ -613,8 +611,8 @@ func (r *Reader) SeekNext() error {
 }
 
 // LastRecordPosition returns the RecordPosition of the last successfully read entry.
-func (r *Reader) LastRecordPosition() *RecordPosition {
-	return r.lastPos
+func (r *Reader) LastRecordPosition() RecordPosition {
+	return r.currentReader.LastRecordPosition()
 }
 
 // NewReaderAfter returns a reader that starts after the given RecordPosition.
