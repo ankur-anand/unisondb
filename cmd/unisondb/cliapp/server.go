@@ -685,6 +685,7 @@ func (ms *Server) PeriodicLogEngineOffset(ctx context.Context) error {
 				slog.Info("[unisondb.cliapp]",
 					slog.String("event_type", "engines.offset.report"),
 					slog.Group("engine",
+						slog.Uint64("lsn", engine.OpsReceivedCount()),
 						slog.String("namespace", engine.Namespace()),
 						slog.Uint64("current_segment_id", uint64(segmentID)),
 					),
