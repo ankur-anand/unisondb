@@ -109,7 +109,7 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 
 	// Simple millisecond calculations - no decoding
 	remoteTimeMs := decoded.Hlc() // If this is also just milliseconds
-	nowMs := uint64(time.Now().UnixMilli()) - CustomEpochMs
+	nowMs := uint64(time.Now().UnixMilli())
 	physicalLatencyMs := nowMs - remoteTimeMs
 
 	// Measuring Physical latency alone is not enough.

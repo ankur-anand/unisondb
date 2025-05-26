@@ -45,5 +45,5 @@ var lastHLC atomic.Uint64
 
 // HLCNow returns an encoded hybrid logical clock. 41 bits = ms timestamp since custom epoch and 23 bits = logical counter.
 func HLCNow() uint64 {
-	return uint64(time.Now().UnixMilli()) - CustomEpochMs
+	return uint64(time.Now().UnixMilli())
 }
