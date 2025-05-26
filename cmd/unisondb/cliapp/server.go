@@ -390,10 +390,10 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 
 	serverOpts = append(serverOpts,
 		grpc.StatsHandler(statsHandler),
-		grpc.InitialWindowSize(16<<20),     // 16 MB per stream
-		grpc.InitialConnWindowSize(32<<20), // 32 MB per connection
-		grpc.MaxConcurrentStreams(1000),
-		grpc.WriteBufferSize(128*1024),
+		//grpc.InitialWindowSize(16<<20),     // 16 MB per stream
+		//grpc.InitialConnWindowSize(32<<20), // 32 MB per connection
+		grpc.MaxConcurrentStreams(300),
+		//grpc.WriteBufferSize(128*1024),
 		grpc.KeepaliveEnforcementPolicy(kAlv),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			// send ping frames when client is idle.
