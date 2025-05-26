@@ -45,42 +45,5 @@ var lastHLC atomic.Uint64
 
 // HLCNow returns an encoded hybrid logical clock. 41 bits = ms timestamp since custom epoch and 23 bits = logical counter.
 func HLCNow() uint64 {
-	now := time.Now()
-	adjustment := monotonic - now.Sub(startTime)
-	if adjustment < 0 {
-		adjustment = 0
-	}
-
-	ms := uint64(now.Add(adjustment).UnixMilli()) - CustomEpochMs
-	ms &= timeMask
-
-	prev := lastHLC.Load()
-	prevTS, prevCounter := HLCDecode(prev)
-
-	var newTS uint64
-	var newCounter uint64
-
-	switch {
-	case ms > prevTS:
-		newTS = ms
-		newCounter = 0
-	case ms == prevTS:
-		newTS = ms
-		newCounter = uint64(prevCounter) + 1
-		if newCounter > logicalMask {
-			panic("HLC counter overflow: too many events in one ms")
-		}
-	case ms < prevTS:
-		newTS = prevTS
-		newCounter = uint64(prevCounter) + 1
-		if newCounter > logicalMask {
-			panic("HLC counter overflow: time regression + counter overflow")
-		}
-	}
-
-	hlc := (newTS << logicalBits) | (newCounter & logicalMask)
-	if lastHLC.CompareAndSwap(prev, hlc) {
-		return hlc
-	}
-	return hlc
+	return uint64(time.Now().UnixMilli()) - CustomEpochMs
 }

@@ -80,7 +80,7 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 	if lsn != decoded.Lsn() {
 		return fmt.Errorf("%w %d, expected %d", ErrInvalidLSN, decoded.Lsn(), lsn)
 	}
-	
+
 	wh.engine.writeSeenCounter.Add(1)
 	//offset, err := wh.engine.walIO.Append(encodedWal)
 	//if err != nil {
@@ -107,11 +107,10 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 	//	return ErrInvalidOffset
 	//}
 
-	// measure physical latency
-	remoteHLC := decoded.Hlc()
-	eventRemoteTimeMs, _ := HLCDecode(remoteHLC)
+	// Simple millisecond calculations - no decoding
+	remoteTimeMs := decoded.Hlc() // If this is also just milliseconds
 	nowMs := uint64(time.Now().UnixMilli()) - CustomEpochMs
-	physicalLatencyMs := nowMs - eventRemoteTimeMs
+	physicalLatencyMs := nowMs - remoteTimeMs
 
 	// Measuring Physical latency alone is not enough.
 	// It doesn't help us answer, the latency is due to what
@@ -136,20 +135,20 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 	// High Physical & Causal Lag + High Segment Lag(if calculated from remote)
 	// Replication pipeline bottleneck
 	//
-	localHLC := HLCNow()
-	eventLocalTimeMs, _ := HLCDecode(localHLC)
-	causalLagMs := max(0, eventLocalTimeMs-eventRemoteTimeMs)
+	//localHLC := HLCNow()
+	//eventLocalTimeMs, _ := HLCDecode(localHLC)
+	//causalLagMs := max(0, eventLocalTimeMs-eventRemoteTimeMs)
 
 	namespace := wh.engine.namespace
 	replicationPhysicalLatency.WithLabelValues(namespace).Observe(float64(physicalLatencyMs))
-	replicationCausalLag.WithLabelValues(namespace).Observe(float64(causalLagMs))
+	//replicationCausalLag.WithLabelValues(namespace).Observe(float64(causalLagMs))
 
 	slog.Debug("[unisondb.dbkernel]",
 		slog.String("event_type", "apply.record.replication.latency"),
-		slog.Uint64("remote_hlc", remoteHLC),
-		slog.Uint64("event_remote_time_ms", eventRemoteTimeMs),
+		//	slog.Uint64("remote_hlc", remoteHLC),
+		//	slog.Uint64("event_remote_time_ms", eventRemoteTimeMs),
 		slog.Uint64("physical_latency_ms", physicalLatencyMs),
-		slog.Uint64("causal_lag_ms", causalLagMs),
+		//	slog.Uint64("causal_lag_ms", causalLagMs),
 	)
 
 	return nil
