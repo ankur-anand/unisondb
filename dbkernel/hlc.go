@@ -86,7 +86,7 @@ func measureClockDrift() time.Duration {
 // But it sacrifices accuracy below 1ms. The Cache gets updated every 1ms.
 // Should only be used for replication latency nothing more.
 func HLCNow() uint64 {
-	return currentMilli.Load()
+	return uint64(time.Now().UnixMilli())
 }
 
 func initMonotonic(ctx context.Context) {
