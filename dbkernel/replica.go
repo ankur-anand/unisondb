@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
@@ -109,7 +108,7 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 
 	// Simple millisecond calculations - no decoding
 	remoteTimeMs := decoded.Hlc() // If this is also just milliseconds
-	nowMs := uint64(time.Now().UnixMilli())
+	nowMs := HLCNow()
 	physicalLatencyMs := nowMs - remoteTimeMs
 
 	// Measuring Physical latency alone is not enough.

@@ -78,9 +78,8 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 				fbRecord := logrecord.GetRootAsLogRecord(record.Record, 0)
 				receivedLSN := fbRecord.Lsn()
 				remoteHLC := fbRecord.Hlc()
-				eventRemoteTimeMs, _ := dbkernel.HLCDecode(remoteHLC)
-				nowMs := uint64(time.Now().UnixMilli()) - dbkernel.CustomEpochMs
-				physicalLatencyMs := nowMs - eventRemoteTimeMs
+				nowMs := dbkernel.HLCNow()
+				physicalLatencyMs := nowMs - remoteHLC
 				// Add latency to histogram in seconds
 				err := hist.RecordValue(float64(physicalLatencyMs) / 1000.0)
 				if err != nil {

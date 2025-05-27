@@ -99,11 +99,11 @@ type Engine struct {
 
 // NewStorageEngine initializes WAL, MemTable, and BtreeStore and returns an initialized Engine for a namespace.
 func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, error) {
-	initMonotonic()
 	label := []metrics.Label{{Name: "namespace", Value: namespace}}
 	signal := make(chan struct{}, 2)
 	btreeFlushInterval, btreeFlushIntervalEnabled := conf.effectiveBTreeFlushInterval()
 	ctx, cancel := context.WithCancel(context.Background())
+	initMonotonic(ctx)
 	engine := &Engine{
 		namespace:                 namespace,
 		config:                    conf,
