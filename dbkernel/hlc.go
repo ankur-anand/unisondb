@@ -1,17 +1,19 @@
 package dbkernel
 
 import (
-	"sync/atomic"
+	"context"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-const (
-	logicalBits = 23
-	logicalMask = (1 << logicalBits) - 1
-	timeMask    = (1 << (64 - logicalBits)) - 1
-	// CustomEpochMs is a Sentinel Value for Jan 1, 2025 @ 00:00:00 UTC.
-	CustomEpochMs = 1735689600000
-)
+var clockDriftGauge = promauto.NewGauge(prometheus.GaugeOpts{
+	Namespace: "unisondb",
+	Subsystem: "dbkernel",
+	Name:      "monotonic_clock_drift_seconds",
+	Help:      "Difference between wall clock and monotonic-derived time since process start.",
+})
 
 // wall clock can jump forward or backward by the ntp.
 // monotonic time don't.
@@ -19,68 +21,42 @@ const (
 // https://github.com/golang/go/blob/889abb17e125bb0f5d8de61bb80ef15fbe2a130d/src/runtime/time_nofake.go#L19
 var startTime = time.Now()
 
-var monotonic time.Duration
+// StartClockDriftMonitor starts a goroutine that calculates the
+// drift between wall time and monotonic time every `interval`.
+func StartClockDriftMonitor(ctx context.Context, interval time.Duration) {
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 
-func initMonotonic() {
-	monotonic = time.Since(startTime)
+		for {
+			select {
+			case <-ticker.C:
+				drift := measureClockDrift()
+				// report if drift is beyond ±1ms
+				if drift < -1*time.Millisecond || drift > 1*time.Millisecond {
+					clockDriftGauge.Set(drift.Seconds())
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
 
-// HLCDecode Extract lastTime and counter from the encoded HLC.
-func HLCDecode(encodedHLC uint64) (uint64, uint32) {
-	// Extract upper 41 bits
-	lastTime := encodedHLC >> logicalBits
-	counter := uint32(encodedHLC & logicalMask)
-	return lastTime, counter
-}
-
-// IsConcurrent return true if the two hybrid logical clock have happened at the same time
-// but are distinct events within a millisecond interval.
-func IsConcurrent(hlc1, hlc2 uint64) bool {
-	lastTime1, counter1 := HLCDecode(hlc1)
-	lastTime2, counter2 := HLCDecode(hlc2)
-	return lastTime1 == lastTime2 && counter1 != counter2
-}
-
-var lastHLC atomic.Uint64
-
-// HLCNow returns an encoded hybrid logical clock. 41 bits = ms timestamp since custom epoch and 23 bits = logical counter.
-func HLCNow() uint64 {
+// measureClockDrift returns how far time.Now() deviates from the
+// monotonic baseline established at process start.
+func measureClockDrift() time.Duration {
 	now := time.Now()
-	adjustment := monotonic - now.Sub(startTime)
-	if adjustment < 0 {
-		adjustment = 0
-	}
+	monotonicElapsed := now.Sub(startTime)
+	expected := startTime.Add(monotonicElapsed)
+	return now.Sub(expected)
+}
 
-	ms := uint64(now.Add(adjustment).UnixMilli()) - CustomEpochMs
-	ms &= timeMask
+// HLCNow returns the current time in milliseconds since the Unix epoch.
+func HLCNow() uint64 {
+	return uint64(time.Now().UnixMilli())
+}
 
-	prev := lastHLC.Load()
-	prevTS, prevCounter := HLCDecode(prev)
-
-	var newTS uint64
-	var newCounter uint64
-
-	switch {
-	case ms > prevTS:
-		newTS = ms
-		newCounter = 0
-	case ms == prevTS:
-		newTS = ms
-		newCounter = uint64(prevCounter) + 1
-		if newCounter > logicalMask {
-			panic("HLC counter overflow: too many events in one ms")
-		}
-	case ms < prevTS:
-		newTS = prevTS
-		newCounter = uint64(prevCounter) + 1
-		if newCounter > logicalMask {
-			panic("HLC counter overflow: time regression + counter overflow")
-		}
-	}
-
-	hlc := (newTS << logicalBits) | (newCounter & logicalMask)
-	if lastHLC.CompareAndSwap(prev, hlc) {
-		return hlc
-	}
-	return hlc
+func initMonotonic(ctx context.Context) {
+	StartClockDriftMonitor(ctx, 1*time.Second)
 }

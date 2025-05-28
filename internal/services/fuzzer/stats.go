@@ -2,11 +2,17 @@ package fuzzer
 
 import (
 	"context"
+	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"strconv"
 	"sync"
 	"time"
+
+	llhist "github.com/openhistogram/circonusllhist"
 )
 
 type NamespaceStats struct {
@@ -14,7 +20,9 @@ type NamespaceStats struct {
 	ErrorCount int64            `json:"error_count"`
 	OpsRate    float64          `json:"ops_rate"`
 	Uptime     float64          `json:"uptime"`
+	Throughput float64          `json:"throughput"`
 	Duration   time.Duration
+	Latency    map[string]float64 `json:"latency_ms,omitempty"`
 }
 
 type internalNS struct {
@@ -22,6 +30,7 @@ type internalNS struct {
 	ErrorCount   int64
 	LastTotalOps int64
 	LastUpdated  time.Time
+	LatencyHist  *llhist.Histogram
 }
 
 type FuzzStats struct {
@@ -59,10 +68,18 @@ func (fs *FuzzStats) ensureNS(namespace string) *internalNS {
 		ns = &internalNS{
 			OpCount:     make(map[string]int64),
 			LastUpdated: time.Now(),
+			LatencyHist: llhist.New(),
 		}
 		fs.stats[namespace] = ns
 	}
 	return ns
+}
+
+func (fs *FuzzStats) ObserveLatency(namespace string, dur time.Duration) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	ns := fs.ensureNS(namespace)
+	_ = ns.LatencyHist.RecordValue(dur.Seconds())
 }
 
 func (fs *FuzzStats) Snapshot() map[string]NamespaceStats {
@@ -84,13 +101,20 @@ func (fs *FuzzStats) Snapshot() map[string]NamespaceStats {
 		}
 		opsRate := float64(delta) / dt
 		uptime := now.Sub(fs.startTime).Seconds()
-
+		count := current.LatencyHist.Count()
+		throughput := float64(count) / uptime
 		out[ns] = NamespaceStats{
 			OpCount:    copyMap(current.OpCount),
 			ErrorCount: current.ErrorCount,
 			OpsRate:    opsRate,
 			Uptime:     uptime,
+			Throughput: throughput,
 			Duration:   time.Since(fs.startTime),
+			Latency: map[string]float64{
+				"p50": current.LatencyHist.ValueAtQuantile(0.50) * 1000,
+				"p90": current.LatencyHist.ValueAtQuantile(0.90) * 1000,
+				"p99": current.LatencyHist.ValueAtQuantile(0.99) * 1000,
+			},
 		}
 		current.LastTotalOps = total
 		current.LastUpdated = now
@@ -142,4 +166,32 @@ func (fs *FuzzStats) StartStatsMonitor(ctx context.Context, interval time.Durati
 			}
 		}
 	})
+}
+
+func WriteFuzzRunCSV(path string, nsStats map[string]NamespaceStats, mode string, readers int) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	writer := csv.NewWriter(f)
+	defer writer.Flush()
+
+	for ns, s := range nsStats {
+		lat := s.Latency
+		_ = writer.Write([]string{
+			time.Now().Format(time.RFC3339),
+			mode,
+			ns,
+			strconv.Itoa(readers),
+			fmt.Sprintf("%.2f", s.OpsRate),
+			fmt.Sprintf("%.2f", s.Throughput),
+			fmt.Sprintf("%.2f", lat["p50"]),
+			fmt.Sprintf("%.2f", lat["p90"]),
+			fmt.Sprintf("%.2f", lat["p99"]),
+			strconv.FormatInt(s.ErrorCount, 10),
+		})
+	}
+	return nil
 }

@@ -605,7 +605,14 @@ func (ms *Server) RunFuzzer(ctx context.Context) error {
 		for _, engine := range ms.engines {
 			eng := engine
 			g.Go(func() error {
-				return relayer.StartNLocalRelayer(ctx, eng, ms.cfg.FuzzConfig.LocalRelayerCount, 1*time.Minute)
+				startTime := time.Now()
+				hist, err := relayer.StartNLocalRelayer(ctx, eng, ms.cfg.FuzzConfig.LocalRelayerCount, 1*time.Minute)
+				if err != nil {
+					return err
+				}
+				<-ctx.Done()
+				relayer.ReportReplicationStats(hist, eng.Namespace(), startTime)
+				return nil
 			})
 		}
 	}
@@ -680,6 +687,7 @@ func (ms *Server) PeriodicLogEngineOffset(ctx context.Context) error {
 					slog.String("event_type", "engines.offset.report"),
 					slog.Group("engine",
 						slog.String("namespace", engine.Namespace()),
+						slog.Uint64("lsn", engine.OpsReceivedCount()),
 						slog.Uint64("current_segment_id", uint64(segmentID)),
 					),
 				)

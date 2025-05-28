@@ -767,7 +767,7 @@ func Test_ASyncFSync_Coalescing(t *testing.T) {
 	config := NewDefaultEngineConfig()
 	config.ArenaSize = 1 << 20
 
-	initMonotonic()
+	initMonotonic(t.Context())
 	label := []metrics.Label{{Name: "namespace", Value: namespace}}
 	signal := make(chan struct{}, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -850,7 +850,7 @@ func Test_WalSyncer_Sync(t *testing.T) {
 	config := NewDefaultEngineConfig()
 	config.ArenaSize = 1 << 20
 
-	initMonotonic()
+	initMonotonic(t.Context())
 	label := []metrics.Label{{Name: "namespace", Value: namespace}}
 	signal := make(chan struct{}, 2)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1004,7 +1004,7 @@ func TestBtreeSyncInterval(t *testing.T) {
 	config := NewDefaultEngineConfig()
 	config.ArenaSize = 1 << 20
 
-	initMonotonic()
+	initMonotonic(t.Context())
 	label := []metrics.Label{{Name: "namespace", Value: namespace}}
 	signal := make(chan struct{}, 2)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
