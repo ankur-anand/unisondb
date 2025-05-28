@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/assert"
 )
 
 type mockEngine struct {
@@ -82,17 +82,17 @@ func TestFuzzEngineOps_Basic(t *testing.T) {
 	defer engine.mu.Unlock()
 
 	snapshot := stats.Snapshot()
-	require.Contains(t, snapshot, "test")
+	assert.Contains(t, snapshot, "test")
 
 	nsStats := snapshot["test"]
-	require.Equal(t, int64(engine.putCalls), nsStats.OpCount["Put"])
-	require.Equal(t, int64(engine.batchPutCalls), nsStats.OpCount["BatchPut"])
-	require.Equal(t, int64(engine.deleteCalls), nsStats.OpCount["Delete"])
-	require.Equal(t, int64(engine.batchDeleteCalls), nsStats.OpCount["BatchDelete"])
-	require.Equal(t, int64(engine.putColumnsCalls), nsStats.OpCount["PutColumnsForRow"])
-	require.Equal(t, int64(engine.deleteColumnsCalls), nsStats.OpCount["DeleteColumnsForRow"])
-	require.Greater(t, nsStats.Uptime, float64(0), "uptime should be positive")
-	require.GreaterOrEqual(t, nsStats.OpsRate, float64(0), "ops rate should not be negative")
+	assert.Equal(t, int64(engine.putCalls), nsStats.OpCount["Put"])
+	assert.Equal(t, int64(engine.batchPutCalls), nsStats.OpCount["BatchPut"])
+	assert.Equal(t, int64(engine.deleteCalls), nsStats.OpCount["Delete"])
+	assert.Equal(t, int64(engine.batchDeleteCalls), nsStats.OpCount["BatchDelete"])
+	assert.Equal(t, int64(engine.putColumnsCalls), nsStats.OpCount["PutColumnsForRow"])
+	assert.Equal(t, int64(engine.deleteColumnsCalls), nsStats.OpCount["DeleteColumnsForRow"])
+	assert.Greater(t, nsStats.Uptime, float64(0), "uptime should be positive")
+	assert.GreaterOrEqual(t, nsStats.OpsRate, float64(0), "ops rate should not be negative")
 }
 
 type noopEngine struct{}

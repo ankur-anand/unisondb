@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
-	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
@@ -27,17 +26,6 @@ var (
 			Subsystem: "dbkernel",
 			Name:      "replication_latency_physical_ms",
 			Help:      "Physical replication latency in milliseconds.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 15),
-		},
-		[]string{"namespace"},
-	)
-
-	replicationCausalLag = promauto.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "unisondb",
-			Subsystem: "dbkernel",
-			Name:      "replication_causal_lag_ms",
-			Help:      "Causal replication lag in milliseconds.",
 			Buckets:   prometheus.ExponentialBuckets(1, 2, 15),
 		},
 		[]string{"namespace"},
@@ -108,47 +96,16 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 
 	// measure physical latency
 	remoteHLC := decoded.Hlc()
-	eventRemoteTimeMs, _ := HLCDecode(remoteHLC)
-	nowMs := uint64(time.Now().UnixMilli()) - CustomEpochMs
-	physicalLatencyMs := nowMs - eventRemoteTimeMs
-
-	// Measuring Physical latency alone is not enough.
-	// It doesn't help us answer, the latency is due to what
-	// 1. NTP skew
-	// - If lag behind, we underreport the physical latency.
-	// - If forward, we over report latency.
-	// what that mean is even if the physical latency is reported as low,
-	// assumption of perfect synchronization is invalid.
-	// Measuring causal lag help us in detecting
-	// 1. NTP skew.
-	// If causalLagMs is always zero, it means either:
-	// 1. The system has low replication latency and is causally up-to-date.
-	// 2. Or, the replica's clock is behind the primary (clock skew), causing underreporting of causal lag.
-	// causalLagMs Increasing Continuously
-	// Replica is consistently falling behind; causal consistency is degrading.
-	// Causal Lag is:
-	// "How far ahead is my local time compared to the time when this event was created?"
-	// High Physical Latency + Low Causal Lag
-	// Likely NTP skew (replica clock behind).
-	// Low Physical Latency + High Causal Lag
-	// Replica applied event late; slow WAL replay
-	// High Physical & Causal Lag + High Segment Lag(if calculated from remote)
-	// Replication pipeline bottleneck
-	//
-	localHLC := HLCNow()
-	eventLocalTimeMs, _ := HLCDecode(localHLC)
-	causalLagMs := max(0, eventLocalTimeMs-eventRemoteTimeMs)
+	nowMs := HLCNow()
+	physicalLatencyMs := nowMs - remoteHLC
 
 	namespace := wh.engine.namespace
 	replicationPhysicalLatency.WithLabelValues(namespace).Observe(float64(physicalLatencyMs))
-	replicationCausalLag.WithLabelValues(namespace).Observe(float64(causalLagMs))
 
 	slog.Debug("[unisondb.dbkernel]",
 		slog.String("event_type", "apply.record.replication.latency"),
 		slog.Uint64("remote_hlc", remoteHLC),
-		slog.Uint64("event_remote_time_ms", eventRemoteTimeMs),
 		slog.Uint64("physical_latency_ms", physicalLatencyMs),
-		slog.Uint64("causal_lag_ms", causalLagMs),
 	)
 
 	return wh.handleRecord(decoded, offset)

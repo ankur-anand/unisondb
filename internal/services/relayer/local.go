@@ -7,7 +7,6 @@ import (
 	"io"
 	"log/slog"
 	"strconv"
-	"sync"
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
@@ -38,7 +37,7 @@ func NewLocalWalRelayer(id int) *LocalWalRelayer {
 // Run starts the relayer which continuously pulls WAL records and lag emits metrics.
 // nolint:gocognit
 func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metricsTickInterval time.Duration,
-	once *sync.Once, hist *llhist.Histogram) error {
+	hist *llhist.Histogram) error {
 	rpInstance := replicator.NewReplicator(engine,
 		50,
 		1*time.Second, n.lastOffset, "local")
@@ -70,16 +69,6 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 				slog.Int("segment_lag", segmentLag),
 				slog.Int("replicated", n.replicatedCount),
 			)
-			once.Do(func() {
-				if n.replicatedCount > 0 && hist != nil {
-					p99 := hist.ValueAtQuantile(0.99)
-					throughput := float64(n.replicatedCount) / time.Since(n.startTime).Seconds() // or track your own `startTime`
-					fmt.Println("==== Replication Stats ====")
-					fmt.Printf("Namespace \"%s\": %.2f replication per second, p99=%.2f msec\n",
-						namespace, throughput, p99*1000)
-					fmt.Println("==== Replication Stats ====")
-				}
-			})
 			return nil
 		case records := <-walReceiver:
 			if len(records) == 0 {
@@ -89,9 +78,8 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 				fbRecord := logrecord.GetRootAsLogRecord(record.Record, 0)
 				receivedLSN := fbRecord.Lsn()
 				remoteHLC := fbRecord.Hlc()
-				eventRemoteTimeMs, _ := dbkernel.HLCDecode(remoteHLC)
-				nowMs := uint64(time.Now().UnixMilli()) - dbkernel.CustomEpochMs
-				physicalLatencyMs := nowMs - eventRemoteTimeMs
+				nowMs := dbkernel.HLCNow()
+				physicalLatencyMs := nowMs - remoteHLC
 				// Add latency to histogram in seconds
 				err := hist.RecordValue(float64(physicalLatencyMs) / 1000.0)
 				if err != nil {
@@ -127,9 +115,9 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 }
 
 // StartNLocalRelayer launches multiple local relayers for a given engine.
-func StartNLocalRelayer(ctx context.Context, engine *dbkernel.Engine, num int, metricsTickInterval time.Duration) error {
+func StartNLocalRelayer(ctx context.Context, engine *dbkernel.Engine, num int, metricsTickInterval time.Duration) ([]*llhist.Histogram, error) {
 	if num <= 0 {
-		return nil
+		return nil, nil
 	}
 	slog.Info("[unisondb.relayer]",
 		slog.String("event_type", "starting.local.relayer"),
@@ -137,17 +125,40 @@ func StartNLocalRelayer(ctx context.Context, engine *dbkernel.Engine, num int, m
 		slog.Int("num", num),
 	)
 
-	once := sync.Once{}
-	hist := llhist.New()
+	hists := make([]*llhist.Histogram, num)
+
 	for i := 0; i < num; i++ {
 		rep := NewLocalWalRelayer(i)
+		hist := llhist.New()
+		hists[i] = hist
 
-		go func(r *LocalWalRelayer) {
-			if err := r.Run(ctx, engine, metricsTickInterval, &once, hist); err != nil && !errors.Is(err, context.Canceled) {
+		go func(r *LocalWalRelayer, h *llhist.Histogram) {
+			if err := r.Run(ctx, engine, metricsTickInterval, h); err != nil && !errors.Is(err, context.Canceled) {
 				panic(err)
 			}
-		}(rep)
+		}(rep, hist)
 	}
 
-	return nil
+	return hists, nil
+}
+
+func ReportReplicationStats(hists []*llhist.Histogram, namespace string, start time.Time) {
+	merged := llhist.New()
+	for _, h := range hists {
+		merged.Merge(h)
+	}
+
+	p50 := merged.ValueAtQuantile(0.50)
+	p90 := merged.ValueAtQuantile(0.90)
+	p99 := merged.ValueAtQuantile(0.99)
+	maxP := merged.Max()
+
+	total := merged.Count()
+	rate := float64(total) / time.Since(start).Seconds()
+	fmt.Printf("\n==== Replication Stats for namespace \"%s\" ====\n", namespace)
+	fmt.Printf("Total Records: %d\n", total)
+	fmt.Printf("Throughput   : %.2f records/sec\n", rate)
+	fmt.Printf("Latency (ms) : p50=%.2f  p90=%.2f  p99=%.2f  max=%.2f\n",
+		p50*1000, p90*1000, p99*1000, maxP*1000)
+	fmt.Println("==== Replication Stats ====")
 }
