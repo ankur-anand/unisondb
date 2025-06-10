@@ -26,14 +26,13 @@ var NilRecordPosition = RecordPosition{}
 const (
 	StateOpen = iota
 	StateClosing
-)
 
-const (
+	// 4 GiB.
+	maxSegmentSize = 4 * 1024 * 1024 * 1024
+
 	FlagActive uint32 = 1 << iota
 	FlagSealed uint32 = 1 << 1
-)
 
-const (
 	segmentHeaderSize = 64
 	// just a string of "UWAL"
 	// 'U' = 0x55 and so on. Unison Write ahead log.
@@ -250,6 +249,10 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 
 	for _, opt := range opts {
 		opt(s)
+	}
+
+	if s.mmapSize > maxSegmentSize {
+		return nil, fmt.Errorf("segment size exceeds 4 GiB limit: %d bytes", s.mmapSize)
 	}
 
 	fd, mmapData, err := s.prepareSegmentFile(path)
