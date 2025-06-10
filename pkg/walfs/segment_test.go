@@ -33,6 +33,16 @@ func TestChunkPositionEncodeDecode(t *testing.T) {
 	}
 }
 
+func TestSegmentSizeLimit(t *testing.T) {
+	dir := t.TempDir()
+
+	overSize := int64(4*1024*1024*1024 + 1)
+
+	_, err := OpenSegmentFile(dir, ".wal", 1, WithSegmentSize(overSize))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "segment size exceeds 4 GiB limit")
+}
+
 func TestDecodeChunkPosition_InvalidData(t *testing.T) {
 	shortData := []byte{1, 2, 3, 4, 5}
 	_, err := DecodeRecordPosition(shortData)
