@@ -536,7 +536,7 @@ func (wl *WALog) CleanupStalePendingSegments() {
 		delete(wl.segments, id)
 		delete(wl.pendingDeletion, id)
 		slog.Debug("[unisondb.walfs]",
-			slog.String("event_type", "old.segment.cleanup"),
+			slog.String("message", "Removed WAL segment"),
 			slog.String("path", seg.path),
 		)
 	}

@@ -24,7 +24,7 @@ var (
 	metricWalWriteError        = "write_errors_total"
 	metricWalWriteDuration     = "write_duration_seconds"
 	metricsSegmentRotatedTotal = "segment_rotated_total"
-	metricsWalReadTotal        = "read_total"
+	metricsReaderCreatedTotal  = "reader_created_total"
 	metricsWalReadErrorTotal   = "read_error_total"
 	metricsWalReadDuration     = "read_durations_second"
 	metricsFSyncTotal          = "fsync_total"
@@ -60,6 +60,7 @@ type WalIO struct {
 	entriesInSegment atomic.Int64
 }
 
+// NewWalIO initializes and returns a new instance of WalIO.
 func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
 	config.applyDefaults()
 	taggedScope := umetrics.AutoScope().Tagged(map[string]string{
@@ -81,6 +82,7 @@ func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
 		walfs.WithMSyncEveryWrite(config.FSync), walfs.WithBytesPerSync(int64(config.BytesPerSync)),
 		walfs.WithOnSegmentRotated(callbackOnRotate),
 		walfs.WithAutoCleanupPolicy(config.MaxAge, config.MinSegment, config.MaxSegment, config.AutoCleanup))
+
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +90,7 @@ func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
 	return w, err
 }
 
+// RunWalCleanup starts background cleanup routines for old WAL segments.
 func (w *WalIO) RunWalCleanup(ctx context.Context, interval time.Duration, predicate walfs.DeletionPredicate) {
 	go func() {
 		ticker := time.NewTicker(interval)
@@ -120,17 +123,19 @@ func (w *WalIO) Sync() error {
 	return err
 }
 
+// Close flushes WAL data to disk using fsync and then closes all underlying WAL segments.
 func (w *WalIO) Close() error {
 	err := w.Sync()
 	if err != nil {
-		slog.Error("[unisondb.wal] Fsync to log file failed]", "error", err)
+		slog.Error("[unisondb.wal]", slog.String("message", "Failed to fsync WAL segment"),
+			slog.Any("error", err))
 		w.taggedScope.Counter(metricsFSyncErrors).Inc(1)
 	}
 	return w.appendLog.Close()
 }
 
+// Read retrieves the WAL record at the given position.
 func (w *WalIO) Read(pos *Offset) ([]byte, error) {
-	w.taggedScope.Counter(metricsWalReadTotal).Inc(1)
 	startTime := time.Now()
 	defer func() {
 		w.taggedScope.Histogram(metricsWalReadDuration, readLatencyBuckets).RecordDuration(time.Since(startTime))
@@ -142,6 +147,7 @@ func (w *WalIO) Read(pos *Offset) ([]byte, error) {
 	return value, err
 }
 
+// Append writes the provided data as a new record to the active WAL segment.
 func (w *WalIO) Append(data []byte) (*Offset, error) {
 	w.taggedScope.Counter(metricWalWriteTotal).Inc(1)
 	startTime := time.Now()
@@ -163,14 +169,17 @@ func (w *WalIO) Append(data []byte) (*Offset, error) {
 	return &off, err
 }
 
+// ReaderOption defines a functional option for configuring a Reader instance.
 type ReaderOption func(*Reader)
 
+// WithActiveTail enables or disables active tail reading mode for the WAL reader.
 func WithActiveTail(enabled bool) ReaderOption {
 	return func(r *Reader) {
 		r.withActiveTail = enabled
 	}
 }
 
+// Reader provides a forward-only iterator over WAL records and is not concurrent safe.
 type Reader struct {
 	appendReader   *walfs.Reader
 	closed         atomic.Bool
@@ -183,6 +192,7 @@ type Reader struct {
 // Next returns the next chunk data and its position in the WAL.
 // If there is no data, io. EOF will be returned.
 // The position can be used to read the data from the segment file.
+// The returned data is a memory-mapped slice — user must copy the data if retention of data is needed.
 func (r *Reader) Next() ([]byte, Offset, error) {
 	if r.closed.Load() {
 		return nil, walfs.NilRecordPosition, io.EOF
@@ -191,21 +201,23 @@ func (r *Reader) Next() ([]byte, Offset, error) {
 	start := time.Now()
 	data, pos, err := r.appendReader.Next()
 
-	switch {
-	case errors.Is(err, walfs.ErrNoNewData):
-		if !r.withActiveTail {
+	if err != nil {
+		switch {
+		case errors.Is(err, walfs.ErrNoNewData):
+			if !r.withActiveTail {
+				r.Close()
+				return nil, walfs.NilRecordPosition, io.EOF
+			}
+			return nil, walfs.NilRecordPosition, err
+
+		case errors.Is(err, io.EOF):
 			r.Close()
-			return nil, walfs.NilRecordPosition, io.EOF
+			return nil, walfs.NilRecordPosition, err
+
+		case err != nil:
+			r.taggedScope.Counter(metricsWalReadErrorTotal).Inc(1)
+			return nil, walfs.NilRecordPosition, err
 		}
-		return nil, walfs.NilRecordPosition, err
-
-	case errors.Is(err, io.EOF):
-		r.Close()
-		return nil, walfs.NilRecordPosition, err
-
-	case err != nil:
-		r.taggedScope.Counter(metricsWalReadErrorTotal).Inc(1)
-		return nil, walfs.NilRecordPosition, err
 	}
 
 	r.readCount++
@@ -218,6 +230,7 @@ func (r *Reader) Next() ([]byte, Offset, error) {
 	return data, pos, nil
 }
 
+// Close releases the underlying segment reader and marks the Reader as closed.
 func (r *Reader) Close() {
 	if r.closed.CompareAndSwap(false, true) {
 		r.appendReader.Close()
@@ -232,10 +245,12 @@ func (w *WalIO) NewReader(options ...ReaderOption) (*Reader, error) {
 		namespace:    w.namespace,
 		taggedScope:  w.taggedScope,
 	}
+
 	for _, opt := range options {
 		opt(reader)
 	}
 
+	w.taggedScope.Counter(metricsReaderCreatedTotal).Inc(1)
 	return reader, nil
 }
 
@@ -250,9 +265,12 @@ func (w *WalIO) NewReaderWithStart(offset *Offset, options ...ReaderOption) (*Re
 		namespace:    w.namespace,
 		taggedScope:  w.taggedScope,
 	}
+
 	for _, opt := range options {
 		opt(reader)
 	}
+
+	w.taggedScope.Counter(metricsReaderCreatedTotal).Inc(1)
 	return reader, nil
 }
 
