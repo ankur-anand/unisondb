@@ -885,6 +885,27 @@ func TestWALogReader_ErrNoNewDataOnActiveTail(t *testing.T) {
 	assert.ErrorIs(t, err, walfs.ErrNoNewData)
 }
 
+func TestRotateSegment_MarksInMemorySealed(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal")
+	assert.NoError(t, err)
+
+	record := []byte("hello-wal")
+	_, err = wal.Write(record)
+	assert.NoError(t, err)
+
+	initialSegment := wal.Current()
+	assert.NotNil(t, initialSegment)
+	err = wal.RotateSegment()
+	assert.NoError(t, err)
+
+	rotated := wal.Current()
+	assert.NotEqual(t, initialSegment.ID(), rotated.ID())
+	assert.True(t, walfs.IsSealed(initialSegment.GetFlags()), "expected original segment to be sealed")
+	assert.True(t, initialSegment.IsInMemorySealed(), "expected original segment to be in memory sealed")
+}
+
 func BenchmarkSegmentManager_Write_NoSync(b *testing.B) {
 	tmpDir := b.TempDir()
 	manager, err := walfs.NewWALog(tmpDir, ".wal",
