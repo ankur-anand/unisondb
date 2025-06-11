@@ -18,10 +18,24 @@ import (
 	"github.com/edsrzf/mmap-go"
 )
 
-var ErrNoNewData = errors.New("no new data yet")
+var (
+	ErrClosed              = errors.New("the Segment file is closed")
+	ErrInvalidCRC          = errors.New("invalid crc, the data may be corrupted")
+	ErrCorruptHeader       = errors.New("corrupt record header, invalid length")
+	ErrIncompleteChunk     = errors.New("incomplete or torn write detected at record trailer")
+	ErrSegmentSealed       = errors.New("cannot write to sealed segment")
+	ErrSegmentReaderClosed = errors.New("segment reader is closed")
+	ErrNoNewData           = errors.New("no new data yet")
+)
 
-// NilRecordPosition is a sentinel value representing an nil RecordPosition.
-var NilRecordPosition = RecordPosition{}
+var (
+	// NilRecordPosition is a sentinel value representing an nil RecordPosition.
+	NilRecordPosition = RecordPosition{}
+
+	crcTable = crc32.MakeTable(crc32.Castagnoli)
+	// marker written after every WAL record to detect torn/incomplete writes.
+	trailerMarker = []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED, 0xFA, 0xCE}
+)
 
 const (
 	StateOpen = iota
@@ -38,9 +52,39 @@ const (
 	// 'U' = 0x55 and so on. Unison Write ahead log.
 	segmentMagicNumber   = 0x5557414C
 	segmentHeaderVersion = 1
+
+	// layout: 4 (checksum) + 4 (length) = 8 bytes
+	recordHeaderSize = 8
+	// default Segment size of 16MB.
+	segmentSize  = 16 * 1024 * 1024
+	fileModePerm = 0644
+
+	// size of the trailer used to detect torn writes.
+	// We are writing this to detect torn or partial writes caused by unexpected shutdowns or disk failures.
+	// This is inspired by a real-world issue observed in etcd v2.3:
+	// SEE: https://github.com/etcd-io/etcd/issues/6191#issuecomment-240268979
+	// By adding a known trailer marker (e.g., 0xDEADBEEF), we can explicitly validate that a record entry.
+	// was fully persisted, and safely stop recovery at the first missing or corrupted trailer.
+	recordTrailerMarkerSize = 8
+	// alignSize defines the boundary (in bytes) to which all WAL entries (headers, payloads, trailers) are aligned.
+	// helps us reduce the chance of partially written headers/trailers across page boundaries during crashes.
+	// atomic sector writes are not used for the correctness but gives us better chance for recovery.
+	// SEE: https://github.com/boltdb/bolt/issues/548
+	alignSize int64 = 8
+	alignMask int64 = alignSize - 1
 )
 
-var crcTable = crc32.MakeTable(crc32.Castagnoli)
+type MsyncOption int
+
+const (
+	// MsyncNone skips msync after write.
+	MsyncNone MsyncOption = iota
+
+	// MsyncOnWrite calls msync (Flush) after every write.
+	MsyncOnWrite
+)
+
+type SegmentID = uint32
 
 // SegmentHeader encodes all the necessary information about the segment file at the top of the file.
 // Its Size is 64 byte once encoded.
@@ -91,54 +135,6 @@ func decodeSegmentHeader(buf []byte) (*SegmentHeader, error) {
 	}
 	return meta, nil
 }
-
-type MsyncOption int
-
-const (
-	// MsyncNone skips msync after write.
-	MsyncNone MsyncOption = iota
-
-	// MsyncOnWrite calls msync (Flush) after every write.
-	MsyncOnWrite
-)
-
-type SegmentID = uint32
-
-var (
-	ErrClosed              = errors.New("the Segment file is closed")
-	ErrInvalidCRC          = errors.New("invalid crc, the data may be corrupted")
-	ErrCorruptHeader       = errors.New("corrupt record header, invalid length")
-	ErrIncompleteChunk     = errors.New("incomplete or torn write detected at record trailer")
-	ErrSegmentSealed       = errors.New("cannot write to sealed segment")
-	ErrSegmentReaderClosed = errors.New("segment reader is closed")
-)
-
-const (
-	// layout: 4 (checksum) + 4 (length) = 8 bytes
-	recordHeaderSize = 8
-	// default Segment size of 16MB.
-	segmentSize  = 16 * 1024 * 1024
-	fileModePerm = 0644
-
-	// size of the trailer used to detect torn writes.
-	// We are writing this to detect torn or partial writes caused by unexpected shutdowns or disk failures.
-	// This is inspired by a real-world issue observed in etcd v2.3:
-	// SEE: https://github.com/etcd-io/etcd/issues/6191#issuecomment-240268979
-	// By adding a known trailer marker (e.g., 0xDEADBEEF), we can explicitly validate that a record entry.
-	// was fully persisted, and safely stop recovery at the first missing or corrupted trailer.
-	recordTrailerMarkerSize = 8
-	// alignSize defines the boundary (in bytes) to which all WAL entries (headers, payloads, trailers) are aligned.
-	// helps us reduce the chance of partially written headers/trailers across page boundaries during crashes.
-	// atomic sector writes are not used for the correctness but gives us better chance for recovery.
-	// SEE: https://github.com/boltdb/bolt/issues/548
-	alignSize int64 = 8
-	alignMask int64 = alignSize - 1
-)
-
-var (
-	// marker written after every WAL record to detect torn/incomplete writes.
-	trailerMarker = []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED, 0xFA, 0xCE}
-)
 
 // RecordPosition is the logical location of a record entry within a WAL Segment.
 type RecordPosition struct {
@@ -402,8 +398,8 @@ func (seg *Segment) scanForLastOffset(path string, mmapData mmap.MMap) int64 {
 			break
 		}
 		if savedSum == 0 || savedSum != computedSum || !bytes.Equal(trailer, trailerMarker) {
-			slog.Warn("[unisondb.fswal]",
-				slog.String("event_type", "Segment.recovery.stopped.checksum.mismatch"),
+			slog.Warn("[walfs]",
+				slog.String("message", "Failed to recover segment: checksum mismatch"),
 				slog.Int64("offset", offset),
 				slog.Uint64("saved", uint64(savedSum)),
 				slog.Uint64("computed", uint64(computedSum)),
@@ -704,12 +700,12 @@ func (seg *Segment) MarkForDeletion() {
 // cleanup closes and deletes the underlying segment file from disk.
 func (seg *Segment) cleanup() {
 	if err := seg.Close(); err != nil {
-		slog.Error("segment close failed", slog.String("path", seg.path), slog.Any("err", err))
+		slog.Error("[walfs]", slog.String("message", "Failed to close segment"), slog.String("path", seg.path), slog.Any("error", err))
 	}
 	if err := os.Remove(seg.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Error("segment file delete failed", slog.String("path", seg.path), slog.Any("err", err))
+		slog.Error("[walfs]", slog.String("message", "Failed to delete segment"), slog.String("path", seg.path), slog.Any("error", err))
 	}
-	slog.Info("[unisondb.walfs]", "event_type", "segment.removed", "segment_id", seg.id)
+	slog.Info("[walfs]", slog.String("message", "Removed segment"), slog.Int("segment_id", int(seg.id)))
 }
 
 // ID returns the unique number of the Segment.
