@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"testing"
@@ -31,6 +32,53 @@ func TestChunkPositionEncodeDecode(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, original, decoded)
 	}
+}
+
+func TestSegmentSizeLimit(t *testing.T) {
+	dir := t.TempDir()
+
+	overSize := int64(4*1024*1024*1024 + 1)
+
+	_, err := OpenSegmentFile(dir, ".wal", 1, WithSegmentSize(overSize))
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "segment size exceeds 4 GiB limit")
+}
+
+func TestRead_CRCCheckBehavior_AfterCloseReopen(t *testing.T) {
+	dir := t.TempDir()
+	data := []byte("hello-crc-test")
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	assert.NoError(t, err, "failed to open segment")
+	pos, err := seg.Write(data)
+	assert.NoError(t, err, "failed to write data")
+	err = seg.SealSegment()
+	assert.NoError(t, err, "failed to seal segment")
+
+	err = seg.Close()
+	assert.NoError(t, err, "failed to close segment")
+
+	seg2, err := OpenSegmentFile(dir, ".wal", 1)
+	assert.NoError(t, err, "failed to open segment")
+
+	t.Run("CRCChecked", func(t *testing.T) {
+		_, _, err := seg2.Read(pos.Offset)
+		assert.NoError(t, err, "failed to read segment")
+	})
+
+	t.Run("CRCBypassed", func(t *testing.T) {
+		badCRC := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+		copy(seg2.mmapData[pos.Offset:], badCRC)
+
+		_, _, err := seg2.Read(pos.Offset)
+		assert.ErrorIs(t, err, ErrInvalidCRC)
+		seg2.MarkSealedInMemory()
+		_, _, err = seg2.Read(pos.Offset)
+		assert.NoError(t, err)
+	})
+
+	_ = seg2.Close()
+	_ = os.Remove(filepath.Join(dir, "000000001.wal"))
 }
 
 func TestDecodeChunkPosition_InvalidData(t *testing.T) {

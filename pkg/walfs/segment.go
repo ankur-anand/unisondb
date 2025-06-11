@@ -26,14 +26,13 @@ var NilRecordPosition = RecordPosition{}
 const (
 	StateOpen = iota
 	StateClosing
-)
 
-const (
+	// 4 GiB.
+	maxSegmentSize = 4 * 1024 * 1024 * 1024
+
 	FlagActive uint32 = 1 << iota
 	FlagSealed uint32 = 1 << 1
-)
 
-const (
 	segmentHeaderSize = 64
 	// just a string of "UWAL"
 	// 'U' = 0x55 and so on. Unison Write ahead log.
@@ -252,6 +251,10 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		opt(s)
 	}
 
+	if s.mmapSize > maxSegmentSize {
+		return nil, fmt.Errorf("segment size exceeds 4 GiB limit: %d bytes", s.mmapSize)
+	}
+
 	fd, mmapData, err := s.prepareSegmentFile(path)
 	if err != nil {
 		return nil, err
@@ -323,9 +326,16 @@ func (seg *Segment) SealSegment() error {
 	return nil
 }
 
+// MarkSealedInMemory marks the segment as sealed in memory.
 func (seg *Segment) MarkSealedInMemory() {
-
+	seg.inMemorySealed.Store(true)
 }
+
+// IsInMemorySealed returns true if the segment has been marked as sealed in memory.
+func (seg *Segment) IsInMemorySealed() bool {
+	return seg.inMemorySealed.Load()
+}
+
 func isNewSegment(path string) (bool, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return true, nil
@@ -415,6 +425,8 @@ func alignUp(n int64) int64 {
 }
 
 // Write writes the provided slice of bytes to the open mmap file.
+// It appends data to the segment and returns the offset where
+// the record was written in the given segment.
 func (seg *Segment) Write(data []byte) (RecordPosition, error) {
 	if seg.closed.Load() || seg.state.Load() != StateOpen {
 		return NilRecordPosition, ErrClosed
@@ -526,7 +538,7 @@ func (seg *Segment) Read(offset int64) ([]byte, RecordPosition, error) {
 	// same process memory, so having corruption of the same byte is very unlikely, until
 	// done from some external forces.
 	// doing this in the hot-path is CPU intensive and most of the read are towards the tail.
-	if seg.isSealed.Load() {
+	if seg.isSealed.Load() && !seg.inMemorySealed.Load() {
 		savedSum := binary.LittleEndian.Uint32(header[:4])
 		computedSum := crc32Checksum(header[4:], data)
 		if savedSum != computedSum {
@@ -570,6 +582,8 @@ func (seg *Segment) MSync() error {
 	return nil
 }
 
+// WillExceed returns true if writing a record of the given dataSize would overflow
+// the segment's allocated (memory-mapped) size.
 func (seg *Segment) WillExceed(dataSize int) bool {
 	rawSize := int64(recordHeaderSize + dataSize + recordTrailerMarkerSize)
 	entrySize := alignUp(rawSize)
@@ -577,6 +591,8 @@ func (seg *Segment) WillExceed(dataSize int) bool {
 	return offset+entrySize > seg.mmapSize
 }
 
+// Close gracefully shuts down the segment by waiting for all active readers to complete.
+// It unmap the segment file and closes file descriptor.
 func (seg *Segment) Close() error {
 	if !seg.state.CompareAndSwap(StateOpen, StateClosing) {
 		return nil
@@ -609,14 +625,17 @@ func (seg *Segment) Close() error {
 	return nil
 }
 
+// HasActiveReaders returns true if there are any currently active readers on the segment.
 func (seg *Segment) HasActiveReaders() bool {
 	return seg.activeReaders.HasAny()
 }
 
+// WriteOffset returns the current write offset of the segment.
 func (seg *Segment) WriteOffset() int64 {
 	return seg.writeOffset.Load()
 }
 
+// GetLastModifiedAt returns the last modified time of the segment.
 func (seg *Segment) GetLastModifiedAt() int64 {
 	seg.writeMu.RLock()
 	defer seg.writeMu.RUnlock()
@@ -627,6 +646,7 @@ func (seg *Segment) GetLastModifiedAt() int64 {
 	return meta.LastModifiedAt
 }
 
+// GetEntryCount returns the total entry count in segment.
 func (seg *Segment) GetEntryCount() int64 {
 	seg.writeMu.RLock()
 	defer seg.writeMu.RUnlock()
@@ -637,6 +657,7 @@ func (seg *Segment) GetEntryCount() int64 {
 	return meta.EntryCount
 }
 
+// GetFlags returns the flags stored in segment header.
 func (seg *Segment) GetFlags() uint32 {
 	seg.writeMu.RLock()
 	defer seg.writeMu.RUnlock()
@@ -668,6 +689,10 @@ func (seg *Segment) decrRef(id uint64) {
 		}
 	}
 }
+
+// MarkForDeletion marks the segment as candidate for deletion.
+// If no active readers, it will immediately call cleanup.
+// Otherwise, cleanup will be deferred until the last reference is released.
 func (seg *Segment) MarkForDeletion() {
 	if seg.markedForDeletion.CompareAndSwap(false, true) {
 		if seg.refCount.Load() == 0 {
@@ -676,6 +701,7 @@ func (seg *Segment) MarkForDeletion() {
 	}
 }
 
+// cleanup closes and deletes the underlying segment file from disk.
 func (seg *Segment) cleanup() {
 	if err := seg.Close(); err != nil {
 		slog.Error("segment close failed", slog.String("path", seg.path), slog.Any("err", err))
@@ -686,10 +712,13 @@ func (seg *Segment) cleanup() {
 	slog.Info("[unisondb.walfs]", "event_type", "segment.removed", "segment_id", seg.id)
 }
 
+// ID returns the unique number of the Segment.
 func (seg *Segment) ID() SegmentID {
 	return seg.id
 }
 
+// SegmentReader is an iterator over records in a WAL segment.
+// It maintains its own read offset and provides safe iteration over a Segment.
 type SegmentReader struct {
 	id               uint64
 	segment          *Segment
@@ -698,12 +727,14 @@ type SegmentReader struct {
 	closed           atomic.Bool
 }
 
+// Close closes the SegmentReader and decrements the segment's reference count.
 func (r *SegmentReader) Close() {
 	if r.closed.CompareAndSwap(false, true) {
 		r.segment.decrRef(r.id)
 	}
 }
 
+// NewReader creates a new SegmentReader for reading from the segment.
 func (seg *Segment) NewReader() *SegmentReader {
 	// prevent new readers to segments marked for deletion or not opened
 	if seg.markedForDeletion.Load() || seg.state.Load() != StateOpen {
@@ -728,10 +759,15 @@ func (seg *Segment) NewReader() *SegmentReader {
 	return reader
 }
 
+// Next reads the next record from the segment and also advances the read position.
+// It returns the data, the record's position, or an error.
+// Returns io.EOF if the segment is sealed and all data has been read.
+// Returns ErrNoNewData if unsealed and no new data is available yet.
 func (r *SegmentReader) Next() ([]byte, RecordPosition, error) {
 	if r.closed.Load() {
 		return nil, NilRecordPosition, ErrSegmentReaderClosed
 	}
+
 	isSealed := r.segment.isSealed.Load()
 	writeOffset := r.segment.WriteOffset()
 
@@ -749,6 +785,7 @@ func (r *SegmentReader) Next() ([]byte, RecordPosition, error) {
 		if !isSealed && errors.Is(err, io.EOF) {
 			return nil, NilRecordPosition, ErrNoNewData
 		}
+
 		return nil, NilRecordPosition, err
 	}
 	r.lastRecordOffset = currentOffset

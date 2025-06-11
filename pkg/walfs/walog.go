@@ -64,9 +64,9 @@ func WithOnSegmentRotated(fn func()) WALogOptions {
 }
 
 // WithAutoCleanupPolicy configures the automatic segment cleanup policy for the WAL.
-// - maxAge: Segments older than this duration are eligible for deletion.
-// - minSegments: Minimum number of WAL segments to always retain, regardless of age.
-// - maxSegments: If the total number of segments exceeds this limit, older segments will be deleted irrespective of its age.
+// maxAge: Segments older than this duration are eligible for deletion.
+// minSegments: Minimum number of WAL segments to always retain, regardless of age.
+// maxSegments: If the total number of segments exceeds this limit, older segments will be deleted irrespective of its age.
 func WithAutoCleanupPolicy(maxAge time.Duration, minSegments, maxSegments int, enable bool) WALogOptions {
 	return func(sm *WALog) {
 		if minSegments > 0 {
@@ -102,7 +102,7 @@ type WALog struct {
 
 	// this mutex is used in the write path.
 	// it protects the writer path.
-	mu             sync.RWMutex
+	writeMu        sync.RWMutex
 	currentSegment *Segment
 	segments       map[SegmentID]*Segment
 
@@ -231,10 +231,11 @@ func (wl *WALog) snapshotSegments() {
 	wl.segmentSnapshot.Store(&segments)
 }
 
+// Sync flushes the current active segment's data to disk.
 func (wl *WALog) Sync() error {
-	wl.mu.Lock()
+	wl.writeMu.Lock()
 	activeSegment := wl.currentSegment
-	wl.mu.Unlock()
+	wl.writeMu.Unlock()
 	if activeSegment == nil {
 		return errors.New("no active segment")
 	}
@@ -247,9 +248,10 @@ func (wl *WALog) Sync() error {
 	return nil
 }
 
+// Close gracefully shuts down all segments managed by the WALog.
 func (wl *WALog) Close() error {
-	wl.mu.Lock()
-	defer wl.mu.Unlock()
+	wl.writeMu.Lock()
+	defer wl.writeMu.Unlock()
 	var cErr error
 	for _, seg := range wl.segments {
 		err := seg.Close()
@@ -261,9 +263,10 @@ func (wl *WALog) Close() error {
 }
 
 // Write appends the given data as a new record to the active segment.
+// It returns RecordPosition indicating where the data was written.
 func (wl *WALog) Write(data []byte) (RecordPosition, error) {
-	wl.mu.Lock()
-	defer wl.mu.Unlock()
+	wl.writeMu.Lock()
+	defer wl.writeMu.Unlock()
 
 	if wl.currentSegment == nil {
 		return RecordPosition{}, errors.New("no active segment")
@@ -316,9 +319,9 @@ func (wl *WALog) SegmentRotatedCount() int64 {
 // IMPORTANT: The returned `[]byte` is a slice of a memory-mapped file, so data must not be retained or modified.
 // If the data needs to be used beyond the lifetime of the segment, the caller MUST copy it.
 func (wl *WALog) Read(pos RecordPosition) ([]byte, error) {
-	wl.mu.RLock()
+	wl.writeMu.RLock()
 	seg, ok := wl.segments[pos.SegmentID]
-	wl.mu.RUnlock()
+	wl.writeMu.RUnlock()
 
 	if !ok {
 		return nil, ErrSegmentNotFound
@@ -340,9 +343,10 @@ func (wl *WALog) Read(pos RecordPosition) ([]byte, error) {
 	return data, nil
 }
 
+// Segments returns a snapshot (shallow) copy of all active segments managed by the WAL.
 func (wl *WALog) Segments() map[SegmentID]*Segment {
-	wl.mu.RLock()
-	defer wl.mu.RUnlock()
+	wl.writeMu.RLock()
+	defer wl.writeMu.RUnlock()
 
 	segmentsCopy := make(map[SegmentID]*Segment, len(wl.segments))
 	for id, seg := range wl.segments {
@@ -351,16 +355,17 @@ func (wl *WALog) Segments() map[SegmentID]*Segment {
 	return segmentsCopy
 }
 
+// Current returns a pointer to the currently active WAL segment.
 func (wl *WALog) Current() *Segment {
-	wl.mu.RLock()
-	defer wl.mu.RUnlock()
+	wl.writeMu.RLock()
+	defer wl.writeMu.RUnlock()
 	return wl.currentSegment
 }
 
 // RotateSegment rotates the current segment and create a new active segment.
 func (wl *WALog) RotateSegment() error {
-	wl.mu.Lock()
-	defer wl.mu.Unlock()
+	wl.writeMu.Lock()
+	defer wl.writeMu.Unlock()
 	return wl.rotateSegment()
 }
 
@@ -373,6 +378,8 @@ func (wl *WALog) rotateSegment() error {
 		if err != nil {
 			return err
 		}
+		// Mark the sealed segment as in-memory sealed
+		wl.currentSegment.MarkSealedInMemory()
 	}
 
 	var newID SegmentID = 1
@@ -430,10 +437,10 @@ func (wl *WALog) MarkSegmentsForDeletion() {
 		return
 	}
 
-	wl.mu.RLock()
+	wl.writeMu.RLock()
 	currentSegments := len(wl.segments)
 	clonedSegments := maps.Clone(wl.segments)
-	wl.mu.RUnlock()
+	wl.writeMu.RUnlock()
 
 	if wl.minSegmentsToRetain > 0 && currentSegments <= wl.minSegmentsToRetain {
 		return
@@ -524,7 +531,7 @@ func (wl *WALog) CleanupStalePendingSegments() {
 		return
 	}
 
-	wl.mu.Lock()
+	wl.writeMu.Lock()
 	for id, seg := range toRemove {
 		delete(wl.segments, id)
 		delete(wl.pendingDeletion, id)
@@ -534,12 +541,13 @@ func (wl *WALog) CleanupStalePendingSegments() {
 		)
 	}
 	wl.snapshotSegments()
-	wl.mu.Unlock()
+	wl.writeMu.Unlock()
 }
 
 // Reader represents a high-level sequential reader over a WALog.
 // It reads across all available WAL segments in order, automatically
 // advancing from one segment to the next.
+// Reader is not safe for concurrent use.
 type Reader struct {
 	segments []*Segment
 	// index in segments
@@ -572,6 +580,7 @@ func (r *Reader) Close() {
 // If the data needs to be used beyond the lifetime of the segment, the caller MUST copy it.
 func (r *Reader) Next() ([]byte, RecordPosition, error) {
 	for {
+		// no current segment reader, it advances to the next segment in r.segments until all are exhausted.
 		if r.currentReader == nil {
 			if r.segmentIndex >= len(r.segments) {
 				return nil, NilRecordPosition, io.EOF
@@ -595,6 +604,7 @@ func (r *Reader) Next() ([]byte, RecordPosition, error) {
 		if err == nil {
 			return data, pos, nil
 		}
+		// the current segment is exhausted, moves to the next segment.
 		if errors.Is(err, io.EOF) {
 			reader.Close()
 			r.currentReader = nil
