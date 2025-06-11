@@ -127,7 +127,7 @@ func (w *WalIO) Sync() error {
 func (w *WalIO) Close() error {
 	err := w.Sync()
 	if err != nil {
-		slog.Error("[unisondb.wal]", slog.String("message", "Failed to fsync WAL segment"),
+		slog.Error("[wal]", slog.String("message", "Failed to fsync WAL segment"),
 			slog.Any("error", err))
 		w.taggedScope.Counter(metricsFSyncErrors).Inc(1)
 	}
@@ -158,7 +158,7 @@ func (w *WalIO) Append(data []byte) (*Offset, error) {
 	w.taggedScope.Counter(metricWalBytesWrittenTotal).Inc(int64(len(data)))
 	off, err := w.appendLog.Write(data)
 	if errors.Is(err, walfs.ErrFsync) {
-		log.Fatalf("[unisondb.wal] write to log file failed: %v", err)
+		log.Fatalf("[wal] write to log file failed: %v", err)
 	}
 	if err != nil {
 		w.taggedScope.Counter(metricWalWriteError).Inc(1)

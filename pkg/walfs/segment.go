@@ -398,7 +398,7 @@ func (seg *Segment) scanForLastOffset(path string, mmapData mmap.MMap) int64 {
 			break
 		}
 		if savedSum == 0 || savedSum != computedSum || !bytes.Equal(trailer, trailerMarker) {
-			slog.Warn("[unisondb.walfs]",
+			slog.Warn("[walfs]",
 				slog.String("message", "Failed to recover segment: checksum mismatch"),
 				slog.Int64("offset", offset),
 				slog.Uint64("saved", uint64(savedSum)),
@@ -700,12 +700,12 @@ func (seg *Segment) MarkForDeletion() {
 // cleanup closes and deletes the underlying segment file from disk.
 func (seg *Segment) cleanup() {
 	if err := seg.Close(); err != nil {
-		slog.Error("[unisondb.walfs]", slog.String("message", "Failed to close segment"), slog.String("path", seg.path), slog.Any("error", err))
+		slog.Error("[walfs]", slog.String("message", "Failed to close segment"), slog.String("path", seg.path), slog.Any("error", err))
 	}
 	if err := os.Remove(seg.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Error("[unisondb.walfs]", slog.String("message", "Failed to delete segment"), slog.String("path", seg.path), slog.Any("error", err))
+		slog.Error("[walfs]", slog.String("message", "Failed to delete segment"), slog.String("path", seg.path), slog.Any("error", err))
 	}
-	slog.Info("[unisondb.walfs]", slog.String("message", "Removed segment"), slog.Int("segment_id", int(seg.id)))
+	slog.Info("[walfs]", slog.String("message", "Removed segment"), slog.Int("segment_id", int(seg.id)))
 }
 
 // ID returns the unique number of the Segment.
