@@ -700,10 +700,10 @@ func (seg *Segment) MarkForDeletion() {
 // cleanup closes and deletes the underlying segment file from disk.
 func (seg *Segment) cleanup() {
 	if err := seg.Close(); err != nil {
-		slog.Error("[unisondb.walfs]", slog.String("message", "Failed to close segment"), slog.String("path", seg.path), slog.Any("err", err))
+		slog.Error("[unisondb.walfs]", slog.String("message", "Failed to close segment"), slog.String("path", seg.path), slog.Any("error", err))
 	}
 	if err := os.Remove(seg.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Error("[unisondb.walfs]", slog.String("message", "Failed to delete segment"), slog.String("path", seg.path), slog.Any("err", err))
+		slog.Error("[unisondb.walfs]", slog.String("message", "Failed to delete segment"), slog.String("path", seg.path), slog.Any("error", err))
 	}
 	slog.Info("[unisondb.walfs]", slog.String("message", "Removed segment"), slog.Int("segment_id", int(seg.id)))
 }
