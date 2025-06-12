@@ -163,7 +163,7 @@ func (table *MemTable) GetRowYValue(rowKey []byte) []y.ValueStruct {
 
 // Flush writes all entries from MemTable to BtreeStore.
 func (table *MemTable) Flush(ctx context.Context) (int, error) {
-	slog.Debug("[unisondb.memtable] Flushing MemTable to BtreeStore...",
+	slog.Debug("[memtable]", "message", "Flushing MemTable to BtreeStore",
 		"namespace", table.namespace, "start_offset", table.firstOffset,
 		"end_offset", table.lastOffset)
 
@@ -195,7 +195,11 @@ func (table *MemTable) Flush(ctx context.Context) (int, error) {
 		}
 
 		if err = table.processEntry(parsedKey, it.Value(), txn); err != nil {
-			slog.Error("[unisondb.memtable] error flushing and processing entry", "key", string(parsedKey), "err", err)
+			slog.Error("[memtable]",
+				slog.String("message", "Failed to flush and process entry"),
+				slog.String("key", string(parsedKey)),
+				slog.Any("error", err),
+			)
 			break
 		}
 	}
@@ -205,20 +209,30 @@ func (table *MemTable) Flush(ctx context.Context) (int, error) {
 
 		for _, entry := range entries {
 			if err = table.processEntry([]byte(mvccRow), entry, txn); err != nil {
-				slog.Error("[unisondb.memtable] error flushing and processing entry", "key", mvccRow, "err", err)
+				slog.Error("[memtable]",
+					slog.String("message", "Failed to flush and process entry"),
+					slog.Any("key", mvccRow),
+					slog.Any("error", err),
+				)
 				break
 			}
 		}
 	}
 
 	if err != nil {
-		slog.Error("[unisondb.memtable] error flushing and processing entry", "err", err)
+		slog.Error("[memtable]",
+			slog.String("message", "Failed to flush and process entry"),
+			slog.Any("error", err),
+		)
 		return 0, err
 	}
 
 	err = txn.Commit()
 	if err != nil {
-		slog.Error("[unisondb.memtable] error flushing and processing entry", "err", err)
+		slog.Error("[memtable]",
+			slog.String("message", "Failed to flush and process entry"),
+			slog.Any("error", err),
+		)
 		return 0, err
 	}
 

@@ -45,9 +45,8 @@ func NewReplicaWALHandler(engine *Engine) *ReplicaWALHandler {
 // ApplyRecord validates and applies a WAL record to the mem table which later get flushed to Btree Store.
 func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byte) error {
 	if receivedOffset == nil {
-		slog.Error("[unisondb.dbkernal]",
-			slog.String("event_type", "apply.record.errored"),
-			slog.String("error", "received nil offset while applying record"),
+		slog.Error("[dbkernel]",
+			slog.String("message", "Failed to apply record: nil offset received"),
 			slog.Group("engine",
 				slog.String("namespace", wh.engine.namespace),
 			),
@@ -75,9 +74,8 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 	}
 
 	if !isEqualOffset(offset, DecodeOffset(receivedOffset)) {
-		slog.Error("[unisondb.dbkernal]",
-			slog.String("event_type", "apply.record.errored"),
-			slog.String("error", " expected offset of wal entry didn't matched the received offset"),
+		slog.Error("[dbkernel]",
+			slog.String("message", "Failed to apply record: WAL offset mismatch"),
 			slog.Group("engine",
 				slog.String("namespace", wh.engine.namespace),
 			),
@@ -87,10 +85,10 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 			),
 			slog.Group("offset",
 				slog.Any("received", wal.DecodeOffset(receivedOffset)),
-				slog.Any("inserted", offset),
-				slog.Int("entry_size", len(encodedWal))),
+				slog.Any("expected", offset),
+				slog.Int("entry_size", len(encodedWal)),
+			),
 		)
-
 		return ErrInvalidOffset
 	}
 
@@ -102,10 +100,12 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 	namespace := wh.engine.namespace
 	replicationPhysicalLatency.WithLabelValues(namespace).Observe(float64(physicalLatencyMs))
 
-	slog.Debug("[unisondb.dbkernel]",
-		slog.String("event_type", "apply.record.replication.latency"),
-		slog.Uint64("remote_hlc", remoteHLC),
-		slog.Uint64("physical_latency_ms", physicalLatencyMs),
+	slog.Debug("[dbkernel]",
+		slog.String("message", "Measured replication apply latency"),
+		slog.Group("replication",
+			slog.Uint64("remote_hlc", remoteHLC),
+			slog.Uint64("physical_latency_ms", physicalLatencyMs),
+		),
 	)
 
 	return wh.handleRecord(decoded, offset)

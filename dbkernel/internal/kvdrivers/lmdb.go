@@ -70,7 +70,8 @@ func NewLmdb(path string, conf Config) (*LmdbEmbed, error) {
 		return nil, fmt.Errorf("failed to check for stale readers: %w", err)
 	}
 	if staleReaders > 0 {
-		slog.Warn("Cleared reader slots from dead processes", "stale_readers", staleReaders)
+		slog.Warn("[kvdrivers]", slog.String("message", "Cleared reader slots from dead processes"),
+			slog.Int("stale_readers", staleReaders))
 	}
 
 	var db lmdb.DBI
