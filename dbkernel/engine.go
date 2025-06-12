@@ -292,14 +292,16 @@ func (e *Engine) recoverWAL() error {
 		return err
 	}
 
-	slog.Info("[unisondb.dbkernal]",
-		slog.String("event_type", "wal.recovered"),
+	slog.Info("[dbkernel]",
+		slog.String("message", "Recovered WAL segments"),
 		slog.Group("wal",
 			slog.String("namespace", e.namespace),
-			slog.String("btree_engine", string(e.config.DBEngine))),
+			slog.String("db_engine", string(e.config.DBEngine)),
+		),
 		slog.Group("recovery",
-			slog.String("durations", humanizeDuration(time.Since(startTime))),
-			slog.Int("count", walRecovery.RecoveredCount())),
+			slog.String("duration", humanizeDuration(time.Since(startTime))),
+			slog.Int("record_count", walRecovery.RecoveredCount()),
+		),
 	)
 	metrics.IncrCounterWithLabels(mKeyWalRecoveryRecordTotal, float32(walRecovery.RecoveredCount()), e.metricsLabel)
 	metrics.MeasureSinceWithLabels(mKeyWalRecoveryDuration, startTime, e.metricsLabel)
@@ -332,8 +334,10 @@ func (e *Engine) recoverWAL() error {
 		case e.fsyncReqSignal <- struct{}{}:
 		default:
 			// this path should not happen in normal code base.
-			slog.Error("[unisondb.dbkernal] fsync req signal channel is full while recovering itself")
-			panic("[unisondb.dbkernal] fsync req signal channel is full while recovering itself")
+			slog.Error("[dbkernel]",
+				slog.String("message", "Fsync request signal channel full during recovery"),
+			)
+			panic("[dbkernal] fsync req signal channel is full while recovering itself")
 		}
 	}
 
@@ -706,7 +710,9 @@ func (e *Engine) fsyncBtreeAtInterval(ctx context.Context) {
 // handleFlush flushes the sealed mem-table to btree store.
 func (e *Engine) handleFlush(ctx context.Context) {
 	if e.flushPaused.Load() {
-		slog.Warn("[unisondb.dbkernel]: FSync Flush Paused")
+		slog.Warn("[dbkernel]",
+			slog.String("message", "Paused Fsync flush"),
+		)
 		return
 	}
 	var mt *memtable.MemTable
@@ -745,17 +751,20 @@ func (e *Engine) handleFlush(ctx context.Context) {
 			select {
 			case e.fsyncReqSignal <- struct{}{}:
 			default:
-				slog.Debug("fsync queue signal channel full")
+				slog.Debug("[dbkernel]",
+					slog.String("message", "Fsync signal dropped due to full queue"),
+				)
 			}
 		}
 
-		slog.Debug("[unisondb.dbkernel]",
-			slog.String("event_type", "memtable.flushed"),
-			slog.Group("flushed",
+		slog.Debug("[dbkernel]",
+			slog.String("message", "MemTable flushed to BtreeStore"),
+			slog.Group("flush",
 				slog.String("namespace", e.namespace),
 				slog.String("duration", humanizeDuration(time.Since(startTime))),
 				slog.Int("ops", recordProcessed),
-				slog.String("bytes", humanize.Bytes(uint64(mt.GetBytesStored())))),
+				slog.String("bytes", humanize.Bytes(uint64(mt.GetBytesStored()))),
+			),
 		)
 	}
 }
@@ -793,7 +802,10 @@ func (p *pendingMetadata) dequeueAllMetadata() ([]*flushedMetadata, int) {
 // accumulate over the time in the memory, even if large values are stored inside the mem table,
 // configured via value threshold.
 func (e *Engine) asyncFSync() {
-	slog.Debug("[unisondb.dbkernel]: FSync Metadata eventloop", "namespace", e.namespace)
+	slog.Debug("[dbkernel]",
+		slog.String("message", "Started FSync metadata event loop"),
+		slog.String("namespace", e.namespace),
+	)
 	for {
 		select {
 		case <-e.ctx.Done():
@@ -833,7 +845,9 @@ func (e *Engine) asyncFSync() {
 
 func (e *Engine) fSyncStore() {
 	if e.flushPaused.Load() {
-		slog.Warn("[unisondb.dbkernel]: FSync Flush Paused")
+		slog.Warn("[dbkernel]",
+			slog.String("message", "Paused FSync flush"),
+		)
 		return
 	}
 	// This queue will have data after the mem table have been flushed, so it's saved to
@@ -850,11 +864,11 @@ func (e *Engine) fSyncStore() {
 	metrics.IncrCounterWithLabels(mKeyFSyncTotal, 1, e.metricsLabel)
 	err := internal.SaveMetadata(e.dataStore, fm.metadata.Pos, fm.metadata.RecordProcessed)
 	if err != nil {
-		log.Fatal("[unisondb.dbkernel] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
+		log.Fatal("[dbkernel] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
 	}
 	err = e.saveBloomFilter()
 	if err != nil {
-		log.Fatal("[unisondb.dbkernel] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
+		log.Fatal("[dbkernel] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
 	}
 
 	err = e.dataStore.FSync()
@@ -863,16 +877,17 @@ func (e *Engine) fSyncStore() {
 		// There is no way to recover from the underlying Fsync Issue.
 		// https://archive.fosdem.org/2019/schedule/event/postgresql_fsync/
 		// How is it possible that PostgreSQL used fsync incorrectly for 20 years.
-		log.Fatalln(fmt.Errorf("[unisondb.dbkernel]: FSync operation failed: %w", err))
+		log.Fatalln(fmt.Errorf("[dbkernel]: FSync operation failed: %w", err))
 	}
 	metrics.MeasureSinceWithLabels(mKeyFSyncDurations, startTime, e.metricsLabel)
 
-	slog.Debug("[unisondb.dbkernel]",
-		slog.String("event_type", "btree.fsync"),
+	slog.Debug("[dbkernel]",
+		slog.String("message", "Flushed BTree to disk via FSync"),
 		slog.Group("fsync",
 			slog.String("namespace", e.namespace),
 			slog.String("duration", humanizeDuration(time.Since(startTime))),
-			slog.Uint64("record_processed", fm.metadata.RecordProcessed)),
+			slog.Uint64("record_processed", fm.metadata.RecordProcessed),
+		),
 	)
 
 	if e.callback != nil {
@@ -898,7 +913,7 @@ func (e *Engine) close(ctx context.Context) error {
 	var errs strings.Builder
 	// wait for background routine to close.
 	if !waitWithCancel(e.wg, ctx) {
-		errs.WriteString("[unisondb.dbkernel]: WAL check operation timed out")
+		errs.WriteString("[dbkernel]: WAL check operation timed out")
 		errs.WriteString("|")
 		slog.Error("Ctx was cancelled! Some goroutines are still running")
 	}
@@ -909,14 +924,14 @@ func (e *Engine) close(ctx context.Context) error {
 	if err != nil {
 		errs.WriteString(err.Error())
 		errs.WriteString("|")
-		slog.Error("[unisondb.dbkernel]: wal Fsync error", "error", err)
+		slog.Error("[dbkernel]: wal Fsync error", "error", err)
 	}
 
 	err = e.walIO.Close()
 	if err != nil {
 		errs.WriteString(err.Error())
 		errs.WriteString("|")
-		slog.Error("[unisondb.dbkernel]: wal close error", "error", err)
+		slog.Error("[dbkernel]: wal close error", "error", err)
 	}
 
 	// save if any already flushed entry is still not saved.
@@ -925,14 +940,14 @@ func (e *Engine) close(ctx context.Context) error {
 	if err != nil {
 		errs.WriteString(err.Error())
 		errs.WriteString("|")
-		slog.Error("[unisondb.dbkernel]: Btree Fsync error", "error", err)
+		slog.Error("[dbkernel]: Btree Fsync error", "error", err)
 	}
 
 	err = e.dataStore.Close()
 	if err != nil {
 		errs.WriteString(err.Error())
 		errs.WriteString("|")
-		slog.Error("[unisondb.dbkernel]: Btree close error", "error", err)
+		slog.Error("[dbkernel]: Btree close error", "error", err)
 	}
 
 	// release the lock file.

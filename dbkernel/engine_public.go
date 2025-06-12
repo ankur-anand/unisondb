@@ -68,13 +68,15 @@ func (cw *countingWriter) Write(p []byte) (int, error) {
 
 // BtreeSnapshot returns the snapshot of the current btree store.
 func (e *Engine) BtreeSnapshot(w io.Writer) (int64, error) {
-	slog.Info("[unisondb.dbkernal]",
-		slog.String("event_type", "btree.snapshot.requested"),
+	slog.Info("[dbkernel]",
+		slog.String("message", "Snapshot requested for BTree"),
 		slog.Group("engine",
-			slog.String("namespace", e.namespace)),
+			slog.String("namespace", e.namespace),
+		),
 		slog.Group("ops",
 			slog.Uint64("received", e.writeSeenCounter.Load()),
-			slog.Uint64("flushed", e.opsFlushedCounter.Load())),
+			slog.Uint64("flushed", e.opsFlushedCounter.Load()),
+		),
 	)
 
 	startTime := time.Now()
@@ -87,32 +89,38 @@ func (e *Engine) BtreeSnapshot(w io.Writer) (int64, error) {
 
 	err := e.dataStore.Snapshot(cw)
 	if err == nil {
-		slog.Info("[unisondb.dbkernal]",
-			slog.String("event_type", "btree.snapshot.completed"),
+		slog.Info("[dbkernel]",
+			slog.String("message", "BTree snapshot completed"),
 			slog.Group("engine",
-				slog.String("namespace", e.namespace)),
+				slog.String("namespace", e.namespace),
+			),
 			slog.Group("ops",
 				slog.Uint64("received", e.writeSeenCounter.Load()),
-				slog.Uint64("flushed", e.opsFlushedCounter.Load())),
+				slog.Uint64("flushed", e.opsFlushedCounter.Load()),
+			),
 			slog.Group("snapshot",
 				slog.String("duration", humanizeDuration(time.Since(startTime))),
 				slog.String("bytes", humanize.Bytes(uint64(cw.count))),
-			))
+			),
+		)
 	}
 
 	if err != nil {
-		slog.Error("[unisondb.dbkernal]",
-			slog.String("event_type", "btree.snapshot.errored"),
+		slog.Error("[dbkernel]",
+			slog.String("message", "BTree snapshot failed"),
 			slog.String("error", err.Error()),
 			slog.Group("engine",
-				slog.String("namespace", e.namespace)),
+				slog.String("namespace", e.namespace),
+			),
 			slog.Group("ops",
 				slog.Uint64("received", e.writeSeenCounter.Load()),
-				slog.Uint64("flushed", e.opsFlushedCounter.Load())),
+				slog.Uint64("flushed", e.opsFlushedCounter.Load()),
+			),
 			slog.Group("snapshot",
 				slog.String("duration", humanizeDuration(time.Since(startTime))),
 				slog.String("bytes", humanize.Bytes(uint64(cw.count))),
-			))
+			),
+		)
 	}
 	return cw.count, err
 }
@@ -510,8 +518,8 @@ func (e *Engine) NewReaderWithStart(startPos *Offset) (r *Reader, err error) {
 	// protect against very bad client
 	defer func() {
 		if rec := recover(); rec != nil {
-			slog.Error("[unisondb.dbkernel]",
-				slog.String("event_type", "new_reader.panic.recovered"),
+			slog.Error("[dbkernel]",
+				slog.String("message", "Recovered from panic in NewReader"),
 				slog.Any("panic", rec),
 				slog.Any("start_offset", startPos),
 			)
