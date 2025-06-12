@@ -327,7 +327,7 @@ func (bq *BoltTxnQueue) flushBatch() error {
 	defer func() {
 		if bq.err != nil {
 			err := txn.Rollback()
-			slog.Error("[kvdb.boltdb]: rollback transaction failed", "error", err)
+			slog.Error("[kvdrivers]", "message", "Transaction rollback failed", "error", err)
 		}
 	}()
 
