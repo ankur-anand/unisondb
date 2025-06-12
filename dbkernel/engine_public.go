@@ -492,13 +492,15 @@ func (e *Engine) Close(ctx context.Context) error {
 	}
 	err := e.close(ctx)
 
-	slog.Info("[unisondb.dbkernal]",
-		slog.String("event_type", "closed"),
+	slog.Info("[dbkernel]",
+		slog.String("message", "Closed DB engine"),
 		slog.Group("engine",
-			slog.String("namespace", e.namespace)),
+			slog.String("namespace", e.namespace),
+		),
 		slog.Group("ops",
 			slog.Uint64("received", e.writeSeenCounter.Load()),
-			slog.Uint64("flushed", e.opsFlushedCounter.Load())),
+			slog.Uint64("flushed", e.opsFlushedCounter.Load()),
+		),
 	)
 
 	return err
