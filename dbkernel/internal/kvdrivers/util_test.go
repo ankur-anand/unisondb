@@ -1,6 +1,7 @@
 package kvdrivers
 
 import (
+	"encoding/binary"
 	"fmt"
 	"strconv"
 	"testing"
@@ -19,19 +20,33 @@ func TestKeyKV(t *testing.T) {
 }
 
 func TestKeyColumn(t *testing.T) {
-	got := KeyColumn(toBytes("user:42"), toBytes("email"))
-	want := append([]byte{KeyTypeWideColumn}, []byte("user:42")...)
-	want = append(want, rowKeySeparator)
-	want = append(want, []byte("email")...)
+	row := toBytes("user:42")
+	col := toBytes("email")
+
+	got := KeyColumn(row, col)
+
+	// want = [type][rowLenBE(4)][row][col]
+	want := make([]byte, 1+4+len(row)+len(col))
+	want[0] = KeyTypeWideColumn
+	binary.BigEndian.PutUint32(want[1:], uint32(len(row)))
+	copy(want[5:], row)
+	copy(want[5+len(row):], col)
+
 	assert.Equal(t, want, got)
 }
 
 func TestKeyBlobChunk(t *testing.T) {
-	got := KeyBlobChunk(toBytes("blobid"), 42)
-	num := []byte("42")
-	want := append([]byte{KeyTypeBlobChunk}, []byte("blobid")...)
-	want = append(want, rowKeySeparator)
-	want = append(want, num...)
+	blobID := toBytes("blobid")
+	chunk := 42
+
+	got := KeyBlobChunk(blobID, chunk)
+
+	want := make([]byte, 1+4+len(blobID)+4)
+	want[0] = KeyTypeBlobChunk
+	binary.BigEndian.PutUint32(want[1:], uint32(len(blobID)))
+	copy(want[5:], blobID)
+	binary.BigEndian.PutUint32(want[5+len(blobID):], uint32(chunk))
+
 	assert.Equal(t, want, got)
 }
 
@@ -39,6 +54,26 @@ func TestKeySystem(t *testing.T) {
 	got := KeySystem(toBytes("internal:foo"))
 	want := append([]byte{KeyTypeSystem}, []byte("internal:foo")...)
 	assert.Equal(t, want, got)
+}
+
+// itoa returns the ASCII bytes for a positive int.
+// Faster than fmt.Sprintf in tight loops.
+func itoa(i int) []byte {
+	if i == 0 {
+		return []byte("0")
+	}
+
+	var b [20]byte
+	pos := len(b)
+	for i > 0 {
+		pos--
+		// what is happening here
+		// i%10 gives digit value (0-9)
+		// '0' is ASCII 48, so '0' + whatever value is  = ASCII of that number.
+		b[pos] = '0' + byte(i%10)
+		i /= 10
+	}
+	return b[pos:]
 }
 
 func TestItoa(t *testing.T) {

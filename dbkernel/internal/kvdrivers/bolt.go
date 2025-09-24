@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"hash/crc32"
 	"io"
 	"os"
 	"time"
@@ -12,7 +11,10 @@ import (
 	"go.etcd.io/bbolt"
 )
 
-// BoltDBEmbed embed an initialized bolt db and implements PersistenceWriter and PersistenceReader.
+// compile time check.
+var _ unifiedStorage = (*BoltDBEmbed)(nil)
+
+// BoltDBEmbed wraps an initialized BoltDB (bbolt) database and related metadata.
 type BoltDBEmbed struct {
 	db        *bbolt.DB
 	namespace []byte
@@ -21,6 +23,9 @@ type BoltDBEmbed struct {
 	mt        *MetricsTracker
 }
 
+// NewBoltdb opens (or creates) a BoltDB database at the given file path,
+// initializes the namespace bucket and a system metadata bucket,
+// and returns a BoltDBEmbed wrapper.
 func NewBoltdb(path string, conf Config) (*BoltDBEmbed, error) {
 	db, err := bbolt.Open(path, 0600, nil)
 	if err != nil {
@@ -42,42 +47,39 @@ func NewBoltdb(path string, conf Config) (*BoltDBEmbed, error) {
 	}, err
 }
 
+// FSync ensures all database pages are flushed to disk.
 func (b *BoltDBEmbed) FSync() error {
 	return b.db.Sync()
 }
 
+// Close closes the underlying BoltDB database.
 func (b *BoltDBEmbed) Close() error {
 	return b.db.Close()
 }
 
-// Set associates a value with a key within a specific namespace.
-func (b *BoltDBEmbed) Set(key []byte, value []byte) error {
+// SetKV associates a value with a key within a specific namespace.
+func (b *BoltDBEmbed) SetKV(key []byte, value []byte) error {
 	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
 			return ErrBucketNotFound
 		}
-		// indicate this is a full value, not chunked
-		storedValue := append([]byte{kvValue}, value...)
-
-		return bucket.Put(key, storedValue)
+		typedKey := KeyKV(key)
+		return bucket.Put(typedKey, value)
 	})
 
 	return err
 }
 
-// SetMany associates multiple values with corresponding keys within a namespace.
-func (b *BoltDBEmbed) SetMany(keys [][]byte, value [][]byte) error {
+// BatchSetKV associates multiple values with corresponding keys within a namespace.
+func (b *BoltDBEmbed) BatchSetKV(keys [][]byte, value [][]byte) error {
 	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
 			return ErrBucketNotFound
 		}
 		for i, key := range keys {
-			// indicate this is a full value, not chunked
-			storedValue := append([]byte{kvValue}, value[i]...)
-
-			err := bucket.Put(key, storedValue)
+			err := bucket.Put(KeyKV(key), value[i])
 			if err != nil {
 				return err
 			}
@@ -88,8 +90,8 @@ func (b *BoltDBEmbed) SetMany(keys [][]byte, value [][]byte) error {
 	return err
 }
 
-// SetChunks stores a value that has been split into chunks, associating them with a single key.
-func (b *BoltDBEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) error {
+// SetLobChunks stores a value that has been split into chunks, associating them with a single key.
+func (b *BoltDBEmbed) SetLobChunks(key []byte, chunks [][]byte, checksum uint32) error {
 	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
@@ -98,16 +100,19 @@ func (b *BoltDBEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) er
 
 		// get last stored for keys, if present.
 		// older chunk needs to deleted for not leaking the space.
-		storedValue := bucket.Get(key)
+		// Chunk Count will Start with 1.
+		// we keep the zero for the metadata key.
+		typedKey := KeyBlobChunk(key, 0)
+		storedValue := bucket.Get(typedKey)
 		if storedValue != nil && storedValue[0] == chunkedValue {
 			if len(storedValue) < 9 {
 				return ErrInvalidChunkMetadata
 			}
 			chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
 
-			for i := 0; i < int(chunkCount); i++ {
-				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-				if err := bucket.Delete([]byte(chunkKey)); err != nil {
+			for i := 1; i <= int(chunkCount); i++ {
+				chunkKey := KeyBlobChunk(key, i)
+				if err := bucket.Delete(chunkKey); err != nil {
 					return err
 				}
 			}
@@ -120,32 +125,62 @@ func (b *BoltDBEmbed) SetChunks(key []byte, chunks [][]byte, checksum uint32) er
 		binary.LittleEndian.PutUint32(metaData[1:], chunkCount)
 		binary.LittleEndian.PutUint32(metaData[5:], checksum)
 
+		// individual chunk
+		// make sure chunk start at 1.
+		for i, chunk := range chunks {
+			chunkKey := KeyBlobChunk(key, i+1)
+			if err := bucket.Put(chunkKey, chunk); err != nil {
+				return err
+			}
+		}
+
 		// chunk metadata
-		if err := bucket.Put(key, metaData); err != nil {
+		if err := bucket.Put(typedKey, metaData); err != nil {
 			return err
 		}
 
-		// individual chunk
-		for i, chunk := range chunks {
-			chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-			if err := bucket.Put([]byte(chunkKey), chunk); err != nil {
-				return err
-			}
-		}
-
 		return nil
 	})
 
 	return err
 }
 
-// SetManyRowColumns update/insert multiple rows and the provided columnEntries to the row.
-func (b *BoltDBEmbed) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
+// BatchSetCells sets or updates multiple cells (row, column, value) in one call.
+func (b *BoltDBEmbed) BatchSetCells(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
 	if len(rowKeys) != len(columnEntriesPerRow) {
 		return ErrInvalidArguments
 	}
 
-	totalColumns := 0
+	err := b.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(b.namespace)
+		if bucket == nil {
+			return ErrBucketNotFound
+		}
+		for i, rowKey := range rowKeys {
+			columnEntries := columnEntriesPerRow[i]
+			if len(columnEntries) == 0 {
+				continue
+			}
+
+			for entryKey, entryValue := range columnEntries {
+				typedKey := KeyColumn(rowKey, unsafeStringToBytes(entryKey))
+				if err := bucket.Put(typedKey, entryValue); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+
+	return err
+}
+
+// BatchDeleteCells deletes specific cells (row, column pairs) from the store.
+func (b *BoltDBEmbed) BatchDeleteCells(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
+	if len(rowKeys) != len(columnEntriesPerRow) {
+		return ErrInvalidArguments
+	}
+
 	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
@@ -158,18 +193,11 @@ func (b *BoltDBEmbed) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []
 				continue
 			}
 
-			totalColumns += len(columnEntries)
-			pKey := append(append([]byte(nil), rowKey...), rowKeySeperator...)
-			entries := appendRowKeyToColumnKey(pKey, columnEntries)
-
-			for entryKey, entry := range entries {
-				if err := bucket.Put([]byte(entryKey), entry); err != nil {
+			for entryKey := range columnEntries {
+				typedKey := KeyColumn(rowKey, unsafeStringToBytes(entryKey))
+				if err := bucket.Delete(typedKey); err != nil {
 					return err
 				}
-			}
-
-			if err := bucket.Put(pKey, []byte{rowColumnValue}); err != nil {
-				return err
 			}
 		}
 		return nil
@@ -178,48 +206,11 @@ func (b *BoltDBEmbed) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []
 	return err
 }
 
-// DeleteManyRowColumns delete the provided columnEntries from the associated row.
-func (b *BoltDBEmbed) DeleteManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
-	if len(rowKeys) != len(columnEntriesPerRow) {
-		return ErrInvalidArguments
-	}
+// BatchDeleteRows deletes all columns (cells) associated with each row key.
+// Returns the number of columns deleted and an error, if any.
+func (b *BoltDBEmbed) BatchDeleteRows(rowKeys [][]byte) (int, error) {
+	columnsDeleted := 0
 
-	totalColumns := 0
-	err := b.db.Update(func(tx *bbolt.Tx) error {
-		bucket := tx.Bucket(b.namespace)
-		if bucket == nil {
-			return ErrBucketNotFound
-		}
-
-		for i, rowKey := range rowKeys {
-			columnEntries := columnEntriesPerRow[i]
-			if len(columnEntries) == 0 {
-				continue
-			}
-
-			totalColumns += len(columnEntries)
-			pKey := append(append([]byte(nil), rowKey...), rowKeySeperator...)
-			entries := appendRowKeyToColumnKey(pKey, columnEntries)
-
-			for entryKey := range entries {
-				if err := bucket.Delete([]byte(entryKey)); err != nil {
-					return err
-				}
-			}
-
-			if err := bucket.Put(pKey, []byte{rowColumnValue}); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-
-	return err
-}
-
-// DeleteEntireRows deletes all the columns associated with all the rowKeys.
-func (b *BoltDBEmbed) DeleteEntireRows(rowKeys [][]byte) (int, error) {
-	columnsDeleted := -len(rowKeys)
 	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
@@ -228,22 +219,23 @@ func (b *BoltDBEmbed) DeleteEntireRows(rowKeys [][]byte) (int, error) {
 
 		for _, rowKey := range rowKeys {
 			c := bucket.Cursor()
-			pKey := append(append([]byte(nil), rowKey...), rowKeySeperator...)
+			pKey := RowKey(rowKey)
 
 			keys := make([][]byte, 0)
 			// IMP: Never delete in cursor, directly followed by Next
 			// k, _ := c.Seek(rowKey); k != nil; k, _ = c.Next() {
-			// 		c.Delete()
+			// 		c.DeleteKV()
 			// }
 			// The above pattern should be avoided at all for
 			// https://github.com/boltdb/bolt/issues/620
 			// https://github.com/etcd-io/bbolt/issues/146
-			// Cursor.Delete followed by Next skips the next k/v pair
-			for k, _ := c.Seek(rowKey); k != nil; k, _ = c.Next() {
+			// Cursor.DeleteKV followed by Next skips the next k/v pair
+			for k, _ := c.Seek(pKey); k != nil; k, _ = c.Next() {
 				if !bytes.HasPrefix(k, pKey) {
 					break // Stop if key is outside the prefix range
 				}
-				keys = append(keys, k)
+				kk := append([]byte(nil), k...)
+				keys = append(keys, kk)
 			}
 
 			for _, k := range keys {
@@ -260,75 +252,40 @@ func (b *BoltDBEmbed) DeleteEntireRows(rowKeys [][]byte) (int, error) {
 	return columnsDeleted, err
 }
 
-// Delete deletes a value with a key within a specific namespace.
-func (b *BoltDBEmbed) Delete(key []byte) error {
+// DeleteKV deletes a value with a key within a specific namespace.
+func (b *BoltDBEmbed) DeleteKV(key []byte) error {
 	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
 			return ErrBucketNotFound
 		}
+		typedKey := KeyKV(key)
 
-		storedValue := bucket.Get(key)
+		storedValue := bucket.Get(typedKey)
 		if storedValue == nil {
 			return nil
 		}
-
-		flag := storedValue[0]
-		switch flag {
-		case kvValue:
-			return bucket.Delete(key)
-
-		case chunkedValue:
-			if len(storedValue) < 9 {
-				return ErrInvalidChunkMetadata
-			}
-
-			chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
-
-			for i := 0; i < int(chunkCount); i++ {
-				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-				if err := bucket.Delete([]byte(chunkKey)); err != nil {
-					return err
-				}
-			}
-
-			return bucket.Delete(key)
-		}
-
-		return ErrInvalidOpsForValueType
+		return bucket.Delete(typedKey)
 	})
 
 	return err
 }
 
-// DeleteMany delete multiple values with corresponding keys within a namespace.
-func (b *BoltDBEmbed) DeleteMany(keys [][]byte) error {
+// BatchDeleteKV delete multiple values with corresponding keys within a namespace.
+func (b *BoltDBEmbed) BatchDeleteKV(keys [][]byte) error {
 	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
 			return ErrBucketNotFound
 		}
 		for _, key := range keys {
-			storedValue := bucket.Get(key)
+			typedKey := KeyKV(key)
+			storedValue := bucket.Get(typedKey)
 			if storedValue == nil {
-				return nil
+				continue
 			}
-
-			flag := storedValue[0]
-			switch flag {
-			case kvValue:
-				if err := bucket.Delete(key); err != nil {
-					return err
-				}
-
-			case chunkedValue:
-				if len(storedValue) < 9 {
-					return ErrInvalidChunkMetadata
-				}
-
-				if err := b.deleteChunk(key, storedValue, bucket); err != nil {
-					return err
-				}
+			if err := bucket.Delete(typedKey); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -337,51 +294,41 @@ func (b *BoltDBEmbed) DeleteMany(keys [][]byte) error {
 	return err
 }
 
-func (b *BoltDBEmbed) deleteChunk(key []byte, storedValue []byte, bucket *bbolt.Bucket) error {
-	chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
-	for i := 0; i < int(chunkCount); i++ {
-		chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-		if err := bucket.Delete([]byte(chunkKey)); err != nil {
-			return err
-		}
-	}
-	return bucket.Delete(key)
-}
-
-// GetValueType returns the kind of value associated with the key if any.
-func (b *BoltDBEmbed) GetValueType(key []byte) (ValueEntryType, error) {
-	rowKey := []byte(string(key) + rowKeySeperator)
-	entryType := UnknownValueEntry
-
-	err := b.db.View(func(tx *bbolt.Tx) error {
+// BatchDeleteLobChunks Delete all chunked parts of a large value.
+func (b *BoltDBEmbed) BatchDeleteLobChunks(keys [][]byte) error {
+	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
 			return ErrBucketNotFound
 		}
 
-		storedValue := bucket.Get(key)
-		if storedValue == nil {
-			// check if Column Value type
-			storedValue = bucket.Get(rowKey)
+		for _, key := range keys {
+			typedKey := KeyBlobChunk(key, 0)
+			storedValue := bucket.Get(typedKey)
 			if storedValue == nil {
-				return ErrKeyNotFound
+				continue
 			}
-		}
 
-		flag := storedValue[0]
-		switch flag {
-		case kvValue:
-			entryType = KeyValueValueEntry
-		case chunkedValue:
-			entryType = ChunkedValueEntry
-		case rowColumnValue:
-			entryType = RowColumnValueEntry
+			if len(storedValue) < 9 {
+				return ErrInvalidChunkMetadata
+			}
+			chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
+
+			for i := 1; i <= int(chunkCount); i++ {
+				chunkKey := KeyBlobChunk(key, i)
+				if err := bucket.Delete(chunkKey); err != nil {
+					return err
+				}
+			}
+
+			if err := bucket.Delete(typedKey); err != nil {
+				return err
+			}
 		}
 
 		return nil
 	})
-
-	return entryType, err
+	return err
 }
 
 func (b *BoltDBEmbed) recordOpResult(op string, start time.Time, err error) {
@@ -392,9 +339,9 @@ func (b *BoltDBEmbed) recordOpResult(op string, start time.Time, err error) {
 	}
 }
 
-// Get retrieves a value associated with a key within a specific namespace.
-func (b *BoltDBEmbed) Get(key []byte) ([]byte, error) {
-	rowKey := []byte(string(key) + rowKeySeperator)
+// GetKV retrieves a value associated with a key within a specific namespace.
+func (b *BoltDBEmbed) GetKV(key []byte) ([]byte, error) {
+	typedKey := KeyKV(key)
 
 	startTime := time.Now()
 	var value []byte
@@ -405,127 +352,167 @@ func (b *BoltDBEmbed) Get(key []byte) ([]byte, error) {
 			return ErrBucketNotFound
 		}
 
-		storedValue := bucket.Get(key)
+		storedValue := bucket.Get(typedKey)
 		if storedValue == nil {
-			// check if Column Value type
-			storedValue = bucket.Get(rowKey)
-			if storedValue == nil {
-				return ErrKeyNotFound
-			}
+			return ErrKeyNotFound
 		}
-
-		flag := storedValue[0]
-		switch flag {
-		case kvValue:
-			value = make([]byte, len(storedValue[1:]))
-			copy(value, storedValue[1:])
-			return nil
-
-		case chunkedValue:
-			if len(storedValue) < 9 {
-				return ErrInvalidChunkMetadata
-			}
-
-			chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
-			storedChecksum := binary.LittleEndian.Uint32(storedValue[5:9])
-			var calculatedChecksum uint32
-
-			fullValue := new(bytes.Buffer)
-
-			for i := 0; i < int(chunkCount); i++ {
-				chunkKey := fmt.Sprintf("%s_chunk_%d", key, i)
-
-				chunkData := bucket.Get([]byte(chunkKey))
-				if chunkData == nil {
-					return fmt.Errorf("chunk %d missing", i)
-				}
-				calculatedChecksum = crc32.Update(calculatedChecksum, crc32.IEEETable, chunkData)
-				fullValue.Write(chunkData)
-			}
-
-			if calculatedChecksum != storedChecksum {
-				return ErrRecordCorrupted
-			}
-
-			value = make([]byte, fullValue.Len())
-			copy(value, fullValue.Bytes())
-			return nil
-		case rowColumnValue:
-			return ErrUseGetColumnAPI
-		default:
-			// we don't know how to deal with this return the data and error.
-			value = make([]byte, len(storedValue))
-			copy(value, storedValue)
-			return fmt.Errorf("invalid data format for key %s: %w", string(key), ErrInvalidOpsForValueType)
-		}
+		value = make([]byte, len(storedValue))
+		copy(value, storedValue)
+		return nil
 	})
 
 	b.recordOpResult(OpGet, startTime, err)
 	return value, err
 }
 
-// GetRowColumns returns all the columns for the given row. If a ColumnPredicate predicate func is provided, it will only
-// return those columns for which the ColumnFilterFunc func returns true.
-func (b *BoltDBEmbed) GetRowColumns(rowKey []byte, filter func(columnKey []byte) bool) (map[string][]byte, error) {
-	rowKey = []byte(string(rowKey) + rowKeySeperator)
+// GetLOBChunks retrieves all chunks associated with a large object (LOB) key.
+func (b *BoltDBEmbed) GetLOBChunks(key []byte) ([][]byte, error) {
+	typedKey := KeyBlobChunk(key, 0)
 	startTime := time.Now()
-
-	if filter == nil {
-		filter = func(columnKey []byte) bool {
-			return true
-		}
-	}
-
-	entries := make(map[string][]byte)
-	err := b.db.View(func(txn *bbolt.Tx) error {
-		bucket := txn.Bucket(b.namespace)
+	var value [][]byte
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
 			return ErrBucketNotFound
 		}
-
-		storedValue := bucket.Get(rowKey)
+		storedValue := bucket.Get(typedKey)
 		if storedValue == nil {
 			return ErrKeyNotFound
 		}
-
-		flag := storedValue[0]
-		switch flag {
-		case rowColumnValue:
-
-			return b.getColumns(bucket, rowKey, filter, entries)
-
-		default:
-			return fmt.Errorf("invalid data format for Row key %s: %w", string(rowKey), ErrInvalidOpsForValueType)
+		if len(storedValue) < 9 {
+			return ErrInvalidChunkMetadata
 		}
+		chunkCount := binary.LittleEndian.Uint32(storedValue[1:5])
+		value = make([][]byte, chunkCount)
+
+		for i := 0; i < int(chunkCount); i++ {
+			chunkKey := KeyBlobChunk(key, i+1)
+			chunkData := bucket.Get(chunkKey)
+			if chunkData == nil {
+				return fmt.Errorf("chunk %d missing", i)
+			}
+			chunkCopy := make([]byte, len(chunkData))
+			copy(chunkCopy, chunkData)
+			value[i] = chunkCopy
+		}
+		return nil
 	})
 
 	b.recordOpResult(OpGet, startTime, err)
+	return value, err
+}
+
+// ScanRowCells returns all cells (column name/value pairs) for the given rowKey.
+// If a ColumnPredicate predicate func is provided, it will only
+// return those columns for which the ColumnFilterFunc func returns true.
+func (b *BoltDBEmbed) ScanRowCells(rowKey []byte, filter func(columnKey []byte) bool) (map[string][]byte, error) {
+	prefix := RowKey(rowKey)
+	startTime := time.Now()
+
+	if filter == nil {
+		filter = func(columnKey []byte) bool { return true }
+	}
+
+	var entries map[string][]byte
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(b.namespace)
+		if bucket == nil {
+			return ErrBucketNotFound
+		}
+		tmp := make(map[string][]byte)
+		if err := b.getColumns(bucket, prefix, filter, tmp); err != nil {
+			return err
+		}
+		entries = tmp
+		return nil
+	})
+
+	b.recordOpResult(OpGet, startTime, err)
+
 	return entries, err
 }
 
-func (b *BoltDBEmbed) getColumns(bucket *bbolt.Bucket,
-	rowKey []byte,
-	filter ColumnPredicate, entries map[string][]byte) error {
-	c := bucket.Cursor()
-	skip := true
+func (b *BoltDBEmbed) getColumns(
+	bucket *bbolt.Bucket,
+	prefix []byte,
+	filter func([]byte) bool,
+	entries map[string][]byte,
+) error {
+	cursor := bucket.Cursor()
 
-	for k, value := c.Seek(rowKey); k != nil; k, value = c.Next() {
-		if !bytes.HasPrefix(k, rowKey) {
-			break // Stop if key is outside the prefix range
+	for k, v := cursor.Seek(prefix); k != nil; k, v = cursor.Next() {
+		if !bytes.HasPrefix(k, prefix) {
+			break
 		}
-
-		if skip {
-			skip = false
+		// skip bare row key
+		if len(k) == len(prefix) {
 			continue
 		}
+		columnKey := bytes.TrimPrefix(k, prefix)
 
-		trimmedKey := bytes.TrimPrefix(k, rowKey)
-		if filter(trimmedKey) {
-			entries[string(trimmedKey)] = make([]byte, len(value))
-			copy(entries[string(trimmedKey)], value)
+		if filter(columnKey) {
+			valCopy := make([]byte, len(v))
+			copy(valCopy, v)
+			entries[string(columnKey)] = valCopy
 		}
 	}
+
+	if len(entries) == 0 {
+		return ErrKeyNotFound
+	}
+
 	return nil
+}
+
+// GetCell retrieves the value for the given (rowKey, columnName) pair.
+func (b *BoltDBEmbed) GetCell(rowKey []byte, columnName string) ([]byte, error) {
+	typedKey := KeyColumn(rowKey, unsafeStringToBytes(columnName))
+
+	startTime := time.Now()
+	var value []byte
+
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(b.namespace)
+		if bucket == nil {
+			return ErrBucketNotFound
+		}
+		storedValue := bucket.Get(typedKey)
+		if storedValue == nil {
+			return ErrKeyNotFound
+		}
+		value = make([]byte, len(storedValue))
+		copy(value, storedValue)
+		return nil
+	})
+
+	b.recordOpResult(OpGet, startTime, err)
+	return value, err
+}
+
+// GetCells fetches the values for the specified columns in the given row.
+func (b *BoltDBEmbed) GetCells(rowKey []byte, columns []string) (map[string][]byte, error) {
+	startTime := time.Now()
+	result := make(map[string][]byte)
+
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket(b.namespace)
+		if bucket == nil {
+			return ErrBucketNotFound
+		}
+		for _, column := range columns {
+			typedKey := KeyColumn(rowKey, unsafeStringToBytes(column))
+			gotValue := bucket.Get(typedKey)
+			if gotValue != nil {
+				valueCopy := make([]byte, len(gotValue))
+				copy(valueCopy, gotValue)
+				result[column] = valueCopy
+			}
+		}
+		return nil
+	})
+
+	b.recordOpResult(OpGet, startTime, err)
+	return result, err
 }
 
 func (b *BoltDBEmbed) StoreMetadata(key []byte, value []byte) error {
@@ -559,25 +546,35 @@ func (b *BoltDBEmbed) RetrieveMetadata(key []byte) ([]byte, error) {
 func (b *BoltDBEmbed) Restore(reader io.Reader) error {
 	// close the current db
 	if err := b.db.Close(); err != nil {
-		return err
+		return fmt.Errorf("failed to close current db: %w", err)
 	}
 
-	if err := os.Remove(b.path); err != nil {
-		return err
-	}
-
-	newDBFile, err := os.Create(b.path)
+	tmpPath := b.path + ".restore.tmp"
+	tmpFile, err := os.Create(tmpPath)
 	if err != nil {
-		return fmt.Errorf("failed to create new database file: %w", err)
+		return fmt.Errorf("failed to create temp restore file: %w", err)
 	}
 
-	_, err = io.Copy(newDBFile, reader)
-	if err != nil {
+	if _, err := io.Copy(tmpFile, reader); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("failed to restore database from snapshot: %w", err)
 	}
 
-	if err := newDBFile.Close(); err != nil {
-		return fmt.Errorf("failed to close new database file: %w", err)
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to sync temp restore file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to close temp restore file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, b.path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("failed to replace old db with restored db: %w", err)
 	}
 
 	db, err := bbolt.Open(b.path, 0600, nil)
