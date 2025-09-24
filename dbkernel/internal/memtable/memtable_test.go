@@ -1,6 +1,7 @@
 package memtable
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"hash/crc32"
@@ -105,9 +106,9 @@ func TestMemTable_PutAndGet(t *testing.T) {
 
 	gotVal := table.Get(key)
 
-	assert.Equal(t, val.Value, gotVal.Value, "unexpected value on Get")
-	assert.Nil(t, table.lastOffset, "unexpected offset on Get")
-	assert.Nil(t, table.firstOffset, "unexpected offset on Get")
+	assert.Equal(t, val.Value, gotVal.Value, "unexpected value on GetKV")
+	assert.Nil(t, table.lastOffset, "unexpected offset on GetKV")
+	assert.Nil(t, table.firstOffset, "unexpected offset on GetKV")
 }
 
 func TestMemTable_CannotPut(t *testing.T) {
@@ -150,9 +151,9 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
-			retrievedValue, err := db.Get([]byte(k))
-			assert.NoError(t, err, "failed to Get")
-			assert.Equal(t, v, retrievedValue, "unexpected value on Get")
+			retrievedValue, err := db.GetKV([]byte(k))
+			assert.NoError(t, err, "failed to GetKV")
+			assert.Equal(t, v, retrievedValue, "unexpected value on GetKV")
 		}
 	})
 
@@ -207,9 +208,10 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount+2, count, "expected records to be flushed")
 
-		retrievedValue, err := db.Get([]byte(key))
-		assert.NoError(t, err, "failed to Get")
-		assert.Equal(t, checksum, crc32.ChecksumIEEE(retrievedValue), "unexpected value on Get")
+		chunks, err := db.GetLOBChunks([]byte(key))
+		assert.NoError(t, err, "failed to GetKV")
+		joined := bytes.Join(chunks, nil)
+		assert.Equal(t, checksum, crc32.ChecksumIEEE(joined), "unexpected value on GetKV")
 	})
 }
 
@@ -237,9 +239,9 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
-			retrievedValue, err := db.Get([]byte(k))
-			assert.NoError(t, err, "failed to Get")
-			assert.Equal(t, v, retrievedValue, "unexpected value on Get")
+			retrievedValue, err := db.GetKV([]byte(k))
+			assert.NoError(t, err, "failed to GetKV")
+			assert.Equal(t, v, retrievedValue, "unexpected value on GetKV")
 		}
 	})
 
@@ -290,9 +292,10 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount+2, count, "expected records to be flushed")
 
-		retrievedValue, err := db.Get([]byte(key))
-		assert.NoError(t, err, "failed to Get")
-		assert.Equal(t, checksum, crc32.ChecksumIEEE(retrievedValue), "unexpected value on Get")
+		chunks, err := db.GetLOBChunks([]byte(key))
+		assert.NoError(t, err, "failed to GetKV")
+		joined := bytes.Join(chunks, nil)
+		assert.Equal(t, checksum, crc32.ChecksumIEEE(joined), "unexpected value on GetKV")
 	})
 }
 
@@ -317,24 +320,24 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 			assert.NoError(t, err)
 			memTable.SetOffset(nil)
 			val := memTable.Get([]byte(k))
-			assert.Equal(t, val, vs, "unexpected value on Get")
+			assert.Equal(t, val, vs, "unexpected value on GetKV")
 		}
 
 		count, err := memTable.Flush(t.Context())
 		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
-			retrievedValue, err := db.Get([]byte(k))
-			assert.NoError(t, err, "failed to Get")
-			assert.Equal(t, v, retrievedValue, "unexpected value on Get")
+			retrievedValue, err := db.GetKV([]byte(k))
+			assert.NoError(t, err, "failed to GetKV")
+			assert.Equal(t, v, retrievedValue, "unexpected value on GetKV")
 		}
 	})
 
 	t.Run("flush_delete_value", func(t *testing.T) {
 		for k, v := range kv {
-			retrievedValue, err := db.Get([]byte(k))
-			assert.NoError(t, err, "failed to Get")
-			assert.Equal(t, v, retrievedValue, "unexpected value on Get")
+			retrievedValue, err := db.GetKV([]byte(k))
+			assert.NoError(t, err, "failed to GetKV")
+			assert.Equal(t, v, retrievedValue, "unexpected value on GetKV")
 
 			vs := y.ValueStruct{Value: []byte(v), Meta: internal.LogOperationDelete, UserMeta: internal.EntryTypeKV}
 			err = memTable.Put([]byte(k), vs)
@@ -346,9 +349,9 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, 2*recordCount, count, "expected records to be flushed")
 		for k := range kv {
-			retrievedValue, err := db.Get([]byte(k))
+			retrievedValue, err := db.GetKV([]byte(k))
 			assert.Nil(t, retrievedValue)
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "failed to Get")
+			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "failed to GetKV")
 		}
 	})
 
@@ -433,7 +436,7 @@ func TestRow_KeysPut_Delete_GetRows_Flush(t *testing.T) {
 	assert.Equal(t, len(buildColumns), len(columnMap)-len(deleteEntries), "unexpected number of column values")
 	assert.NotContains(t, buildColumns, deleteEntries, "unexpected column values")
 
-	value, err := db.GetRowColumns([]byte(randomRow), nil)
+	value, err := db.ScanRowCells([]byte(randomRow), nil)
 	assert.NoError(t, err, len(value))
 	assert.Equal(t, len(value), len(columnMap)-len(deleteEntries), "unexpected number of column values")
 
@@ -444,7 +447,7 @@ func TestRow_KeysPut_Delete_GetRows_Flush(t *testing.T) {
 	count, err = mmTable.Flush(t.Context())
 	assert.NoError(t, err, "failed to processBatch")
 	assert.Equal(t, count, 52, "expected records to be flushed")
-	_, err = db.GetRowColumns([]byte(randomRow), nil)
+	_, err = db.ScanRowCells([]byte(randomRow), nil)
 	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 
 	values := mmTable.GetRowYValue([]byte(randomRow))
@@ -479,7 +482,7 @@ func TestRow_KeysPut_Delete_GetRows_Flush(t *testing.T) {
 	valueType, ok := mmTable.GetEntryTpe([]byte(randomRow))
 	assert.Equal(t, valueType, logrecord.LogEntryTypeRow, "unexpected entry type")
 	assert.True(t, ok, "expected entry type to be logrecord.LogEntryTypeRow")
-	value, err = db.GetRowColumns([]byte(randomRow), nil)
+	value, err = db.ScanRowCells([]byte(randomRow), nil)
 	assert.NoError(t, err, "get should not fail")
 	assert.Equal(t, len(value), len(addEntries), "unexpected number of column values")
 	assert.Equal(t, value, addEntries, "new added entry should be added")

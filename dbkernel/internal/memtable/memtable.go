@@ -243,7 +243,7 @@ func (table *MemTable) processEntry(key []byte, entry y.ValueStruct, txn interna
 	switch entry.Meta {
 	case internal.LogOperationDelete:
 		if entry.UserMeta != internal.EntryTypeRow {
-			return txn.BatchDelete([][]byte{key})
+			return txn.BatchDeleteKV([][]byte{key})
 		}
 
 	case byte(logrecord.LogOperationTypeDeleteRowByKey):
@@ -277,14 +277,14 @@ func (table *MemTable) processEntry(key []byte, entry y.ValueStruct, txn interna
 
 		switch entry.Meta {
 		case internal.LogOperationDelete:
-			return txn.BatchDeleteRowColumns([][]byte{key}, columnUpdates)
+			return txn.BatchDeleteCells([][]byte{key}, columnUpdates)
 		case internal.LogOperationInsert:
-			return txn.BatchPutRowColumns([][]byte{key}, columnUpdates)
+			return txn.BatchSetCells([][]byte{key}, columnUpdates)
 		}
 	}
 
 	// else it's Key Value.
-	return txn.BatchPut([][]byte{key}, [][]byte{entry.Value})
+	return txn.BatchPutKV([][]byte{key}, [][]byte{entry.Value})
 }
 
 // flushChunkedTxnCommit returns the number of batch record that was inserted.
