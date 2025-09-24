@@ -97,8 +97,8 @@ func (wr *walRecovery) recoverWAL(checkPoint []byte) error {
 
 func (wr *walRecovery) handleRecord(record *logrecord.LogRecord) error {
 	// we only recover two cases.
-	// Individual Insert/Delete
-	// Txn Insert/Delete and Chunk. Uncommited Txn are ignored.
+	// Individual Insert/DeleteKV
+	// Txn Insert/DeleteKV and Chunk. Uncommited Txn are ignored.
 	switch record.TxnState() {
 	case logrecord.TransactionStateNone:
 		wr.recoveredCount++
@@ -129,7 +129,7 @@ func (wr *walRecovery) handleInsert(record *logrecord.LogRecord) error {
 			keys = append(keys, kvEntry.Key)
 			values = append(values, kvEntry.Value)
 		}
-		return wr.store.SetMany(keys, values)
+		return wr.store.BatchSetKV(keys, values)
 	case logrecord.LogEntryTypeRow:
 		var keys [][]byte
 		var values []map[string][]byte
@@ -140,7 +140,7 @@ func (wr *walRecovery) handleInsert(record *logrecord.LogRecord) error {
 			values = append(values, rowEntry.Columns)
 		}
 
-		return wr.store.SetManyRowColumns(keys, values)
+		return wr.store.BatchSetCells(keys, values)
 	}
 
 	return nil
@@ -155,7 +155,7 @@ func (wr *walRecovery) handleDelete(record *logrecord.LogRecord) error {
 			kvEntry := logcodec.DeserializeKVEntry(entry)
 			keys = append(keys, kvEntry.Key)
 		}
-		return wr.store.DeleteMany(keys)
+		return wr.store.BatchDeleteKV(keys)
 	case logrecord.LogEntryTypeRow:
 		var keys [][]byte
 		var values []map[string][]byte
@@ -165,7 +165,7 @@ func (wr *walRecovery) handleDelete(record *logrecord.LogRecord) error {
 			values = append(values, rowEntry.Columns)
 		}
 
-		return wr.store.DeleteManyRowColumns(keys, values)
+		return wr.store.BatchDeleteCells(keys, values)
 	}
 
 	return nil
@@ -178,7 +178,7 @@ func (wr *walRecovery) handleDeleteRowByKey(record *logrecord.LogRecord) error {
 		kvEntry := logcodec.DeserializeRowUpdateEntry(entry)
 		keys = append(keys, kvEntry.Key)
 	}
-	_, err := wr.store.DeleteEntireRows(keys)
+	_, err := wr.store.BatchDeleteRows(keys)
 	return err
 }
 
@@ -227,9 +227,9 @@ func (wr *walRecovery) handleKVValuesTxn(record *logrecord.LogRecord) error {
 	wr.recoveredCount += len(records)
 	switch record.OperationType() {
 	case logrecord.LogOperationTypeInsert:
-		return wr.store.SetMany(keys, values)
+		return wr.store.BatchSetKV(keys, values)
 	case logrecord.LogOperationTypeDelete:
-		return wr.store.DeleteMany(keys)
+		return wr.store.BatchDeleteKV(keys)
 	}
 	return nil
 }
@@ -260,11 +260,11 @@ func (wr *walRecovery) handleRowColumnTxn(record *logrecord.LogRecord) error {
 	wr.recoveredCount += len(records)
 	switch record.OperationType() {
 	case logrecord.LogOperationTypeInsert:
-		return wr.store.SetManyRowColumns(keys, values)
+		return wr.store.BatchSetCells(keys, values)
 	case logrecord.LogOperationTypeDelete:
-		return wr.store.DeleteManyRowColumns(keys, values)
+		return wr.store.BatchDeleteCells(keys, values)
 	case logrecord.LogOperationTypeDeleteRowByKey:
-		_, err := wr.store.DeleteEntireRows(keys)
+		_, err := wr.store.BatchDeleteRows(keys)
 		return err
 	}
 
@@ -293,7 +293,7 @@ func (wr *walRecovery) handleChunkedValuesTxn(record *logrecord.LogRecord) error
 		values[i] = kv.Value
 	}
 	count := len(records)
-	err = wr.store.SetChunks(key, values, checksum)
+	err = wr.store.SetLobChunks(key, values, checksum)
 	wr.recoveredCount += count
 	wr.bloom.Add(key)
 	return err
