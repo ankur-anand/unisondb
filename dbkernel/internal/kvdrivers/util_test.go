@@ -103,6 +103,45 @@ func TestKeyKindString(t *testing.T) {
 	}
 }
 
+func TestRowKey(t *testing.T) {
+	tests := []struct {
+		name  string
+		input []byte
+		want  []byte
+	}{
+		{
+			name:  "non-empty",
+			input: []byte("hello"),
+			want: func() []byte {
+				row := []byte("hello")
+				b := make([]byte, 1+4+len(row))
+				b[0] = KeyTypeWideColumn
+				binary.BigEndian.PutUint32(b[1:], uint32(len(row)))
+				copy(b[5:], row)
+				return b
+			}(),
+		},
+		{
+			name:  "empty",
+			input: []byte{},
+			want: func() []byte {
+				row := []byte{}
+				b := make([]byte, 1+4+len(row))
+				b[0] = KeyTypeWideColumn
+				binary.BigEndian.PutUint32(b[1:], uint32(len(row)))
+				return b
+			}(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := RowKey(tt.input)
+			assert.Equal(t, tt.want, got, fmt.Sprintf("RowKey(%q)", tt.input))
+		})
+	}
+}
+
 func bytesStrconv(i int) []byte {
 	return []byte(strconv.Itoa(i))
 }

@@ -1,6 +1,10 @@
 package kvdrivers
 
-import "fmt"
+import (
+	"encoding/binary"
+	"fmt"
+	"unsafe"
+)
 
 // values are non-printable bytes to avoid any user ASCII collision.
 const (
@@ -55,57 +59,65 @@ func (k KeyKind) String() string {
 	}
 }
 
-// Separator for logical fields in storage keys.
-const rowKeySeparator byte = 0x00
-
 // KeyKV returns the storage key for a key-value pair.
 func KeyKV(k []byte) []byte {
 	return append([]byte{KeyTypeKV}, k...)
 }
 
-// KeyColumn returns the storage key for a wide-column cell.
-func KeyColumn(row, col []byte) []byte {
-	b := make([]byte, 1+len(row)+1+len(col))
+func unsafeStringToBytes(s string) []byte {
+	return unsafe.Slice(unsafe.StringData(s), len(s))
+}
+
+func unsafeBytesToString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
+}
+
+// [type][rowLenBE(4)][row][col]
+// Why this format?
+// - The rowLen tells us where the row ends and the column begins.
+// - Big Endian is used so that keys sort in the right order in the B-tree.
+// - All columns of the same row share the same prefix, making scans efficient.
+//
+// Example:
+//   Row = "user123", Col = "email"
+//   Key = [0xFD][00 00 00 07]["user123"]["email"]
+//
+// We avoid text separators like "row::col". B-trees compare keys bytewise,
+// so string separators break ordering (e.g., "user10..." < "user2..."),
+// are ambiguous if row/col contain "::", and are not binary-safe for []byte keys.
+// Length-prefixing with Big Endian keeps keys self-delimiting, binary-safe,
+// and groups all columns of a row under the shared prefix [type][rowLen][row].
+
+// RowKey constructs a storage key for a wide-column row.
+func RowKey(row []byte) []byte {
+	b := make([]byte, 1+4+len(row))
 	b[0] = KeyTypeWideColumn
-	copy(b[1:], row)
-	b[1+len(row)] = rowKeySeparator
-	copy(b[2+len(row):], col)
+	binary.BigEndian.PutUint32(b[1:], uint32(len(row)))
+	copy(b[5:], row)
 	return b
 }
 
-// KeyBlobChunk returns the storage key for a blob chunk.
-// Format: [KeyBlobChunk][blobID][sep][chunkNumber].
+// KeyColumn returns the storage key for a wide-column cell.
+func KeyColumn(row, col []byte) []byte {
+	b := make([]byte, 1+4+len(row)+len(col))
+	b[0] = KeyTypeWideColumn
+	binary.BigEndian.PutUint32(b[1:], uint32(len(row)))
+	copy(b[5:], row)
+	copy(b[5+len(row):], col)
+	return b
+}
+
+// [type][blobIDLenBE(4)][blobID][chunkBE(4)].
 func KeyBlobChunk(blobID []byte, chunk int) []byte {
-	num := itoa(chunk)
-	b := make([]byte, 1+len(blobID)+1+len(num))
+	b := make([]byte, 1+4+len(blobID)+4)
 	b[0] = KeyTypeBlobChunk
-	copy(b[1:], blobID)
-	b[1+len(blobID)] = rowKeySeparator
-	copy(b[2+len(blobID):], num)
+	binary.BigEndian.PutUint32(b[1:], uint32(len(blobID)))
+	copy(b[5:], blobID)
+	binary.BigEndian.PutUint32(b[5+len(blobID):], uint32(chunk))
 	return b
 }
 
 // KeySystem returns the storage key for a system/internal entry.
 func KeySystem(name []byte) []byte {
 	return append([]byte{KeyTypeSystem}, name...)
-}
-
-// itoa returns the ASCII bytes for a positive int.
-// Faster than fmt.Sprintf in tight loops.
-func itoa(i int) []byte {
-	if i == 0 {
-		return []byte("0")
-	}
-
-	var b [20]byte
-	pos := len(b)
-	for i > 0 {
-		pos--
-		// what is happening here
-		// i%10 gives digit value (0-9)
-		// '0' is ASCII 48, so '0' + whatever value is  = ASCII of that number.
-		b[pos] = '0' + byte(i%10)
-		i /= 10
-	}
-	return b[pos:]
 }
