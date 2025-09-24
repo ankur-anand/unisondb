@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/PowerDNS/lmdb-go/lmdb"
@@ -23,6 +24,9 @@ type LmdbEmbed struct {
 	namespace []byte
 	dataDB    lmdb.DBI
 	metaDB    lmdb.DBI
+	mmapSize  int64
+	path      string
+	noSync    bool
 	mt        *MetricsTracker
 }
 
@@ -92,7 +96,13 @@ func NewLmdb(path string, conf Config) (*LmdbEmbed, error) {
 	}
 
 	mt := NewMetricsTracker("lmdb", conf.Namespace)
-	return &LmdbEmbed{env: env, dataDB: dataDB, metaDB: metaDB, namespace: []byte(conf.Namespace), mt: mt}, nil
+	return &LmdbEmbed{env: env,
+		path:      path,
+		dataDB:    dataDB,
+		metaDB:    metaDB,
+		mmapSize:  conf.MmapSize,
+		noSync:    conf.NoSync,
+		namespace: []byte(conf.Namespace), mt: mt}, nil
 }
 
 // FSync Call the underlying Fsync.
@@ -119,8 +129,8 @@ func (l *LmdbEmbed) SetKV(key []byte, value []byte) error {
 
 // BatchSetKV associates multiple values with corresponding keys within a namespace.
 func (l *LmdbEmbed) BatchSetKV(keys [][]byte, values [][]byte) error {
-	if len(keys) != len(values) {
-		return fmt.Errorf("keys and values length mismatch: keys=%d values=%d", len(keys), len(values))
+	if len(keys) == 0 || len(values) == 0 || len(keys) != len(values) {
+		return ErrInvalidArguments
 	}
 
 	return l.env.Update(func(txn *lmdb.Txn) error {
@@ -556,97 +566,182 @@ func (l *LmdbEmbed) getColumns(
 	return nil
 }
 
+// Snapshot writes a raw LMDB snapshot to w.
+// - Uses LMDB's native env.Copy to produce a consistent, raw snapshot file.
+// - If w is *os.File, we copy into it and fsync for durability.
+// - For non-file writers (pipes, buffers, network), we stream from the temp file.
 func (l *LmdbEmbed) Snapshot(w io.Writer) error {
 	startTime := time.Now()
-	defer func() {
-		l.mt.RecordSnapshot(startTime)
-	}()
-	bw := bufio.NewWriter(w)
-	defer bw.Flush()
+	defer func() { l.mt.RecordSnapshot(startTime) }()
 
-	return l.env.View(func(txn *lmdb.Txn) error {
-		cursor, err := txn.OpenCursor(l.dataDB)
-		if err != nil {
-			return fmt.Errorf("failed to open cursor: %w", err)
+	envDir := l.path
+	if envDir == "" {
+		envDir = os.TempDir()
+	}
+	tmpDir, err := os.MkdirTemp(envDir, "lmdb-snapshot-*")
+	if err != nil {
+		return fmt.Errorf("create temp snapshot dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := l.env.Copy(tmpDir); err != nil {
+		return fmt.Errorf("lmdb env copy: %w", err)
+	}
+
+	// the produced data.mdb and stream it to the caller
+	srcPath := filepath.Join(tmpDir, "data.mdb")
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("open data.mdb: %w", err)
+	}
+	defer src.Close()
+
+	// destination is a file, copy + fsync it.
+	if dstFile, ok := w.(*os.File); ok {
+		if err := dstFile.Truncate(0); err != nil {
+			return fmt.Errorf("truncate destination: %w", err)
 		}
-		defer cursor.Close()
-
-		var bytesWritten int
-
-		// Iterate through all pages
-		for {
-			key, val, err := cursor.Get(nil, nil, lmdb.Next)
-			if lmdb.IsNotFound(err) {
-				break
-			}
-			if err != nil {
-				return fmt.Errorf("cursor iteration failed: %w", err)
-			}
-			keyLen := len(key)
-			valLen := len(val)
-			entrySize := 4 + keyLen + 4 + valLen
-
-			buffer := make([]byte, entrySize)
-
-			offset := 0
-			binary.LittleEndian.PutUint32(buffer[offset:], uint32(keyLen))
-			offset += 4
-			bytesWritten = 4
-			copy(buffer[offset:], key)
-			offset += keyLen
-			bytesWritten += len(key)
-
-			binary.LittleEndian.PutUint32(buffer[offset:], uint32(valLen))
-			offset += 4
-			bytesWritten += 4
-			copy(buffer[offset:], val)
-			bytesWritten += len(val)
-
-			if _, err := bw.Write(buffer[:bytesWritten]); err != nil {
-				return fmt.Errorf("failed to write to snapshot: %w", err)
-			}
+		if _, err := dstFile.Seek(0, 0); err != nil {
+			return fmt.Errorf("seek destination: %w", err)
 		}
-
+		if _, err := io.Copy(dstFile, src); err != nil {
+			return fmt.Errorf("copy snapshot to file: %w", err)
+		}
+		if err := dstFile.Sync(); err != nil {
+			return fmt.Errorf("fsync destination: %w", err)
+		}
 		return nil
-	})
+	}
+
+	bufw := bufio.NewWriterSize(w, 1<<20)
+	if _, err := io.Copy(bufw, src); err != nil {
+		return fmt.Errorf("stream snapshot: %w", err)
+	}
+	if err := bufw.Flush(); err != nil {
+		return fmt.Errorf("flush snapshot: %w", err)
+	}
+	return nil
 }
 
-// Restore restores an LMDB database from a reader.
+// Restore replaces the current LMDB environment contents with a raw snapshot
+// (produced by Snapshot via env.Copy). It preserves mmap size and NoSync.
 func (l *LmdbEmbed) Restore(r io.Reader) error {
-	return l.env.Update(func(txn *lmdb.Txn) error {
-		br := bufio.NewReader(r)
+	if l.path == "" {
+		return errors.New("restore: LmdbEmbed.path must be set")
+	}
 
-		for {
-			var keyLen uint32
-			if err := binary.Read(br, binary.LittleEndian, &keyLen); err != nil {
-				if err == io.EOF {
-					break // End of file
-				}
-				return fmt.Errorf("failed to read key length: %w", err)
-			}
+	tmpPath, err := l.writeSnapshotToTemp(r)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmpPath)
 
-			key := make([]byte, keyLen)
-			if _, err := io.ReadFull(br, key); err != nil {
-				return fmt.Errorf("failed to read key: %w", err)
-			}
+	if err := l.swapInSnapshot(tmpPath); err != nil {
+		return err
+	}
 
-			var valLen uint32
-			if err := binary.Read(br, binary.LittleEndian, &valLen); err != nil {
-				return fmt.Errorf("failed to read value length: %w", err)
-			}
+	env, dataDB, metaDB, err := l.reopenEnvAndDBIs()
+	if err != nil {
+		return err
+	}
 
-			value := make([]byte, valLen)
-			if _, err := io.ReadFull(br, value); err != nil {
-				return fmt.Errorf("failed to read value: %w", err)
-			}
+	l.env = env
+	l.dataDB = dataDB
+	l.metaDB = metaDB
+	_, _ = l.env.ReaderCheck()
 
-			if err := txn.Put(l.dataDB, key, value, 0); err != nil {
-				return fmt.Errorf("failed to insert key-value pair: %w", err)
-			}
+	return nil
+}
+
+func (l *LmdbEmbed) writeSnapshotToTemp(r io.Reader) (string, error) {
+	tmp, err := os.CreateTemp(l.path, "lmdb-restore-*.mdb")
+	if err != nil {
+		return "", fmt.Errorf("restore: create temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+
+	bufw := bufio.NewWriterSize(tmp, 1<<20)
+	if _, err := io.Copy(bufw, r); err != nil {
+		_ = bufw.Flush()
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("restore: write snapshot: %w", err)
+	}
+	if err := bufw.Flush(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("restore: flush snapshot: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("restore: fsync temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("restore: close temp: %w", err)
+	}
+	return tmpPath, nil
+}
+
+func (l *LmdbEmbed) swapInSnapshot(tmpPath string) error {
+
+	if err := l.env.Close(); err != nil {
+		return fmt.Errorf("restore: close env: %w", err)
+	}
+
+	dataPath := filepath.Join(l.path, "data.mdb")
+	_ = os.Remove(dataPath)
+	if err := os.Rename(tmpPath, dataPath); err != nil {
+		return fmt.Errorf("restore: replace data.mdb: %w", err)
+	}
+
+	if f, err := os.OpenFile(dataPath, os.O_RDWR, 0); err == nil {
+		_ = f.Sync()
+		_ = f.Close()
+	}
+	return nil
+}
+
+func (l *LmdbEmbed) reopenEnvAndDBIs() (*lmdb.Env, lmdb.DBI, lmdb.DBI, error) {
+	env, err := lmdb.NewEnv()
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("restore: NewEnv: %w", err)
+	}
+	cleanup := func(e error) (*lmdb.Env, lmdb.DBI, lmdb.DBI, error) {
+		_ = env.Close()
+		return nil, 0, 0, e
+	}
+
+	if err := env.SetMaxDBs(2); err != nil {
+		return cleanup(fmt.Errorf("restore: SetMaxDBs: %w", err))
+	}
+	if err := env.SetMapSize(l.mmapSize); err != nil {
+		return cleanup(fmt.Errorf("restore: SetMapSize(%d): %w", l.mmapSize, err))
+	}
+	if err := env.Open(l.path, lmdb.Create|lmdb.NoReadahead, 0644); err != nil {
+		return cleanup(fmt.Errorf("restore: env.Open: %w", err))
+	}
+	if l.noSync {
+		if err := env.SetFlags(lmdb.NoSync); err != nil {
+			return cleanup(fmt.Errorf("restore: SetFlags(NoSync): %w", err))
 		}
+	}
 
-		return nil
-	})
+	var dataDB, metaDB lmdb.DBI
+	if err := env.Update(func(txn *lmdb.Txn) error {
+		var err error
+		dataDB, err = txn.OpenDBI(string(l.namespace), lmdb.Create)
+		if err != nil {
+			return err
+		}
+		metaDB, err = txn.OpenDBI(sysBucketMetaData, lmdb.Create)
+		return err
+	}); err != nil {
+		return cleanup(fmt.Errorf("restore: open DBIs: %w", err))
+	}
+
+	return env, dataDB, metaDB, nil
 }
 
 func (l *LmdbEmbed) StoreMetadata(key []byte, value []byte) error {

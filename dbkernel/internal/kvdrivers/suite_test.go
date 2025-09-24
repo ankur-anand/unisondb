@@ -13,54 +13,51 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// btreeWriter defines the interface for interacting with a B-tree based storage
+// kvStoreWriter defines the interface for interacting with a B-tree based storage
 // for setting individual values, chunks and many value at once.
-type btreeWriter interface {
-	// Put associates a value with a key.
-	Set(key []byte, value []byte) error
-	// SetMany associates multiple values with corresponding keys.
-	SetMany(keys [][]byte, values [][]byte) error
-	// SetChunks stores a value that has been split into chunks, associating them with a single key.
-	SetChunks(key []byte, chunks [][]byte, checksum uint32) error
-	// Delete deletes a value with a key.
-	Delete(key []byte) error
-	// DeleteMany delete multiple values with corresponding keys.
-	DeleteMany(keys [][]byte) error
-	SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
-	DeleteManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
-	DeleteEntireRows(rowKeys [][]byte) (int, error)
-	StoreMetadata(key []byte, value []byte) error
+type kvStoreWriter interface {
 	FSync() error
+	SetKV(key []byte, value []byte) error
+	BatchSetKV(keys [][]byte, value [][]byte) error
+	SetLobChunks(key []byte, chunks [][]byte, checksum uint32) error
+	BatchSetCells(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	BatchDeleteCells(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	BatchDeleteRows(rowKeys [][]byte) (int, error)
+	DeleteKV(key []byte) error
+	BatchDeleteKV(keys [][]byte) error
+	BatchDeleteLobChunks(keys [][]byte) error
+	StoreMetadata(key []byte, value []byte) error
 	Restore(reader io.Reader) error
 }
 
 type TxnBatcher interface {
-	BatchPut(keys, values [][]byte) error
-	BatchDelete(keys [][]byte) error
-	SetChunks(key []byte, chunks [][]byte, checksum uint32) error
-	BatchPutRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
-	BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	BatchPutKV(keys, values [][]byte) error
+	BatchDeleteKV(keys [][]byte) error
+	SetLobChunks(key []byte, chunks [][]byte, checksum uint32) error
+	BatchDeleteLobChunks(keys [][]byte) error
+	BatchSetCells(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	BatchDeleteCells(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
 	BatchDeleteRows(rowKeys [][]byte) error
-	Commit() error
 	Stats() kvdrivers.TxnStats
+	Commit() error
 }
 
-// btreeReader defines the interface for interacting with a B-tree based storage
+// kvStoreReader defines the interface for interacting with a B-tree based storage
 // for getting individual values, chunks and many value at once.
-type btreeReader interface {
-	// Get retrieves a value associated with a key.
-	Get(key []byte) ([]byte, error)
-	GetRowColumns(rowKey []byte, filter func([]byte) bool) (map[string][]byte, error)
-	// SnapShot writes the complete database to the provided io writer.
-	Snapshot(w io.Writer) error
+type kvStoreReader interface {
+	GetKV(key []byte) ([]byte, error)
+	GetLOBChunks(key []byte) ([][]byte, error)
+	ScanRowCells(rowKey []byte, filter func(columnKey []byte) bool) (map[string][]byte, error)
+	GetCell(rowKey []byte, columnName string) ([]byte, error)
+	GetCells(rowKey []byte, columns []string) (map[string][]byte, error)
 	RetrieveMetadata(key []byte) ([]byte, error)
-	GetValueType(key []byte) (kvdrivers.ValueEntryType, error)
+	Snapshot(w io.Writer) error
 }
 
-// bTreeStore combines the btreeWriter and btreeReader interfaces.
+// bTreeStore combines the btreeWriter and kvStoreReader interfaces.
 type bTreeStore interface {
-	btreeWriter
-	btreeReader
+	kvStoreWriter
+	kvStoreReader
 	Close() error
 }
 
@@ -77,116 +74,106 @@ type suite struct {
 }
 
 func getTestSuites(factory *testSuite) []suite {
+	var ts []suite
+
+	ts = append(ts, basicKVSuite(factory)...)
+	ts = append(ts, lobChunkKVSuite(factory)...)
+	ts = append(ts, rowColumnSuite(factory)...)
+	ts = append(ts, metadataSuite(factory)...)
+	ts = append(ts, snapshotSuite(factory)...)
+	ts = append(ts, txnSuite(factory)...)
+
+	return ts
+}
+
+func basicKVSuite(factory *testSuite) []suite {
 	return []suite{
-		{
-			name:    "get_set",
-			runFunc: factory.TestSetAndGet,
-		},
-		{
-			name:    "set_get_delete",
-			runFunc: factory.TestSetAndGet,
-		},
-		{
-			name:    "many_set_get_and_delete_many",
-			runFunc: factory.TestManySetGetAndDeleteMany,
-		},
-		{
-			name:    "chunk_set_get_and_delete",
-			runFunc: factory.TestChunkSetAndDelete,
-		},
-		{
-			name:    "snapshot_and_retrieve",
-			runFunc: factory.TestSnapshotAndRetrieve,
-		},
-		{
-			name:    "empty_value_set",
-			runFunc: factory.TestEmptyValueSet,
-		},
-		{
-			name:    "non_existent_value_delete",
-			runFunc: factory.TestNonExistentDelete,
-		},
-		{
-			name:    "retrieve_empty_metadata",
-			runFunc: factory.TestRetrieveMetadata,
-		},
-		{
-			name:    "store_and_retrieve_metadata",
-			runFunc: factory.TestStoreMetadataAndRetrieveMetadata,
-		},
-		{
-			name:    "store_and_delete_many_chunk_full_value",
-			runFunc: factory.TestSetGetAndDeleteMany_Combined,
-		},
-		{
-			name:    "store_set_get_delete_columns",
-			runFunc: factory.TestSetGetDelete_RowColumns,
-		},
-		{
-			name:    "store_delete_columns_with_filter",
-			runFunc: factory.TestSetGetDelete_RowColumns_Filter,
-		},
-		{
-			name:    "store_set_columns_nm_row_column",
-			runFunc: factory.TestSetGetDelete_NMRowColumns,
-		},
-		{
-			name:    "txn_batch_put_get",
-			runFunc: factory.TestTxnQueue_BatchPutGetDelete,
-		},
-		{
-			name:    "txn_many_batch_put_delete",
-			runFunc: factory.TestTxnSetGetAndDeleteMany,
-		},
-		{
-			name:    "txn_chunk_get_set_del",
-			runFunc: factory.TestTxn_ChunkSetAndDelete,
-		},
-		{
-			name:    "txn_row_column_set_get_delete",
-			runFunc: factory.TestTxn_SetGetDelete_RowColumns,
-		},
-		{
-			name:    "txn_combined_key_delete",
-			runFunc: factory.TestTxn_SetGetAndDeleteMany_Combined,
-		},
-		{
-			name:    "txn_set_delete_nm_rows_columns",
-			runFunc: factory.TestTxn_SetGetDelete_NMRowColumns,
-		},
-		{
-			name:    "get_value_type",
-			runFunc: factory.Test_GetValueType,
-		},
+		{"TestBasicSetGet", factory.TestBasicSetGet},
+		{"TestBasicSetGetDelete", factory.TestBasicSetGetAndDelete},
+		{"TestBathSetGetAndDelete", factory.TestBathSetGetAndDelete},
+		{"TestEmptyValueSet", factory.TestEmptyValueSet},
+		{"TestNonExistent", factory.TestNonExistent},
+		{"TestBatchSetKV_LengthMismatch", factory.TestBatchSetKV_LengthMismatch},
+		{"TestBatchDeleteKV_NoOpOnMissing", factory.TestBatchDeleteKV_NoOpOnMissing},
+		{"TestKV_BinaryKeyAndValue", factory.TestKV_BinaryKeyAndValue},
+		{"TestFSync_Smoke", factory.TestFSync_Smoke},
 	}
 }
 
-func (s *testSuite) TestSetAndGet(t *testing.T) {
+func lobChunkKVSuite(factory *testSuite) []suite {
+	return []suite{
+		{"TestBlobChunkSetGetAndDelete", factory.TestBlobChunkSetGetAndDelete},
+		{"TestSetGetAndDeleteMany_Combined", factory.TestSetGetAndDeleteMany_Combined},
+		{"TestBatchDeleteLobChunks_NoOpOnMissing", factory.TestBatchDeleteLobChunks_NoOpOnMissing},
+	}
+}
+
+func rowColumnSuite(factory *testSuite) []suite {
+	return []suite{
+		{"TestRowColumnSetGetDelete", factory.TestRowColumnSetGetDelete},
+		{"TestRowColumnWithFilter", factory.TestRowColumnWithFilter},
+		{"TestRowColumnMultipleRows", factory.TestRowColumnMultipleRows},
+		{"TestBatchDeleteRows_MixedAndEmpty", factory.TestBatchDeleteRows_MixedAndEmpty},
+		{"TestGetCells_PartialHit", factory.TestGetCells_PartialHit},
+		{"TestScanRowCells_FilterExcludesAll", factory.TestScanRowCells_FilterExcludesAll},
+		{"TestBatchCells_InvalidArgsLengthMismatch", factory.TestBatchCells_InvalidArgsLengthMismatch},
+		{"TestGetCells_EmptyRequest", factory.TestGetCells_EmptyRequest},
+		{"TestRowColumn_BinaryRowAndCol", factory.TestRowColumn_BinaryRowAndCol},
+		{"TestGetCell_MissingRowOrColumn", factory.TestGetCell_MissingRowOrColumn},
+	}
+}
+
+func metadataSuite(factory *testSuite) []suite {
+	return []suite{
+		{"TestMetadataSetGet", factory.TestStoreMetadataAndRetrieveMetadata},
+		{"TestMetadataGet", factory.TestRetrieveMetadata},
+	}
+}
+
+func snapshotSuite(factory *testSuite) []suite {
+	return []suite{
+		{"TestSnapshotAndRetrieve", factory.TestSnapshotAndRetrieve},
+		{"TestRestore_ReplacesExistingData", factory.TestRestore_ReplacesExistingData},
+	}
+}
+
+func txnSuite(factory *testSuite) []suite {
+	return []suite{
+		{"TestTxnQueue_BatchPutGetDelete", factory.TestTxnQueue_BatchPutGetDelete},
+		{"TestTxnSetGetAndDeleteMany", factory.TestTxnSetGetAndDeleteMany},
+		{"TestTxn_ChunkSetAndDelete", factory.TestTxn_ChunkSetAndDelete},
+		{"TestTxn_SetGetDelete_RowColumns", factory.TestTxn_SetGetDelete_RowColumns},
+		{"TestTxn_SetGetDelete_NMRowColumns", factory.TestTxn_SetGetDelete_NMRowColumns},
+		{"TestTxn_SetGetAndDeleteMany_Combined", factory.TestTxn_SetGetAndDeleteMany_Combined},
+	}
+}
+
+func (s *testSuite) TestBasicSetGet(t *testing.T) {
 	key := []byte("test_key")
 	value := []byte("hello world")
-	err := s.store.Set(key, value)
+	err := s.store.SetKV(key, value)
 	assert.NoError(t, err, "Failed to insert full value")
-	retrievedValue, err := s.store.Get(key)
+	retrievedValue, err := s.store.GetKV(key)
 	assert.NoError(t, err, "Failed to retrieve value")
 	assert.Equal(t, value, retrievedValue, "retrieved value should be the same")
 }
 
-func (s *testSuite) TestSetGetAndDelete(t *testing.T) {
+func (s *testSuite) TestBasicSetGetAndDelete(t *testing.T) {
 	key := []byte("test_key")
 	value := []byte("hello world")
-	err := s.store.Set(key, value)
+	err := s.store.SetKV(key, value)
 	assert.NoError(t, err, "Failed to insert full value")
-	retrievedValue, err := s.store.Get(key)
+	retrievedValue, err := s.store.GetKV(key)
 	assert.NoError(t, err, "Failed to retrieve value")
 	assert.Equal(t, value, retrievedValue, "retrieved value should be the same")
-	err = s.store.Delete(key)
+	err = s.store.DeleteKV(key)
 	assert.NoError(t, err, "Failed to delete key")
-	retrievedValue, err = s.store.Get(key)
+	retrievedValue, err = s.store.GetKV(key)
 	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be ErrKeyNotFound")
 	assert.Nil(t, retrievedValue, "retrieved value should be nil")
 }
 
-func (s *testSuite) TestManySetGetAndDeleteMany(t *testing.T) {
+func (s *testSuite) TestBathSetGetAndDelete(t *testing.T) {
 	var keys [][]byte
 	var values [][]byte
 	for i := 0; i < 10; i++ {
@@ -194,25 +181,56 @@ func (s *testSuite) TestManySetGetAndDeleteMany(t *testing.T) {
 		values = append(values, []byte(fmt.Sprintf("value_%d", i)))
 	}
 
-	err := s.store.SetMany(keys, values)
+	err := s.store.BatchSetKV(keys, values)
 	assert.NoError(t, err, "Failed to insert values")
 
 	for i, key := range keys {
-		retrievedValue, err := s.store.Get(key)
+		retrievedValue, err := s.store.GetKV(key)
 		assert.NoError(t, err, "Failed to retrieve value")
 		assert.Equal(t, values[i], retrievedValue, "retrieved value should be the same")
 	}
 
-	err = s.store.DeleteMany(keys)
+	err = s.store.BatchDeleteKV(keys)
 	assert.NoError(t, err, "Failed to delete keys")
 	for _, key := range keys {
-		retrievedValue, err := s.store.Get(key)
+		retrievedValue, err := s.store.GetKV(key)
 		assert.Empty(t, retrievedValue, "retrieved value should be empty")
 		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be ErrKeyNotFound")
 	}
 }
 
-func (s *testSuite) TestChunkSetAndDelete(t *testing.T) {
+func (s *testSuite) TestEmptyValueSet(t *testing.T) {
+	var keys [][]byte
+	for i := 0; i < 100; i++ {
+		key := gofakeit.LetterN(uint(i + 1))
+		keys = append(keys, []byte(key))
+		err := s.store.SetKV([]byte(key), nil)
+		assert.NoError(t, err, "Failed to insert value")
+	}
+
+	for _, key := range keys {
+		retrievedValue, err := s.store.GetKV(key)
+		assert.NoError(t, err, "Failed to retrieve value")
+		assert.Equal(t, []byte(""), retrievedValue, "Retrieved value does not match")
+	}
+}
+
+func (s *testSuite) TestNonExistent(t *testing.T) {
+	var keys [][]byte
+	for i := 0; i < 100; i++ {
+		key := fmt.Sprintf("TestNonExistent_%s_%d", gofakeit.LetterN(uint(i+1)), i)
+		keys = append(keys, []byte(key))
+		_, err := s.store.GetKV([]byte(key))
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be ErrKeyNotFound")
+		err = s.store.DeleteKV([]byte(key))
+		assert.NoError(t, err, "Failed to delete value")
+	}
+
+	err := s.store.BatchDeleteKV(keys)
+	assert.NoError(t, err, "Failed to delete")
+}
+
+func (s *testSuite) TestBlobChunkSetGetAndDelete(t *testing.T) {
 
 	key := []byte("chunked_key")
 	chunks := [][]byte{
@@ -226,14 +244,13 @@ func (s *testSuite) TestChunkSetAndDelete(t *testing.T) {
 		checksum = crc32.Update(checksum, crc32.IEEETable, chunks[i])
 	}
 
-	err := s.store.SetChunks(key, chunks, checksum)
+	err := s.store.SetLobChunks(key, chunks, checksum)
 	assert.NoError(t, err, "Failed to insert chunked value")
 
-	retrievedValue, err := s.store.Get(key)
+	retrievedValue, err := s.store.GetLOBChunks(key)
 	assert.NoError(t, err, "Failed to retrieve chunked value")
 
-	expectedValue := bytes.Join(chunks, nil)
-	assert.Equal(t, expectedValue, retrievedValue, "Retrieved chunked value does not match")
+	assert.Equal(t, chunks, retrievedValue, "Retrieved chunked value does not match")
 
 	chunks = [][]byte{
 		[]byte("chunk_1_"),
@@ -245,34 +262,18 @@ func (s *testSuite) TestChunkSetAndDelete(t *testing.T) {
 		checksum = crc32.Update(checksum, crc32.IEEETable, chunks[i])
 	}
 
-	err = s.store.SetChunks(key, chunks, checksum)
+	err = s.store.SetLobChunks(key, chunks, checksum)
 	assert.NoError(t, err, "Failed to insert chunked value")
 
-	retrievedValue, err = s.store.Get(key)
+	retrievedValue, err = s.store.GetLOBChunks(key)
 	assert.NoError(t, err, "Failed to retrieve chunked value")
+	assert.Equal(t, chunks, retrievedValue, "Retrieved chunked value does not match")
 
-	expectedValue = bytes.Join(chunks, nil)
-	assert.Equal(t, expectedValue, retrievedValue, "Retrieved chunked value does not match")
-
-	keys := make(map[string]error)
-	keys["chunked_key_chunk_0"] = kvdrivers.ErrInvalidOpsForValueType // as we are fetching the stored chunk value
-	keys["chunked_key_chunk_1"] = kvdrivers.ErrInvalidOpsForValueType
-	keys["chunked_key_chunk_2"] = kvdrivers.ErrKeyNotFound
-
-	for key, e := range keys {
-		_, err := s.store.Get([]byte(key))
-		assert.ErrorIs(t, err, e, "error should be match")
-	}
-
-	err = s.store.Delete(key)
+	err = s.store.BatchDeleteLobChunks([][]byte{key})
 	assert.NoError(t, err, "Failed to delete key")
-	retrievedValue, err = s.store.Get(key)
+
+	_, err = s.store.GetLOBChunks(key)
 	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be ErrKeyNotFound")
-	assert.Nil(t, retrievedValue, "retrieved value should be nil")
-	for key := range keys {
-		_, err := s.store.Get([]byte(key))
-		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be match")
-	}
 }
 
 func (s *testSuite) TestSnapshotAndRetrieve(t *testing.T) {
@@ -284,7 +285,7 @@ func (s *testSuite) TestSnapshotAndRetrieve(t *testing.T) {
 	}
 
 	for key := range testData {
-		err := s.store.Set([]byte(key), testData[key])
+		err := s.store.SetKV([]byte(key), testData[key])
 		assert.NoError(t, err, "Failed to insert value")
 	}
 
@@ -304,39 +305,10 @@ func (s *testSuite) TestSnapshotAndRetrieve(t *testing.T) {
 	err = restoreDB.Restore(bytes.NewReader(buf.Bytes()))
 	assert.NoError(t, err, "Failed to restore")
 	for key := range testData {
-		retrievedValue, err := s.store.Get([]byte(key))
+		retrievedValue, err := s.store.GetKV([]byte(key))
 		assert.NoError(t, err, "Failed to get value")
 		assert.Equal(t, testData[key], retrievedValue, "Retrieved value does not match")
 	}
-}
-
-func (s *testSuite) TestEmptyValueSet(t *testing.T) {
-	var keys [][]byte
-	for i := 0; i < 100; i++ {
-		key := gofakeit.LetterN(uint(i + 1))
-		keys = append(keys, []byte(key))
-		err := s.store.Set([]byte(key), nil)
-		assert.NoError(t, err, "Failed to insert value")
-	}
-
-	for _, key := range keys {
-		retrievedValue, err := s.store.Get(key)
-		assert.NoError(t, err, "Failed to retrieve value")
-		assert.Equal(t, []byte(""), retrievedValue, "Retrieved value does not match")
-	}
-}
-
-func (s *testSuite) TestNonExistentDelete(t *testing.T) {
-	var keys [][]byte
-	for i := 0; i < 100; i++ {
-		key := gofakeit.LetterN(uint(i + 1))
-		keys = append(keys, []byte(key))
-		err := s.store.Delete([]byte(key))
-		assert.NoError(t, err, "Failed to delete value")
-	}
-
-	err := s.store.DeleteMany(keys)
-	assert.NoError(t, err, "Failed to delete")
 }
 
 func (s *testSuite) TestStoreMetadataAndRetrieveMetadata(t *testing.T) {
@@ -358,7 +330,9 @@ func (s *testSuite) TestRetrieveMetadata(t *testing.T) {
 }
 
 func (s *testSuite) TestSetGetAndDeleteMany_Combined(t *testing.T) {
-	key := []byte("chunked_key_to_be_deleted")
+	t.Helper()
+
+	lobKey := []byte("chunked_key_to_be_deleted")
 	chunks := [][]byte{
 		[]byte("chunk_1_"),
 		[]byte("chunk_2_"),
@@ -370,34 +344,73 @@ func (s *testSuite) TestSetGetAndDeleteMany_Combined(t *testing.T) {
 		checksum = crc32.Update(checksum, crc32.IEEETable, chunks[i])
 	}
 
-	keys := make([][]byte, len(chunks))
-	values := make([][]byte, len(chunks))
-	for i := 0; i < len(chunks); i++ {
+	n := len(chunks)
+	keys := make([][]byte, n)
+	values := make([][]byte, n)
+	for i := 0; i < n; i++ {
 		keys[i] = []byte(gofakeit.UUID())
 		values[i] = []byte(gofakeit.LetterN(uint(i + 1)))
-		assert.NoError(t, s.store.Set(keys[i], values[i]), "Failed to set value")
+		assert.NoError(t, s.store.SetKV(keys[i], values[i]), "SetKV failed")
 	}
 
-	assert.NoError(t, s.store.SetChunks(key, chunks, checksum), "Failed to set chunks")
+	assert.NoError(t, s.store.SetLobChunks(lobKey, chunks, checksum), "SetLobChunks failed")
 
-	nonExistentKey := gofakeit.UUID()
-	keysToBeDeleted := make([][]byte, 0)
+	nonExistKV := []byte(gofakeit.UUID())
+	nonExistLOB := []byte("missing-blob-id")
 
-	keysToBeDeleted = append(keysToBeDeleted, keys...)
-	keysToBeDeleted = append(keysToBeDeleted, key)
-	keysToBeDeleted = append(keysToBeDeleted, []byte(nonExistentKey))
+	kvToDelete := append(append([][]byte(nil), keys...), nonExistKV)
+	assert.NoError(t, s.store.BatchDeleteKV(kvToDelete), "BatchDeleteKV failed")
 
-	err := s.store.DeleteMany(keysToBeDeleted)
-	assert.NoError(t, err, "Failed to delete many keys")
+	assert.NoError(t, s.store.BatchDeleteLobChunks([][]byte{lobKey, nonExistLOB}), "BatchDeleteLobChunks failed")
 
-	for _, key := range keysToBeDeleted {
-		retrievedValue, err := s.store.Get(key)
-		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to retrieve value")
-		assert.Nil(t, retrievedValue, "Retrieved value should be nil")
+	for _, k := range keys {
+		val, err := s.store.GetKV(k)
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "expected KV to be deleted")
+		assert.Nil(t, val, "deleted KV should return nil value")
+	}
+
+	{
+		val, err := s.store.GetKV(nonExistKV)
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+		assert.Nil(t, val)
+	}
+
+	{
+		got, err := s.store.GetLOBChunks(lobKey)
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "expected LOB to be deleted")
+		assert.Nil(t, got)
+	}
+
+	{
+		got, err := s.store.GetLOBChunks(nonExistLOB)
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+		assert.Nil(t, got)
 	}
 }
 
-func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
+func (s *testSuite) TestRowColumnSetGetDelete(t *testing.T) {
+
+	singleRowKey := []byte("single_row")
+	singleColumnKey := []byte("single_column")
+	singleColumnValue := []byte("single_column_value")
+
+	rowKeys := [][]byte{singleRowKey}
+	columnEntries := []map[string][]byte{
+		{
+			string(singleColumnKey): singleColumnValue,
+		},
+	}
+
+	err := s.store.BatchSetCells(rowKeys, columnEntries)
+	assert.NoError(t, err, "Failed to set single row/column pair")
+	scannedValue, err := s.store.ScanRowCells(singleRowKey, nil)
+	assert.NoError(t, err, "Failed to scan single row/column pair")
+	assert.Equal(t, columnEntries[0], scannedValue, "Scan result does not match")
+
+	getValue, err := s.store.GetCell(singleRowKey, string(singleColumnKey))
+	assert.NoError(t, err, "Failed to get value")
+	assert.Equal(t, singleColumnValue, getValue, "Get result does not match")
+
 	rowKey := "rows_key"
 	entries := make(map[string][]byte)
 	for i := 0; i < 1000; i++ {
@@ -406,35 +419,31 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 		entries[key] = []byte(value)
 	}
 
-	rowKeys := [][]byte{[]byte(rowKey)}
+	rowKeys = [][]byte{[]byte(rowKey)}
 	columEntriesPerRow := make([]map[string][]byte, 0)
 	columEntriesPerRow = append(columEntriesPerRow, entries)
 
 	t.Run("invalid-arguments", func(t *testing.T) {
-		err := s.store.SetManyRowColumns(rowKeys, nil)
+		err := s.store.BatchSetCells(rowKeys, nil)
 		assert.ErrorIs(t, err, kvdrivers.ErrInvalidArguments)
-		err = s.store.DeleteManyRowColumns(rowKeys, nil)
+		err = s.store.BatchDeleteCells(rowKeys, nil)
 		assert.ErrorIs(t, err, kvdrivers.ErrInvalidArguments)
 	})
 
 	t.Run("set", func(t *testing.T) {
-		err := s.store.SetManyRowColumns(rowKeys, columEntriesPerRow)
+		err := s.store.BatchSetCells(rowKeys, columEntriesPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
-		_, err = s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
-
-		for key, entry := range entries {
-			value, err := s.store.Get([]byte(rowKey + "::" + key))
-			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
-			assert.Equal(t, value, entry)
-		}
+		_, err = s.store.GetKV([]byte(rowKey))
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+		_, err = s.store.GetLOBChunks([]byte(rowKey))
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 
 	})
 
 	t.Run("get", func(t *testing.T) {
-		fetchedEntries, err := s.store.GetRowColumns([]byte(rowKey), nil)
+		fetchedEntries, err := s.store.ScanRowCells([]byte(rowKey), nil)
 		assert.NoError(t, err, "Failed to fetch row columns")
-		assert.Equal(t, entries, fetchedEntries)
+		assert.Equal(t, len(entries), len(fetchedEntries))
 	})
 
 	// delete 10 Columns
@@ -446,19 +455,17 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 	deleteColumnPerRow = append(deleteColumnPerRow, deleteColumn)
 
 	t.Run("delete_column", func(t *testing.T) {
-		err := s.store.DeleteManyRowColumns(rowKeys, deleteColumnPerRow)
+		err := s.store.BatchDeleteCells(rowKeys, deleteColumnPerRow)
 		assert.NoError(t, err, "Failed to delete row columns")
 
-		retrievedEntries, err := s.store.GetRowColumns([]byte(rowKey), nil)
+		retrievedEntries, err := s.store.ScanRowCells([]byte(rowKey), nil)
 		assert.NoError(t, err, "Failed to fetch row columns")
 		assert.Equal(t, len(deleteColumn), len(entries)-len(retrievedEntries))
 	})
 
 	t.Run("get_delete", func(t *testing.T) {
-		_, err := s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 		for key := range deleteColumn {
-			value, err := s.store.Get([]byte(rowKey + "::" + key))
+			value, err := s.store.GetCell([]byte(rowKey), key)
 			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value, "Retrieved value should be nil")
 		}
@@ -466,38 +473,32 @@ func (s *testSuite) TestSetGetDelete_RowColumns(t *testing.T) {
 
 	updateColumnPerRow := make([]map[string][]byte, 0)
 	updateColumn := make(map[string][]byte)
+	columnKeys := make([]string, 0)
 	t.Run("put_more_columns", func(t *testing.T) {
 		for i := 0; i < 10; i++ {
 			key := gofakeit.UUID()
+			columnKeys = append(columnKeys, key)
 			value := gofakeit.LetterN(uint(1000))
 			entries[key] = []byte(value)
 			updateColumn[key] = []byte(value)
 		}
 		updateColumnPerRow = append(updateColumnPerRow, updateColumn)
 
-		err := s.store.SetManyRowColumns(rowKeys, updateColumnPerRow)
+		err := s.store.BatchSetCells(rowKeys, updateColumnPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
-		_, err = s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
-
-		for key, entry := range entries {
-			if _, ok := deleteColumn[key]; ok {
-				continue
-			}
-			value, err := s.store.Get([]byte(rowKey + "::" + key))
-			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
-			assert.Equal(t, value, entry)
-		}
+		v, err := s.store.GetCells([]byte(rowKey), columnKeys)
+		assert.NoError(t, err, "Failed to fetch row columns")
+		assert.Equal(t, len(columnKeys), len(v))
 	})
 
 	t.Run("delete_row", func(t *testing.T) {
-		deleteRow, err := s.store.DeleteEntireRows(rowKeys)
+		deleteRow, err := s.store.BatchDeleteRows(rowKeys)
 		assert.NoError(t, err, "Failed to delete row")
 		assert.Equal(t, deleteRow, len(entries)-len(deleteColumn), "total deleted Column should match")
 	})
 }
 
-func (s *testSuite) TestSetGetDelete_RowColumns_Filter(t *testing.T) {
+func (s *testSuite) TestRowColumnWithFilter(t *testing.T) {
 	rowKey := "rows_key"
 	filterKeys := make(map[string][]byte)
 	entries := make(map[string][]byte)
@@ -521,36 +522,22 @@ func (s *testSuite) TestSetGetDelete_RowColumns_Filter(t *testing.T) {
 	filteredEntries = append(filteredEntries, filterKeys)
 
 	t.Run("set", func(t *testing.T) {
-		err := s.store.SetManyRowColumns(rowKeys, filteredEntries)
+		err := s.store.BatchSetCells(rowKeys, filteredEntries)
 		assert.NoError(t, err, "Failed to set row columns")
-		err = s.store.SetManyRowColumns(rowKeys, columEntriesPerRow)
+		err = s.store.BatchSetCells(rowKeys, columEntriesPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
 	})
 
 	t.Run("get", func(t *testing.T) {
-		fetchedEntries, err := s.store.GetRowColumns([]byte(rowKey), func(i []byte) bool {
+		fetchedEntries, err := s.store.ScanRowCells([]byte(rowKey), func(i []byte) bool {
 			return filterKeys[string(i)] != nil
 		})
 		assert.NoError(t, err, "Failed to fetch row columns")
 		assert.Equal(t, filterKeys, fetchedEntries)
 	})
 
-	t.Run("delete_should_not_be_performed", func(t *testing.T) {
-		err := s.store.Delete([]byte(rowKey))
-		assert.NoError(t, err, "delete call failed.")
-		_, err = s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
-
-		err = s.store.Delete([]byte(rowKey + "::"))
-		assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
-		for key := range entries {
-			err := s.store.Delete([]byte(rowKey + "::" + key))
-			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
-		}
-	})
-
 	t.Run("get_validate", func(t *testing.T) {
-		fetchedEntries, err := s.store.GetRowColumns([]byte(rowKey), nil)
+		fetchedEntries, err := s.store.ScanRowCells([]byte(rowKey), nil)
 		assert.NoError(t, err, "Failed to fetch row columns")
 		assert.Equal(t, entries, fetchedEntries)
 	})
@@ -563,12 +550,12 @@ func (s *testSuite) TestSetGetDelete_RowColumns_Filter(t *testing.T) {
 			nonExistentColumns[key] = []byte(value)
 		}
 
-		err := s.store.DeleteManyRowColumns(rowKeys, []map[string][]byte{nonExistentColumns})
+		err := s.store.BatchDeleteCells(rowKeys, []map[string][]byte{nonExistentColumns})
 		assert.NoError(t, err)
 	})
 }
 
-func (s *testSuite) TestSetGetDelete_NMRowColumns(t *testing.T) {
+func (s *testSuite) TestRowColumnMultipleRows(t *testing.T) {
 	rowKey1 := "rows_key_nm_1"
 	columnsRow1 := make(map[string][]byte)
 	for i := 0; i < 5; i++ {
@@ -591,34 +578,16 @@ func (s *testSuite) TestSetGetDelete_NMRowColumns(t *testing.T) {
 	columEntriesPerRow = append(columEntriesPerRow, columnsRow1, columnsRow2)
 
 	t.Run("set", func(t *testing.T) {
-		err := s.store.SetManyRowColumns(rowKeys, columEntriesPerRow)
+		err := s.store.BatchSetCells(rowKeys, columEntriesPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
-		_, err = s.store.Get([]byte(rowKey1))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
-
-		for key, entry := range columnsRow1 {
-			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
-			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
-			assert.Equal(t, value, entry)
-		}
-
-		_, err = s.store.Get([]byte(rowKey2))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
-
-		for key, entry := range columnsRow2 {
-			value, err := s.store.Get([]byte(rowKey2 + "::" + key))
-			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
-			assert.Equal(t, value, entry)
-		}
-
 	})
 
 	t.Run("get", func(t *testing.T) {
-		fe2, err := s.store.GetRowColumns([]byte(rowKey2), nil)
+		fe2, err := s.store.ScanRowCells([]byte(rowKey2), nil)
 		assert.NoError(t, err, "Failed to fetch row columns")
 		assert.Equal(t, columnsRow2, fe2)
 
-		fe1, err := s.store.GetRowColumns([]byte(rowKey1), nil)
+		fe1, err := s.store.ScanRowCells([]byte(rowKey1), nil)
 		assert.NoError(t, err, "Failed to fetch row columns")
 		assert.Equal(t, columnsRow1, fe1)
 	})
@@ -632,19 +601,17 @@ func (s *testSuite) TestSetGetDelete_NMRowColumns(t *testing.T) {
 	deleteColumnPerRow = append(deleteColumnPerRow, deleteColumn)
 
 	t.Run("delete_column_1", func(t *testing.T) {
-		err := s.store.DeleteManyRowColumns([][]byte{[]byte(rowKey1)}, deleteColumnPerRow)
+		err := s.store.BatchDeleteCells([][]byte{[]byte(rowKey1)}, deleteColumnPerRow)
 		assert.NoError(t, err, "Failed to delete row columns")
 
-		retrievedEntries, err := s.store.GetRowColumns([]byte(rowKey1), nil)
+		retrievedEntries, err := s.store.ScanRowCells([]byte(rowKey1), nil)
 		assert.NoError(t, err, "Failed to fetch row columns")
 		assert.Equal(t, len(deleteColumn), len(columnsRow1)-len(retrievedEntries))
 	})
 
 	t.Run("get_delete", func(t *testing.T) {
-		_, err := s.store.Get([]byte(rowKey1))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 		for key := range deleteColumn {
-			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
+			value, err := s.store.GetCell([]byte(rowKey1), key)
 			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value, "Retrieved value should be nil")
 		}
@@ -661,17 +628,15 @@ func (s *testSuite) TestSetGetDelete_NMRowColumns(t *testing.T) {
 		}
 		updateColumnPerRow = append(updateColumnPerRow, updateColumn)
 
-		err := s.store.SetManyRowColumns([][]byte{[]byte(rowKey1)}, updateColumnPerRow)
+		err := s.store.BatchSetCells([][]byte{[]byte(rowKey1)}, updateColumnPerRow)
 		assert.NoError(t, err, "Failed to set row columns")
-		_, err = s.store.Get([]byte(rowKey1))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
 
 		for key, entry := range columnsRow1 {
 			if _, ok := deleteColumn[key]; ok {
 				continue
 			}
-			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
-			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
+			value, err := s.store.GetCell([]byte(rowKey1), key)
+			assert.Nil(t, err, "Failed to fetch row columns")
 			assert.Equal(t, value, entry)
 		}
 	})
@@ -679,50 +644,109 @@ func (s *testSuite) TestSetGetDelete_NMRowColumns(t *testing.T) {
 	totalDeleted := len(columnsRow1) + len(columnsRow2) - len(deleteColumn)
 
 	t.Run("delete_row", func(t *testing.T) {
-		deleteRow, err := s.store.DeleteEntireRows(rowKeys)
+		deleteRow, err := s.store.BatchDeleteRows(rowKeys)
 		assert.NoError(t, err, "Failed to delete row")
 		assert.Equal(t, deleteRow, totalDeleted, "total deleted Column should match")
 	})
 
 	t.Run("get_key_not_found", func(t *testing.T) {
-		_, err := s.store.GetRowColumns([]byte(rowKey2), nil)
-		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to fetch row columns")
+		result, err := s.store.ScanRowCells([]byte(rowKey2), nil)
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+		assert.Nil(t, result)
 
-		_, err = s.store.GetRowColumns([]byte(rowKey1), nil)
-		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to fetch row columns")
+		result, err = s.store.ScanRowCells([]byte(rowKey1), nil)
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+		assert.Nil(t, result)
 	})
+}
+
+func (s *testSuite) TestBatchDeleteRows_MixedAndEmpty(t *testing.T) {
+	row1 := []byte("row_exists_1")
+	row2 := []byte("row_exists_2")
+	missing := []byte("row_missing")
+
+	cols1 := map[string][]byte{"a": []byte("1"), "b": []byte("2")}
+	cols2 := map[string][]byte{"x": []byte("9")}
+
+	assert.NoError(t, s.store.BatchSetCells([][]byte{row1, row2}, []map[string][]byte{cols1, cols2}))
+
+	deleted, err := s.store.BatchDeleteRows([][]byte{row1, missing})
+	assert.NoError(t, err)
+	assert.Equal(t, 2, deleted)
+
+	_, err = s.store.ScanRowCells(row1, nil)
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+
+	got2, err := s.store.ScanRowCells(row2, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, cols2, got2)
+
+	deleted, err = s.store.BatchDeleteRows(nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, deleted)
+}
+
+func (s *testSuite) TestGetCells_PartialHit(t *testing.T) {
+	row := []byte("row_partial")
+	cols := map[string][]byte{"c1": []byte("v1"), "c2": []byte("v2")}
+	assert.NoError(t, s.store.BatchSetCells([][]byte{row}, []map[string][]byte{cols}))
+
+	got, err := s.store.GetCells(row, []string{"c1", "nope"})
+	assert.NoError(t, err)
+	assert.Equal(t, map[string][]byte{"c1": []byte("v1")}, got)
+}
+
+func (s *testSuite) TestScanRowCells_FilterExcludesAll(t *testing.T) {
+	row := []byte("row_filter_none")
+	cols := map[string][]byte{"k": []byte("v")}
+	assert.NoError(t, s.store.BatchSetCells([][]byte{row}, []map[string][]byte{cols}))
+
+	res, err := s.store.ScanRowCells(row, func(_ []byte) bool { return false })
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+	assert.Nil(t, res)
+}
+
+func (s *testSuite) TestBatchDeleteLobChunks_NoOpOnMissing(t *testing.T) {
+	err := s.store.BatchDeleteLobChunks([][]byte{[]byte("no_such_lob")})
+	assert.NoError(t, err)
+}
+
+func (s *testSuite) TestBatchCells_InvalidArgsLengthMismatch(t *testing.T) {
+	row := []byte("row_bad_args")
+	err := s.store.BatchSetCells([][]byte{row}, []map[string][]byte{})
+	assert.ErrorIs(t, err, kvdrivers.ErrInvalidArguments)
+
+	err = s.store.BatchDeleteCells([][]byte{row}, []map[string][]byte{})
+	assert.ErrorIs(t, err, kvdrivers.ErrInvalidArguments)
 }
 
 func (s *testSuite) TestTxnQueue_BatchPutGetDelete(t *testing.T) {
 	key := []byte("test_key_txn")
 	value := []byte("hello world_txn")
-	txn := s.txnBatcherConstructor(10)
-	keys := [][]byte{key}
-	values := [][]byte{value}
 
-	err := txn.BatchPut(keys, values)
-	assert.NoError(t, err, "Failed to batch put")
-	_, err = s.store.Get(key)
-	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to retrieve value")
-	err = txn.Commit()
-	assert.NoError(t, err, "Failed to commit")
-	retrievedValue, err := s.store.Get(key)
-	assert.NoError(t, err, "Failed to retrieve value")
-	assert.Equal(t, value, retrievedValue, "retrieved value should be the same")
-	err = txn.BatchDelete(keys)
-	assert.NoError(t, err, "Failed to batch delete")
-	retrievedValue, err = s.store.Get(key)
-	assert.NoError(t, err, "Failed to retrieve value")
-	assert.Equal(t, value, retrievedValue, "retrieved value should be the same")
-	err = txn.Commit()
-	assert.NoError(t, err, "Failed to commit")
-	_, err = s.store.Get(key)
-	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to retrieve value")
+	txn := s.txnBatcherConstructor(10)
+
+	assert.NoError(t, txn.BatchPutKV([][]byte{key}, [][]byte{value}))
+	_, err := s.store.GetKV(key)
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+
+	assert.NoError(t, txn.Commit())
+	got, err := s.store.GetKV(key)
+	assert.NoError(t, err)
+	assert.Equal(t, value, got)
+
+	assert.NoError(t, txn.BatchDeleteKV([][]byte{key}))
+	got, err = s.store.GetKV(key)
+	assert.NoError(t, err)
+	assert.Equal(t, value, got)
+
+	assert.NoError(t, txn.Commit())
+	_, err = s.store.GetKV(key)
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 }
 
 func (s *testSuite) TestTxnSetGetAndDeleteMany(t *testing.T) {
-	var keys [][]byte
-	var values [][]byte
+	var keys, values [][]byte
 	for i := 0; i < 10; i++ {
 		keys = append(keys, []byte(fmt.Sprintf("key_%d", i)))
 		values = append(values, []byte(fmt.Sprintf("value_%d", i)))
@@ -730,447 +754,374 @@ func (s *testSuite) TestTxnSetGetAndDeleteMany(t *testing.T) {
 
 	txn := s.txnBatcherConstructor(10)
 
-	err := txn.BatchPut(keys, values)
-	assert.NoError(t, err, "Failed to insert values")
-	assert.NoError(t, txn.Commit(), "Failed to commit")
+	assert.NoError(t, txn.BatchPutKV(keys, values))
+	assert.NoError(t, txn.Commit())
 
-	for i, key := range keys {
-		retrievedValue, err := s.store.Get(key)
-		assert.NoError(t, err, "Failed to retrieve value")
-		assert.Equal(t, values[i], retrievedValue, "retrieved value should be the same")
+	for i, k := range keys {
+		got, err := s.store.GetKV(k)
+		assert.NoError(t, err)
+		assert.Equal(t, values[i], got)
 	}
 
-	err = txn.BatchDelete(keys)
-	assert.NoError(t, err, "Failed to insert values")
-	assert.NoError(t, txn.Commit(), "Failed to commit")
-	assert.NoError(t, err, "Failed to delete keys")
-	for _, key := range keys {
-		retrievedValue, err := s.store.Get(key)
-		assert.Empty(t, retrievedValue, "retrieved value should be empty")
-		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be ErrKeyNotFound")
+	assert.NoError(t, txn.BatchDeleteKV(keys))
+	assert.NoError(t, txn.Commit())
+
+	for _, k := range keys {
+		got, err := s.store.GetKV(k)
+		assert.Nil(t, got)
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 	}
 }
 
 func (s *testSuite) TestTxn_ChunkSetAndDelete(t *testing.T) {
-
 	key := []byte("chunked_key")
-	chunks := [][]byte{
-		[]byte("chunk_1_"),
-		[]byte("chunk_2_"),
-		[]byte("chunk_3"),
-	}
+	chunks := [][]byte{[]byte("chunk_1_"), []byte("chunk_2_"), []byte("chunk_3")}
 
 	var checksum uint32
-	for i := 0; i < len(chunks); i++ {
-		checksum = crc32.Update(checksum, crc32.IEEETable, chunks[i])
+	for _, ch := range chunks {
+		checksum = crc32.Update(checksum, crc32.IEEETable, ch)
 	}
 
 	txn := s.txnBatcherConstructor(10)
 
-	err := txn.SetChunks(key, chunks, checksum)
-	assert.NoError(t, err, "Failed to insert chunked value")
+	assert.NoError(t, txn.SetLobChunks(key, chunks, checksum))
+	assert.NoError(t, txn.Commit())
 
-	assert.NoError(t, txn.Commit(), "Failed to commit")
-	retrievedValue, err := s.store.Get(key)
-	assert.NoError(t, err, "Failed to retrieve chunked value")
+	gotChunks, err := s.store.GetLOBChunks(key)
+	assert.NoError(t, err)
+	assert.Equal(t, chunks, gotChunks)
 
-	expectedValue := bytes.Join(chunks, nil)
-	assert.Equal(t, expectedValue, retrievedValue, "Retrieved chunked value does not match")
-
-	chunks = [][]byte{
-		[]byte("chunk_1_"),
-		[]byte("chunk_2_"),
-	}
-
+	chunks2 := [][]byte{[]byte("chunk_1_"), []byte("chunk_2_")}
 	checksum = 0
-	for i := 0; i < len(chunks); i++ {
-		checksum = crc32.Update(checksum, crc32.IEEETable, chunks[i])
+	for _, ch := range chunks2 {
+		checksum = crc32.Update(checksum, crc32.IEEETable, ch)
 	}
 
-	err = txn.SetChunks(key, chunks, checksum)
-	assert.NoError(t, err, "Failed to insert chunked value")
-	assert.NoError(t, txn.Commit(), "Failed to commit")
+	assert.NoError(t, txn.SetLobChunks(key, chunks2, checksum))
+	assert.NoError(t, txn.Commit())
 
-	retrievedValue, err = s.store.Get(key)
-	assert.NoError(t, err, "Failed to retrieve chunked value")
+	gotChunks, err = s.store.GetLOBChunks(key)
+	assert.NoError(t, err)
+	assert.Equal(t, chunks2, gotChunks)
 
-	expectedValue = bytes.Join(chunks, nil)
-	assert.Equal(t, expectedValue, retrievedValue, "Retrieved chunked value does not match")
+	assert.NoError(t, txn.BatchDeleteLobChunks([][]byte{key}))
+	assert.NoError(t, txn.Commit())
 
-	keys := make(map[string]error)
-	keys["chunked_key_chunk_0"] = kvdrivers.ErrInvalidOpsForValueType // as we are fetching the stored chunk value
-	keys["chunked_key_chunk_1"] = kvdrivers.ErrInvalidOpsForValueType
-	keys["chunked_key_chunk_2"] = kvdrivers.ErrKeyNotFound
-
-	for key, e := range keys {
-		_, err := s.store.Get([]byte(key))
-		assert.ErrorIs(t, err, e, "error should be match")
-	}
-
-	delKeys := [][]byte{key}
-	err = txn.BatchDelete(delKeys)
-	assert.NoError(t, err, "Failed to delete key")
-	assert.NoError(t, txn.Commit(), "Failed to commit")
-
-	retrievedValue, err = s.store.Get(key)
-	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be ErrKeyNotFound")
-	assert.Nil(t, retrievedValue, "retrieved value should be nil")
-	for key := range keys {
-		_, err := s.store.Get([]byte(key))
-		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "error should be match")
-	}
+	gotChunks, err = s.store.GetLOBChunks(key)
+	assert.Nil(t, gotChunks)
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 }
 
 func (s *testSuite) TestTxn_SetGetDelete_RowColumns(t *testing.T) {
 	rowKey := "rows_key_txn"
 	entries := make(map[string][]byte)
 	for i := 0; i < 100; i++ {
-		key := gofakeit.UUID()
-		value := gofakeit.LetterN(uint(1))
-		entries[key] = []byte(value)
+		k := gofakeit.UUID()
+		v := gofakeit.LetterN(uint(1))
+		entries[k] = []byte(v)
 	}
 
 	rowKeys := [][]byte{[]byte(rowKey)}
-	columEntriesPerRow := make([]map[string][]byte, 0)
-	columEntriesPerRow = append(columEntriesPerRow, entries)
+	columnEntriesPerRow := []map[string][]byte{entries}
 
 	txn := s.txnBatcherConstructor(10)
 
 	t.Run("invalid-arguments", func(t *testing.T) {
-		err := txn.BatchPutRowColumns(rowKeys, nil)
+		err := txn.BatchSetCells(rowKeys, nil)
 		assert.ErrorIs(t, err, kvdrivers.ErrInvalidArguments)
-		err = txn.BatchDeleteRowColumns(rowKeys, nil)
+		err = txn.BatchDeleteCells(rowKeys, nil)
 		assert.ErrorIs(t, err, kvdrivers.ErrInvalidArguments)
 	})
 
 	txn = s.txnBatcherConstructor(10)
+	assert.NoError(t, txn.BatchSetCells(rowKeys, columnEntriesPerRow))
+	assert.NoError(t, txn.Commit())
 
-	t.Run("set", func(t *testing.T) {
-		err := txn.BatchPutRowColumns(rowKeys, columEntriesPerRow)
-		assert.NoError(t, err, "Failed to set row columns")
-		assert.NoError(t, txn.Commit(), "Failed to commit")
-		_, err = s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
+	got, err := s.store.ScanRowCells([]byte(rowKey), nil)
+	assert.NoError(t, err)
+	assert.Equal(t, entries, got)
 
-		for key, entry := range entries {
-			value, err := s.store.Get([]byte(rowKey + "::" + key))
-			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
-			assert.Equal(t, value, entry)
-		}
-
-	})
-
-	t.Run("get", func(t *testing.T) {
-		fetchedEntries, err := s.store.GetRowColumns([]byte(rowKey), nil)
-		assert.NoError(t, err, "Failed to fetch row columns")
-		assert.Equal(t, entries, fetchedEntries)
-	})
-
-	// delete 10 Columns
-	deleteColumnPerRow := make([]map[string][]byte, 0)
-	deleteColumn := make(map[string][]byte)
-	for i := 0; i < 10; i++ {
-		deleteColumn[gofakeit.RandomMapKey(entries).(string)] = nil
+	for c, v := range entries {
+		cv, err := s.store.GetCell([]byte(rowKey), c)
+		assert.NoError(t, err)
+		assert.Equal(t, v, cv)
 	}
-	deleteColumnPerRow = append(deleteColumnPerRow, deleteColumn)
 
-	t.Run("delete_column", func(t *testing.T) {
-		err := txn.BatchDeleteRowColumns(rowKeys, deleteColumnPerRow)
-		assert.NoError(t, err, "Failed to delete row columns")
-		assert.NoError(t, txn.Commit(), "Failed to commit")
-		retrievedEntries, err := s.store.GetRowColumns([]byte(rowKey), nil)
-		assert.NoError(t, err, "Failed to fetch row columns")
-		assert.Equal(t, len(deleteColumn), len(entries)-len(retrievedEntries))
-	})
+	delCols := make(map[string][]byte)
+	for i := 0; i < 10; i++ {
+		delCols[gofakeit.RandomMapKey(entries).(string)] = nil
+	}
+	assert.NoError(t, txn.BatchDeleteCells(rowKeys, []map[string][]byte{delCols}))
+	assert.NoError(t, txn.Commit())
 
-	t.Run("get_delete", func(t *testing.T) {
-		_, err := s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
-		for key := range deleteColumn {
-			value, err := s.store.Get([]byte(rowKey + "::" + key))
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
-			assert.Nil(t, value, "Retrieved value should be nil")
+	after, err := s.store.ScanRowCells([]byte(rowKey), nil)
+	assert.NoError(t, err)
+	assert.Equal(t, len(entries)-len(delCols), len(after))
+
+	for c := range delCols {
+		v, err := s.store.GetCell([]byte(rowKey), c)
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+		assert.Nil(t, v)
+	}
+
+	add := make(map[string][]byte)
+	for i := 0; i < 20; i++ {
+		k := gofakeit.UUID()
+		v := gofakeit.LetterN(uint(1000))
+		add[k] = []byte(v)
+		entries[k] = []byte(v)
+	}
+	assert.NoError(t, txn.BatchSetCells(rowKeys, []map[string][]byte{add}))
+	assert.NoError(t, txn.Commit())
+
+	cur, err := s.store.ScanRowCells([]byte(rowKey), nil)
+	assert.NoError(t, err)
+	assert.Equal(t, entriesCountMinus(entries, delCols), len(cur))
+	for k, v := range entries {
+		if _, deleted := delCols[k]; deleted {
+			continue
 		}
-	})
-
-	updateColumnPerRow := make([]map[string][]byte, 0)
-	updateColumn := make(map[string][]byte)
-	t.Run("put_more_columns", func(t *testing.T) {
-		for i := 0; i < 20; i++ {
-			key := gofakeit.UUID()
-			value := gofakeit.LetterN(uint(1000))
-			entries[key] = []byte(value)
-			updateColumn[key] = []byte(value)
-		}
-		updateColumnPerRow = append(updateColumnPerRow, updateColumn)
-
-		err := txn.BatchPutRowColumns(rowKeys, updateColumnPerRow)
-		assert.NoError(t, err, "Failed to set row columns")
-		assert.NoError(t, txn.Commit(), "Failed to commit")
-		_, err = s.store.Get([]byte(rowKey))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
-
-		for key, entry := range entries {
-			if _, ok := deleteColumn[key]; ok {
-				continue
-			}
-			value, err := s.store.Get([]byte(rowKey + "::" + key))
-			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
-			assert.Equal(t, value, entry)
-		}
-	})
+		cv, err := s.store.GetCell([]byte(rowKey), k)
+		assert.NoError(t, err)
+		assert.Equal(t, v, cv)
+	}
 
 	txn = s.txnBatcherConstructor(10)
-	t.Run("delete_row", func(t *testing.T) {
-		err := txn.BatchDeleteRows(rowKeys)
-		assert.NoError(t, err, "Failed to delete row")
-		assert.NoError(t, txn.Commit(), "Failed to commit")
-		assert.Equal(t, int(txn.Stats().EntriesModified), len(entries)-len(deleteColumn)+1, "total deleted Column should match")
-	})
+	assert.NoError(t, txn.BatchDeleteRows(rowKeys))
+	assert.NoError(t, txn.Commit())
+
+	cur, err = s.store.ScanRowCells([]byte(rowKey), nil)
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+	assert.Nil(t, cur)
 }
 
-func (s *testSuite) TestTxn_SetGetAndDeleteMany_Combined(t *testing.T) {
-	key := []byte("chunked_key_to_be_deleted_txn")
-	chunks := [][]byte{
-		[]byte("chunk_1_"),
-		[]byte("chunk_2_"),
-		[]byte("chunk_3"),
+func entriesCountMinus(m map[string][]byte, minus map[string][]byte) int {
+	n := 0
+	for k := range m {
+		if _, del := minus[k]; !del {
+			n++
+		}
 	}
-
-	var checksum uint32
-	for i := 0; i < len(chunks); i++ {
-		checksum = crc32.Update(checksum, crc32.IEEETable, chunks[i])
-	}
-
-	txn := s.txnBatcherConstructor(10)
-	keys := make([][]byte, len(chunks))
-	values := make([][]byte, len(chunks))
-	for i := 0; i < len(chunks); i++ {
-		keys[i] = []byte(gofakeit.UUID())
-		values[i] = []byte(gofakeit.LetterN(uint(i + 1)))
-	}
-
-	assert.NoError(t, txn.BatchPut(keys, values), "Failed to set value")
-	assert.NoError(t, txn.Commit(), "Failed to commit")
-	assert.NoError(t, txn.SetChunks(key, chunks, checksum), "Failed to set chunks")
-	assert.NoError(t, txn.Commit(), "Failed to commit")
-
-	nonExistentKey := gofakeit.UUID()
-	keysToBeDeleted := make([][]byte, 0)
-
-	keysToBeDeleted = append(keysToBeDeleted, keys...)
-	keysToBeDeleted = append(keysToBeDeleted, key)
-	keysToBeDeleted = append(keysToBeDeleted, []byte(nonExistentKey))
-
-	err := txn.BatchDelete(keysToBeDeleted)
-	assert.NoError(t, err, "Failed to delete many keys")
-	assert.NoError(t, txn.Commit(), "Failed to commit")
-	for _, key := range keysToBeDeleted {
-		retrievedValue, err := s.store.Get(key)
-		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to retrieve value")
-		assert.Nil(t, retrievedValue, "Retrieved value should be nil")
-	}
+	return n
 }
 
 func (s *testSuite) TestTxn_SetGetDelete_NMRowColumns(t *testing.T) {
 	rowKey1 := "rows_key_nm_1_txn"
-	columnsRow1 := make(map[string][]byte)
-	for i := 0; i < 5; i++ {
-		key := gofakeit.UUID()
-		value := gofakeit.LetterN(uint(1000))
-		columnsRow1[key] = []byte(value)
-	}
-
 	rowKey2 := "rows_key_nm_2_txn"
-	columnsRow2 := make(map[string][]byte)
+
+	cols1 := map[string][]byte{}
+	for i := 0; i < 5; i++ {
+		cols1[gofakeit.UUID()] = []byte(gofakeit.LetterN(uint(1000)))
+	}
+	cols2 := map[string][]byte{}
 	for i := 0; i < 4; i++ {
-		key := gofakeit.UUID()
-		value := gofakeit.LetterN(uint(1000))
-		columnsRow2[key] = []byte(value)
+		cols2[gofakeit.UUID()] = []byte(gofakeit.LetterN(uint(1000)))
 	}
 
 	rowKeys := [][]byte{[]byte(rowKey1), []byte(rowKey2)}
+	entries := []map[string][]byte{cols1, cols2}
 
-	columEntriesPerRow := make([]map[string][]byte, 0)
-	columEntriesPerRow = append(columEntriesPerRow, columnsRow1, columnsRow2)
+	txn := s.txnBatcherConstructor(2)
+	assert.NoError(t, txn.BatchSetCells(rowKeys, entries))
+	assert.NoError(t, txn.Commit())
 
-	t.Run("set", func(t *testing.T) {
-		txn := s.txnBatcherConstructor(2)
-		err := txn.BatchPutRowColumns(rowKeys, columEntriesPerRow)
-		assert.NoError(t, err, "Failed to set row columns")
-		_, err = s.store.Get([]byte(rowKey1))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
+	got2, err := s.store.ScanRowCells([]byte(rowKey2), nil)
+	assert.NoError(t, err)
+	assert.Equal(t, cols2, got2)
 
-		for key, entry := range columnsRow1 {
-			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
-			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
-			assert.Equal(t, value, entry)
-		}
+	got1, err := s.store.ScanRowCells([]byte(rowKey1), nil)
+	assert.NoError(t, err)
+	assert.Equal(t, cols1, got1)
 
-		_, err = s.store.Get([]byte(rowKey2))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
-
-		for key, entry := range columnsRow2 {
-			value, err := s.store.Get([]byte(rowKey2 + "::" + key))
-			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
-			assert.Equal(t, value, entry)
-		}
-
-	})
-
-	t.Run("get", func(t *testing.T) {
-		fe2, err := s.store.GetRowColumns([]byte(rowKey2), nil)
-		assert.NoError(t, err, "Failed to fetch row columns")
-		assert.Equal(t, columnsRow2, fe2)
-
-		fe1, err := s.store.GetRowColumns([]byte(rowKey1), nil)
-		assert.NoError(t, err, "Failed to fetch row columns")
-		assert.Equal(t, columnsRow1, fe1)
-	})
-
-	// delete 10 Columns
-	deleteColumnPerRow := make([]map[string][]byte, 0)
-	deleteColumn := make(map[string][]byte)
+	delCols := map[string][]byte{}
 	for i := 0; i < 2; i++ {
-		deleteColumn[gofakeit.RandomMapKey(columnsRow1).(string)] = nil
+		delCols[gofakeit.RandomMapKey(cols1).(string)] = nil
 	}
-	deleteColumnPerRow = append(deleteColumnPerRow, deleteColumn)
+	txn = s.txnBatcherConstructor(2)
+	assert.NoError(t, txn.BatchDeleteCells([][]byte{[]byte(rowKey1)}, []map[string][]byte{delCols}))
+	assert.NoError(t, txn.Commit())
 
-	t.Run("delete_column_1", func(t *testing.T) {
-		txn := s.txnBatcherConstructor(2)
-		err := txn.BatchDeleteRowColumns([][]byte{[]byte(rowKey1)}, deleteColumnPerRow)
-		assert.NoError(t, err, "Failed to delete row columns")
-		assert.NoError(t, txn.Commit(), "Failed to commit")
+	after1, err := s.store.ScanRowCells([]byte(rowKey1), nil)
+	assert.NoError(t, err)
+	assert.Equal(t, len(cols1)-len(delCols), len(after1))
 
-		retrievedEntries, err := s.store.GetRowColumns([]byte(rowKey1), nil)
-		assert.NoError(t, err, "Failed to fetch row columns")
-		assert.Equal(t, len(deleteColumn), len(columnsRow1)-len(retrievedEntries))
-	})
+	for c := range delCols {
+		cv, err := s.store.GetCell([]byte(rowKey1), c)
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+		assert.Nil(t, cv)
+	}
 
-	t.Run("get_delete", func(t *testing.T) {
-		_, err := s.store.Get([]byte(rowKey1))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
-		for key := range deleteColumn {
-			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
-			assert.Nil(t, value, "Retrieved value should be nil")
-		}
-	})
-
-	txn := s.txnBatcherConstructor(1)
-	updateColumnPerRow := make([]map[string][]byte, 0)
-	updateColumn := make(map[string][]byte)
-	t.Run("put_more_columns_1", func(t *testing.T) {
-		for i := 0; i < 1; i++ {
-			key := gofakeit.UUID()
-			value := gofakeit.LetterN(uint(1000))
-			columnsRow1[key] = []byte(value)
-			updateColumn[key] = []byte(value)
-		}
-		updateColumnPerRow = append(updateColumnPerRow, updateColumn)
-
-		err := txn.BatchPutRowColumns([][]byte{[]byte(rowKey1)}, updateColumnPerRow)
-		assert.NoError(t, err, "Failed to set row columns")
-		_, err = s.store.Get([]byte(rowKey1))
-		assert.ErrorIs(t, err, kvdrivers.ErrUseGetColumnAPI)
-
-		for key, entry := range columnsRow1 {
-			if _, ok := deleteColumn[key]; ok {
-				continue
-			}
-			value, err := s.store.Get([]byte(rowKey1 + "::" + key))
-			assert.ErrorIs(t, err, kvdrivers.ErrInvalidOpsForValueType)
-			assert.Equal(t, value, entry)
-		}
-	})
-
-	totalDeleted := len(columnsRow1) + len(columnsRow2) - len(deleteColumn) + 2 // row keys
+	add := map[string][]byte{}
+	k := gofakeit.UUID()
+	v := []byte(gofakeit.LetterN(uint(1000)))
+	add[k] = v
+	cols1[k] = v
 
 	txn = s.txnBatcherConstructor(1)
-	t.Run("delete_row", func(t *testing.T) {
-		err := txn.BatchDeleteRows(rowKeys)
-		assert.NoError(t, err, "Failed to delete row")
-		assert.Equal(t, int(txn.Stats().EntriesModified), totalDeleted, "total deleted Column should match")
-	})
+	assert.NoError(t, txn.BatchSetCells([][]byte{[]byte(rowKey1)}, []map[string][]byte{add}))
+	assert.NoError(t, txn.Commit())
 
-	t.Run("get_key_not_found", func(t *testing.T) {
-		_, err := s.store.GetRowColumns([]byte(rowKey2), nil)
-		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to fetch row columns")
+	cur1, err := s.store.ScanRowCells([]byte(rowKey1), nil)
+	assert.NoError(t, err)
+	assert.Equal(t, len(cols1)-len(delCols), len(cur1))
 
-		_, err = s.store.GetRowColumns([]byte(rowKey1), nil)
-		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "Failed to fetch row columns")
-	})
+	txn = s.txnBatcherConstructor(1)
+	assert.NoError(t, txn.BatchDeleteRows(rowKeys))
+	assert.NoError(t, txn.Commit())
+
+	_, err = s.store.ScanRowCells([]byte(rowKey2), nil)
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+	_, err = s.store.ScanRowCells([]byte(rowKey1), nil)
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 }
 
-func (s *testSuite) Test_GetValueType(t *testing.T) {
-	rowKey := "rows_key_get_value_type"
-	entries := make(map[string][]byte)
-	for i := 0; i < 1000; i++ {
-		key := gofakeit.UUID()
-		value := gofakeit.LetterN(uint(1000))
-		entries[key] = []byte(value)
-	}
-
-	rowKeys := [][]byte{[]byte(rowKey)}
-	columEntriesPerRow := make([]map[string][]byte, 0)
-	columEntriesPerRow = append(columEntriesPerRow, entries)
-
-	assert.NoError(t, s.store.SetManyRowColumns(rowKeys, columEntriesPerRow), "Failed to set row columns")
-
-	ChunkedKey := []byte("chunked_key_getvalue_type")
-	chunks := [][]byte{
-		[]byte("chunk_1_"),
-		[]byte("chunk_2_"),
-		[]byte("chunk_3"),
-	}
+func (s *testSuite) TestTxn_SetGetAndDeleteMany_Combined(t *testing.T) {
+	lobKey := []byte("chunked_key_to_be_deleted_txn")
+	chunks := [][]byte{[]byte("chunk_1_"), []byte("chunk_2_"), []byte("chunk_3")}
 
 	var checksum uint32
-	for i := 0; i < len(chunks); i++ {
-		checksum = crc32.Update(checksum, crc32.IEEETable, chunks[i])
+	for _, ch := range chunks {
+		checksum = crc32.Update(checksum, crc32.IEEETable, ch)
 	}
 
-	err := s.store.SetChunks(ChunkedKey, chunks, checksum)
-	assert.NoError(t, err, "Failed to insert chunked value")
+	txn := s.txnBatcherConstructor(10)
 
-	key := []byte("test_key_get_value_type")
-	value := []byte("hello world")
-	err = s.store.Set(key, value)
-	assert.NoError(t, err, "Failed to insert value")
-
-	tCases := []struct {
-		Name      string
-		Key       []byte
-		ValueType kvdrivers.ValueEntryType
-		Error     error
-	}{
-		{
-			Name:      "get_value_type_KV",
-			Key:       key,
-			ValueType: kvdrivers.KeyValueValueEntry,
-			Error:     nil,
-		}, {
-			Name:      "get_value_type_row",
-			Key:       []byte(rowKey),
-			ValueType: kvdrivers.RowColumnValueEntry,
-			Error:     nil,
-		}, {
-			Name:      "get_value_type_chunked",
-			Key:       ChunkedKey,
-			ValueType: kvdrivers.ChunkedValueEntry,
-			Error:     nil,
-		}, {
-			Name:      "get_value_type_nonexistent",
-			Key:       []byte("get_value_type_nonexistent"),
-			ValueType: kvdrivers.UnknownValueEntry,
-			Error:     kvdrivers.ErrKeyNotFound,
-		},
+	n := len(chunks)
+	keys := make([][]byte, n)
+	values := make([][]byte, n)
+	for i := 0; i < n; i++ {
+		keys[i] = []byte(gofakeit.UUID())
+		values[i] = []byte(gofakeit.LetterN(uint(i + 1)))
 	}
+	assert.NoError(t, txn.BatchPutKV(keys, values))
+	assert.NoError(t, txn.Commit())
 
-	for _, tc := range tCases {
-		t.Run(tc.Name, func(t *testing.T) {
-			value, err := s.store.GetValueType(tc.Key)
-			assert.Equal(t, tc.ValueType, value, "GetValueType returned wrong value")
-			assert.Equal(t, tc.Error, err, "GetValueType returned wrong error")
-		})
+	assert.NoError(t, txn.SetLobChunks(lobKey, chunks, checksum))
+	assert.NoError(t, txn.Commit())
+
+	nonExistKV := []byte(gofakeit.UUID())
+	assert.NoError(t, txn.BatchDeleteKV(append(append([][]byte(nil), keys...), nonExistKV)))
+	assert.NoError(t, txn.Commit())
+
+	assert.NoError(t, txn.BatchDeleteLobChunks([][]byte{lobKey, []byte("non-existent-blob")}))
+	assert.NoError(t, txn.Commit())
+
+	for _, k := range keys {
+		_, err := s.store.GetKV(k)
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 	}
+	_, err := s.store.GetLOBChunks(lobKey)
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+}
+
+func (s *testSuite) TestBatchSetKV_LengthMismatch(t *testing.T) {
+	keys := [][]byte{[]byte("k1"), []byte("k2")}
+	vals := [][]byte{[]byte("v1")}
+	err := s.store.BatchSetKV(keys, vals)
+	assert.ErrorIs(t, err, kvdrivers.ErrInvalidArguments)
+}
+
+func (s *testSuite) TestBatchDeleteKV_NoOpOnMissing(t *testing.T) {
+	keys := [][]byte{[]byte("nope1"), []byte("nope2")}
+	err := s.store.BatchDeleteKV(keys)
+	assert.NoError(t, err)
+	for _, k := range keys {
+		_, err := s.store.GetKV(k)
+		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+	}
+}
+
+func (s *testSuite) TestGetCells_EmptyRequest(t *testing.T) {
+	row := []byte("row_empty_getcells")
+	cols := map[string][]byte{"a": []byte("1")}
+	assert.NoError(t, s.store.BatchSetCells([][]byte{row}, []map[string][]byte{cols}))
+
+	got, err := s.store.GetCells(row, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(got))
+
+	got, err = s.store.GetCells(row, []string{})
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(got))
+}
+
+func (s *testSuite) TestKV_BinaryKeyAndValue(t *testing.T) {
+	key := []byte{0x00, 0xFF, 0x10, 0x7F}
+	val := []byte{0x00, 0x01, 0x02, 0x03}
+	assert.NoError(t, s.store.SetKV(key, val))
+
+	got, err := s.store.GetKV(key)
+	assert.NoError(t, err)
+	assert.Equal(t, val, got)
+
+	assert.NoError(t, s.store.DeleteKV(key))
+	_, err = s.store.GetKV(key)
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+}
+
+func (s *testSuite) TestRowColumn_BinaryRowAndCol(t *testing.T) {
+	row := []byte{0x00, 0x01, 0x02}
+	colName := string([]byte{0xFF, 0xFE, 0xFD})
+	val := []byte{0xAA, 0xBB}
+
+	assert.NoError(t, s.store.BatchSetCells([][]byte{row}, []map[string][]byte{{colName: val}}))
+
+	gotRow, err := s.store.ScanRowCells(row, nil)
+	assert.NoError(t, err)
+	assert.Equal(t, map[string][]byte{colName: val}, gotRow)
+
+	gotCell, err := s.store.GetCell(row, colName)
+	assert.NoError(t, err)
+	assert.Equal(t, val, gotCell)
+
+	n, err := s.store.BatchDeleteRows([][]byte{row})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, n)
+
+	_, err = s.store.GetCell(row, colName)
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+}
+
+func (s *testSuite) TestRestore_ReplacesExistingData(t *testing.T) {
+	assert.NoError(t, s.store.SetKV([]byte("old_k"), []byte("old_v")))
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "donor.db")
+	conf := kvdrivers.Config{Namespace: "test", NoSync: true, MmapSize: 1 << 30}
+	donor, err := s.dbConstructor(path, conf)
+	assert.NoError(t, err)
+
+	assert.NoError(t, donor.SetKV([]byte("new_k"), []byte("new_v")))
+	buf := new(bytes.Buffer)
+	assert.NoError(t, donor.Snapshot(buf))
+	assert.NoError(t, donor.Close())
+
+	assert.NoError(t, s.store.Restore(bytes.NewReader(buf.Bytes())))
+
+	_, err = s.store.GetKV([]byte("old_k"))
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+
+	v, err := s.store.GetKV([]byte("new_k"))
+	assert.NoError(t, err)
+	assert.Equal(t, []byte("new_v"), v)
+}
+
+func (s *testSuite) TestFSync_Smoke(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		k := []byte(fmt.Sprintf("fsync_k_%d", i))
+		v := []byte(fmt.Sprintf("fsync_v_%d", i))
+		assert.NoError(t, s.store.SetKV(k, v))
+	}
+	assert.NoError(t, s.store.FSync())
+}
+
+func (s *testSuite) TestGetCell_MissingRowOrColumn(t *testing.T) {
+	row := []byte("rc_missing_row")
+	col := "c1"
+	_, err := s.store.GetCell(row, col)
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+
+	assert.NoError(t, s.store.BatchSetCells([][]byte{row}, []map[string][]byte{{"c2": []byte("v2")}}))
+	_, err = s.store.GetCell(row, "nope")
+	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 }

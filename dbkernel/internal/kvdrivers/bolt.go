@@ -1,6 +1,7 @@
 package kvdrivers
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
 	"fmt"
@@ -72,14 +73,18 @@ func (b *BoltDBEmbed) SetKV(key []byte, value []byte) error {
 }
 
 // BatchSetKV associates multiple values with corresponding keys within a namespace.
-func (b *BoltDBEmbed) BatchSetKV(keys [][]byte, value [][]byte) error {
+func (b *BoltDBEmbed) BatchSetKV(keys [][]byte, values [][]byte) error {
+	if len(keys) == 0 || len(values) == 0 || len(keys) != len(values) {
+		return ErrInvalidArguments
+	}
+
 	err := b.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket(b.namespace)
 		if bucket == nil {
 			return ErrBucketNotFound
 		}
 		for i, key := range keys {
-			err := bucket.Put(KeyKV(key), value[i])
+			err := bucket.Put(KeyKV(key), values[i])
 			if err != nil {
 				return err
 			}
@@ -585,4 +590,27 @@ func (b *BoltDBEmbed) Restore(reader io.Reader) error {
 
 	b.db = db
 	return nil
+}
+
+func (b *BoltDBEmbed) Snapshot(w io.Writer) error {
+	// a real file, use it directly and fsync at the end.
+	if f, ok := w.(*os.File); ok {
+		return b.db.View(func(tx *bbolt.Tx) error {
+			if _, err := tx.WriteTo(f); err != nil {
+				return err
+			}
+			return f.Sync()
+		})
+	}
+
+	// non-file writers, add buffering.
+	buf := bufio.NewWriterSize(w, 1<<20)
+	err := b.db.View(func(tx *bbolt.Tx) error {
+		_, err := tx.WriteTo(buf)
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	return buf.Flush()
 }
