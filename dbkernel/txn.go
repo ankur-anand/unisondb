@@ -10,7 +10,6 @@ import (
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/dgraph-io/badger/v4/y"
-	"github.com/hashicorp/go-metrics"
 	"github.com/segmentio/ksuid"
 )
 
@@ -22,9 +21,9 @@ var (
 )
 
 var (
-	mTxnKeyCommitedTotal     = append(packageKey, "txn", "commited", "total")
-	mTxnKeyBeginTotal        = append(packageKey, "txn", "begin", "total")
-	mTxnKeyLifecycleDuration = append(packageKey, "txn", "lifecycle", "durations", "seconds")
+	mTxnBeginTotal       = "txn_begin_total"
+	mTxnCommitTotal      = "txn_commit_total"
+	mTxnLifecycleSeconds = "txn_lifecycle_seconds"
 )
 
 type txMemTableEntry struct {
@@ -85,7 +84,7 @@ func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.
 		return nil, err
 	}
 
-	metrics.IncrCounterWithLabels(mTxnKeyBeginTotal, 1, e.metricsLabel)
+	e.taggedScope.Counter(mTxnBeginTotal).Inc(1)
 	return &Txn{
 		txnID:           uuid,
 		prevOffset:      offset,
@@ -258,8 +257,8 @@ func (t *Txn) Commit() error {
 	}
 
 	defer func() {
-		metrics.IncrCounterWithLabels(mTxnKeyCommitedTotal, 1, t.engine.metricsLabel)
-		metrics.MeasureSinceWithLabels(mTxnKeyLifecycleDuration, t.startTime, t.engine.metricsLabel)
+		t.engine.taggedScope.Counter(mTxnCommitTotal).Inc(1)
+		t.engine.taggedScope.Timer(mTxnLifecycleSeconds).Record(time.Since(t.startTime))
 	}()
 
 	// flush all the writes on mem-table
