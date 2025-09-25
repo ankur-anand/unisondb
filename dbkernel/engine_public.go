@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
-	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
+	"github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/dustin/go-humanize"

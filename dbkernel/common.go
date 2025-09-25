@@ -4,8 +4,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
+	"github.com/ankur-anand/unisondb/pkg/kvdrivers"
 )
 
 const (

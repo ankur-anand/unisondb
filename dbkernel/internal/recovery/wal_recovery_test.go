@@ -7,9 +7,9 @@ import (
 	"testing"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
-	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
+	kvdrivers2 "github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"
@@ -39,7 +39,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 
 	dbFile := filepath.Join(tdir, "test_flush.db")
 
-	db, err := kvdrivers.NewLmdb(dbFile, kvdrivers.Config{
+	db, err := kvdrivers2.NewLmdb(dbFile, kvdrivers2.Config{
 		Namespace: testNamespace,
 		NoSync:    true,
 		MmapSize:  1 << 30,
@@ -198,7 +198,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 
 		for k := range unCommitedKeys {
 			value, err := db.GetKV([]byte(k))
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 			assert.Nil(t, value)
 		}
 
@@ -313,7 +313,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 
 		for k := range unCommitedKeys {
 			value, err := db.GetKV([]byte(k))
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 			assert.Nil(t, value)
 		}
 	})
@@ -356,7 +356,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		assert.Equal(t, 1, recovery.recoveredCount)
 		for _, key := range deleteKeys {
 			value, err := db.GetKV([]byte(key))
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 			assert.Nil(t, value, "deleted key value should be nil")
 			delete(allCommitedKeys, key)
 			allCommitedDeleteKeys[key] = struct{}{}
@@ -430,7 +430,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 
 		for _, key := range deleteKeys {
 			value, err := db.GetKV([]byte(key))
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "%s", key)
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound, "%s", key)
 			assert.Nil(t, value, "deleted key value should be nil %s", key)
 			allCommitedDeleteKeys[key] = struct{}{}
 			delete(allCommitedKeys, key)
@@ -497,7 +497,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		assert.Equal(t, 64, recoveryInstance.recoveredCount, "total record recovered failed")
 
 		columns, err := db.ScanRowCells([]byte(randomRow), nil)
-		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+		assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 		assert.Empty(t, columns)
 	})
 
@@ -628,7 +628,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		assert.Equal(t, 22, recoveryInstance.RecoveredCount(), "total record recovered failed")
 		for rKey := range cleanupKVEntries {
 			columns, err := db.ScanRowCells([]byte(rKey), nil)
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "row %s should be fully deleted", rKey)
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound, "row %s should be fully deleted", rKey)
 			assert.Len(t, columns, 0)
 		}
 	})
@@ -648,13 +648,13 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 
 		for k := range unCommitedKeys {
 			value, err := db.GetKV([]byte(k))
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 			assert.Nil(t, value)
 		}
 
 		for key := range allCommitedDeleteKeys {
 			value, err := db.GetKV([]byte(key))
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 			assert.Nil(t, value, "deleted key value should be nil %s", key)
 		}
 	})

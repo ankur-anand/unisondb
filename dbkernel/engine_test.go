@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
-	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/memtable"
+	"github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"

@@ -3,7 +3,7 @@ package internal
 import (
 	"io"
 
-	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
+	"github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 )
 
