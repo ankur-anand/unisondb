@@ -15,10 +15,10 @@ import (
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/memtable"
 	"github.com/ankur-anand/unisondb/pkg/kvdrivers"
+	"github.com/ankur-anand/unisondb/pkg/umetrics"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"
-	"github.com/hashicorp/go-metrics"
 	"github.com/stretchr/testify/assert"
 	"go.etcd.io/bbolt"
 )
@@ -669,16 +669,15 @@ func Test_ASyncFSync_Coalescing(t *testing.T) {
 	config.ArenaSize = 1 << 20
 
 	initMonotonic(t.Context())
-	label := []metrics.Label{{Name: "namespace", Value: namespace}}
 	signal := make(chan struct{}, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	engine := &Engine{
 		namespace:       namespace,
 		config:          config,
 		wg:              &sync.WaitGroup{},
-		metricsLabel:    label,
 		flushReqSignal:  signal,
 		pendingMetadata: &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
+		taggedScope:     umetrics.AutoScope(),
 		ctx:             ctx,
 		cancel:          cancel,
 		callback:        func() {},
@@ -752,14 +751,13 @@ func Test_WalSyncer_Sync(t *testing.T) {
 	config.ArenaSize = 1 << 20
 
 	initMonotonic(t.Context())
-	label := []metrics.Label{{Name: "namespace", Value: namespace}}
+
 	signal := make(chan struct{}, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	engine := &Engine{
 		namespace:       namespace,
 		config:          config,
 		wg:              &sync.WaitGroup{},
-		metricsLabel:    label,
 		flushReqSignal:  signal,
 		pendingMetadata: &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
 		ctx:             ctx,
@@ -876,16 +874,17 @@ func TestBtreeSyncInterval(t *testing.T) {
 	config.ArenaSize = 1 << 20
 
 	initMonotonic(t.Context())
-	label := []metrics.Label{{Name: "namespace", Value: namespace}}
+
 	signal := make(chan struct{}, 2)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	mt := &mockedTree{}
 
 	engine := &Engine{
-		namespace:                 namespace,
-		config:                    config,
-		wg:                        &sync.WaitGroup{},
-		metricsLabel:              label,
+		namespace: namespace,
+		config:    config,
+		wg:        &sync.WaitGroup{},
+
+		taggedScope:               umetrics.AutoScope(),
 		flushReqSignal:            signal,
 		pendingMetadata:           &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
 		ctx:                       ctx,

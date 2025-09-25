@@ -5,13 +5,13 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/uber-go/tally/v4"
 )
 
 var (
@@ -19,18 +19,25 @@ var (
 	ErrInvalidOffset = errors.New("appendLog: offset does not match record")
 )
 
-var (
-	replicationPhysicalLatency = promauto.NewHistogramVec(
-		prometheus.HistogramOpts{
-			Namespace: "unisondb",
-			Subsystem: "dbkernel",
-			Name:      "replication_latency_physical_ms",
-			Help:      "Physical replication latency in milliseconds.",
-			Buckets:   prometheus.ExponentialBuckets(1, 2, 15),
-		},
-		[]string{"namespace"},
-	)
-)
+const mReplicationLatencySeconds = "replication_latency_physical_seconds"
+
+var replicationLatencyBuckets = tally.DurationBuckets{
+	1 * time.Millisecond,
+	2 * time.Millisecond,
+	5 * time.Millisecond,
+	10 * time.Millisecond,
+	20 * time.Millisecond,
+	50 * time.Millisecond,
+	100 * time.Millisecond,
+	200 * time.Millisecond,
+	500 * time.Millisecond,
+	1 * time.Second,
+	2 * time.Second,
+	5 * time.Second,
+	10 * time.Second,
+	30 * time.Second,
+	1 * time.Minute,
+}
 
 // ReplicaWALHandler processes and applies incoming WAL records during replication.
 type ReplicaWALHandler struct {
@@ -95,10 +102,15 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 	// measure physical latency
 	remoteHLC := decoded.Hlc()
 	nowMs := HLCNow()
-	physicalLatencyMs := nowMs - remoteHLC
+	var physicalLatencyMs uint64
+	if nowMs >= remoteHLC {
+		physicalLatencyMs = nowMs - remoteHLC
+	} else {
+		physicalLatencyMs = 0
+	}
 
-	namespace := wh.engine.namespace
-	replicationPhysicalLatency.WithLabelValues(namespace).Observe(float64(physicalLatencyMs))
+	latency := time.Duration(physicalLatencyMs) * time.Millisecond
+	wh.engine.taggedScope.Histogram(mReplicationLatencySeconds, replicationLatencyBuckets).RecordDuration(latency)
 
 	slog.Debug("[dbkernel]",
 		slog.String("message", "Measured replication apply latency"),

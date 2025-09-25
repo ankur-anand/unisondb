@@ -16,26 +16,43 @@ import (
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/dustin/go-humanize"
-	"github.com/hashicorp/go-metrics"
+	"github.com/uber-go/tally/v4"
 )
 
 var (
-	mKeyPutTotal           = append(packageKey, "put", "total")
-	mKeyGetTotal           = append(packageKey, "get", "total")
-	mKeyDeleteTotal        = append(packageKey, "delete", "total")
-	mKeyPutDuration        = append(packageKey, "put", "durations", "seconds")
-	mKeyGetDuration        = append(packageKey, "get", "durations", "seconds")
-	mKeyDeleteDuration     = append(packageKey, "delete", "durations", "seconds")
-	mKeySnapshotTotal      = append(packageKey, "snapshot", "total")
-	mKeySnapshotDuration   = append(packageKey, "snapshot", "durations", "seconds")
-	mKeySnapshotBytesTotal = append(packageKey, "snapshot", "bytes", "total")
+	mRequestsTotal         = "requests_total"
+	mRequestLatencySeconds = "request_latency_seconds"
+	mSnapshotBytes         = "snapshot_bytes"
 
-	mKeyRowSetTotal       = append(packageKey, "row", "put", "total")
-	mKeyRowGetTotal       = append(packageKey, "row", "get", "total")
-	mKeyRowDeleteTotal    = append(packageKey, "row", "delete", "total")
-	mKeyRowSetDuration    = append(packageKey, "row", "put", "durations", "seconds")
-	mKeyRowGetDuration    = append(packageKey, "row", "get", "durations", "seconds")
-	mKeyRowDeleteDuration = append(packageKey, "row", "delete", "durations", "seconds")
+	kvPutSurface = map[string]string{"surface": "kv", "op": "put"}
+	kvGetSurface = map[string]string{"surface": "kv", "op": "get"}
+	kvDelSurface = map[string]string{"surface": "kv", "op": "delete"}
+
+	wideColumnPutSurface = map[string]string{"surface": "widecolumn", "op": "put"}
+	wideColumnGetSurface = map[string]string{"surface": "widecolumn", "op": "get"}
+	wideColumnDelSurface = map[string]string{"surface": "widecolumn", "op": "delete"}
+
+	lobSurface = map[string]string{"surface": "lob", "op": "get"}
+
+	snapshotSurface = map[string]string{"surface": "snapshot", "op": "create"}
+)
+
+var (
+	snapshotBuckets = tally.DurationBuckets{
+		500 * time.Millisecond,
+		1 * time.Second,
+		2 * time.Second,
+		5 * time.Second,
+		10 * time.Second,
+		30 * time.Second,
+		1 * time.Minute,
+		2 * time.Minute,
+		5 * time.Minute,
+		10 * time.Minute,
+		20 * time.Minute,
+		30 * time.Minute,
+		1 * time.Hour,
+	}
 )
 
 // Offset represents the offset in the wal.
@@ -81,10 +98,12 @@ func (e *Engine) BtreeSnapshot(w io.Writer) (int64, error) {
 
 	startTime := time.Now()
 	cw := &countingWriter{w: w}
-	metrics.IncrCounterWithLabels(mKeySnapshotTotal, 1, e.metricsLabel)
+	snapScope := e.taggedScope.Tagged(snapshotSurface)
+	snapScope.Counter(mRequestsTotal).Inc(1)
+
 	defer func() {
-		metrics.MeasureSinceWithLabels(mKeySnapshotDuration, startTime, e.metricsLabel)
-		metrics.IncrCounterWithLabels(mKeySnapshotBytesTotal, float32(cw.count), e.metricsLabel)
+		snapScope.Histogram(mRequestLatencySeconds, snapshotBuckets).RecordDuration(time.Since(startTime))
+		snapScope.Counter(mSnapshotBytes).Inc(cw.count)
 	}()
 
 	err := e.dataStore.Snapshot(cw)
@@ -158,11 +177,11 @@ func (e *Engine) PutKV(key, value []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	metrics.IncrCounterWithLabels(mKeyPutTotal, 1, e.metricsLabel)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mKeyPutDuration, startTime, e.metricsLabel)
-	}()
+	putScope := e.taggedScope.Tagged(kvPutSurface)
+	putScope.Counter(mRequestsTotal).Inc(1)
+
+	start := putScope.Timer(mRequestLatencySeconds).Start()
+	defer start.Stop()
 
 	return e.persistKeyValue([][]byte{key}, [][]byte{value}, logrecord.LogOperationTypeInsert)
 }
@@ -172,11 +191,12 @@ func (e *Engine) BatchPutKV(key, value [][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	metrics.IncrCounterWithLabels(mKeyPutTotal, float32(len(key)), e.metricsLabel)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mKeyPutDuration, startTime, e.metricsLabel)
-	}()
+	putScope := e.taggedScope.Tagged(kvPutSurface)
+	putScope.Counter(mRequestsTotal).Inc(int64(len(key)))
+
+	start := putScope.Timer(mRequestLatencySeconds).Start()
+	defer start.Stop()
+
 	return e.persistKeyValue(key, value, logrecord.LogOperationTypeInsert)
 }
 
@@ -186,11 +206,11 @@ func (e *Engine) DeleteKV(key []byte) error {
 		return ErrInCloseProcess
 	}
 
-	metrics.IncrCounterWithLabels(mKeyDeleteTotal, 1, e.metricsLabel)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mKeyDeleteDuration, startTime, e.metricsLabel)
-	}()
+	deleteScope := e.taggedScope.Tagged(kvDelSurface)
+	deleteScope.Counter(mRequestsTotal).Inc(1)
+
+	timer := deleteScope.Timer(mRequestLatencySeconds).Start()
+	defer timer.Stop()
 
 	return e.persistKeyValue([][]byte{key}, nil, logrecord.LogOperationTypeDelete)
 }
@@ -201,11 +221,11 @@ func (e *Engine) BatchDeleteKV(keys [][]byte) error {
 		return ErrInCloseProcess
 	}
 
-	metrics.IncrCounterWithLabels(mKeyDeleteTotal, float32(len(keys)), e.metricsLabel)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mKeyDeleteDuration, startTime, e.metricsLabel)
-	}()
+	deleteScope := e.taggedScope.Tagged(kvDelSurface)
+	deleteScope.Counter(mRequestsTotal).Inc(int64(len(keys)))
+
+	timer := deleteScope.Timer(mRequestLatencySeconds).Start()
+	defer timer.Stop()
 
 	return e.persistKeyValue(keys, nil, logrecord.LogOperationTypeDelete)
 }
@@ -251,12 +271,11 @@ func (e *Engine) GetKV(key []byte) ([]byte, error) {
 		return nil, ErrInCloseProcess
 	}
 
-	metrics.IncrCounterWithLabels(mKeyGetTotal, 1, e.metricsLabel)
-	startTime := time.Now()
+	getScope := e.taggedScope.Tagged(kvGetSurface)
+	getScope.Counter(mRequestsTotal).Inc(1)
 
-	defer func() {
-		metrics.MeasureSinceWithLabels(mKeyGetDuration, startTime, e.metricsLabel)
-	}()
+	timer := getScope.Timer(mRequestLatencySeconds).Start()
+	defer timer.Stop()
 
 	checkFunc := func() (y.ValueStruct, error) {
 		// Retrieve entry from MemTable
@@ -315,11 +334,11 @@ func (e *Engine) PutColumnsForRow(rowKey []byte, columnEntries map[string][]byte
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	metrics.IncrCounterWithLabels(mKeyRowSetTotal, 1, e.metricsLabel)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mKeyRowSetDuration, startTime, e.metricsLabel)
-	}()
+	rowSetScope := e.taggedScope.Tagged(wideColumnPutSurface)
+	rowSetScope.Counter(mRequestsTotal).Inc(1)
+
+	timer := rowSetScope.Timer(mRequestLatencySeconds).Start()
+	defer timer.Stop()
 
 	columnsEntries := []map[string][]byte{columnEntries}
 	return e.persistRowColumnAction(logrecord.LogOperationTypeInsert, [][]byte{rowKey}, columnsEntries)
@@ -329,11 +348,12 @@ func (e *Engine) PutColumnsForRows(rowKeys [][]byte, columnEntriesPerRow []map[s
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	metrics.IncrCounterWithLabels(mKeyRowSetTotal, float32(len(rowKeys)), e.metricsLabel)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mKeyRowSetDuration, startTime, e.metricsLabel)
-	}()
+	rowSetScope := e.taggedScope.Tagged(wideColumnPutSurface)
+	rowSetScope.Counter(mRequestsTotal).Inc(int64(len(rowKeys)))
+
+	timer := rowSetScope.Timer(mRequestLatencySeconds).Start()
+	defer timer.Stop()
+
 	return e.persistRowColumnAction(logrecord.LogOperationTypeInsert, rowKeys, columnEntriesPerRow)
 }
 
@@ -342,11 +362,12 @@ func (e *Engine) DeleteColumnsForRow(rowKey []byte, columnEntries map[string][]b
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	metrics.IncrCounterWithLabels(mKeyRowDeleteTotal, 1, e.metricsLabel)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mKeyRowDeleteDuration, startTime, e.metricsLabel)
-	}()
+	rowDeleteScope := e.taggedScope.Tagged(wideColumnDelSurface)
+	rowDeleteScope.Counter(mRequestsTotal).Inc(1)
+
+	timer := rowDeleteScope.Timer(mRequestLatencySeconds).Start()
+	defer timer.Stop()
+
 	columnsEntries := make([]map[string][]byte, 0, 1)
 	columnsEntries = append(columnsEntries, columnEntries)
 	return e.persistRowColumnAction(logrecord.LogOperationTypeDelete, [][]byte{rowKey}, columnsEntries)
@@ -357,11 +378,12 @@ func (e *Engine) DeleteColumnsForRows(rowKeys [][]byte, columnEntries []map[stri
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	metrics.IncrCounterWithLabels(mKeyRowDeleteTotal, float32(len(rowKeys)), e.metricsLabel)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mKeyRowDeleteDuration, startTime, e.metricsLabel)
-	}()
+	rowDeleteScope := e.taggedScope.Tagged(wideColumnDelSurface)
+	rowDeleteScope.Counter(mRequestsTotal).Inc(int64(len(rowKeys)))
+
+	timer := rowDeleteScope.Timer(mRequestLatencySeconds).Start()
+	defer timer.Stop()
+
 	return e.persistRowColumnAction(logrecord.LogOperationTypeDelete, rowKeys, columnEntries)
 }
 
@@ -370,11 +392,11 @@ func (e *Engine) DeleteRow(rowKey []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	metrics.IncrCounterWithLabels(mKeyRowDeleteTotal, 1, e.metricsLabel)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mKeyRowDeleteDuration, startTime, e.metricsLabel)
-	}()
+	rowDeleteScope := e.taggedScope.Tagged(wideColumnDelSurface)
+	rowDeleteScope.Counter(mRequestsTotal).Inc(1)
+
+	timer := rowDeleteScope.Timer(mRequestLatencySeconds).Start()
+	defer timer.Stop()
 
 	return e.persistRowColumnAction(logrecord.LogOperationTypeDeleteRowByKey, [][]byte{[]byte(rowKey)}, nil)
 }
@@ -383,11 +405,11 @@ func (e *Engine) BatchDeleteRows(rowKeys [][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	metrics.IncrCounterWithLabels(mKeyRowDeleteTotal, float32(len(rowKeys)), e.metricsLabel)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mKeyRowDeleteDuration, startTime, e.metricsLabel)
-	}()
+	rowDeleteScope := e.taggedScope.Tagged(wideColumnDelSurface)
+	rowDeleteScope.Counter(mRequestsTotal).Inc(int64(len(rowKeys)))
+
+	timer := rowDeleteScope.Timer(mRequestLatencySeconds).Start()
+	defer timer.Stop()
 
 	return e.persistRowColumnAction(logrecord.LogOperationTypeDeleteRowByKey, rowKeys, nil)
 }
@@ -398,11 +420,11 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 	if e.shutdown.Load() {
 		return nil, ErrInCloseProcess
 	}
-	metrics.IncrCounterWithLabels(mKeyRowGetTotal, 1, e.metricsLabel)
-	startTime := time.Now()
-	defer func() {
-		metrics.MeasureSinceWithLabels(mKeyRowGetDuration, startTime, e.metricsLabel)
-	}()
+	rowGetScope := e.taggedScope.Tagged(wideColumnGetSurface)
+	rowGetScope.Counter(mRequestsTotal).Inc(1)
+
+	timer := rowGetScope.Timer(mRequestLatencySeconds).Start()
+	defer timer.Stop()
 
 	key := []byte(rowKey)
 
@@ -566,6 +588,12 @@ func (e *Engine) GetLOB(key []byte) ([]byte, error) {
 	if e.shutdown.Load() {
 		return nil, ErrInCloseProcess
 	}
+
+	lobGetScope := e.taggedScope.Tagged(lobSurface)
+	lobGetScope.Counter(mRequestsTotal).Inc(1)
+
+	timer := lobGetScope.Timer(mRequestLatencySeconds).Start()
+	defer timer.Stop()
 
 	e.mu.RLock()
 	inBloom := e.bloom.Test(key)

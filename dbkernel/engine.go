@@ -21,12 +21,13 @@ import (
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	kvdrivers2 "github.com/ankur-anand/unisondb/pkg/kvdrivers"
+	"github.com/ankur-anand/unisondb/pkg/umetrics"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/dustin/go-humanize"
 	"github.com/gofrs/flock"
-	"github.com/hashicorp/go-metrics"
+	"github.com/uber-go/tally/v4"
 )
 
 const (
@@ -34,18 +35,70 @@ const (
 )
 
 var (
-	mKeyPendingFsyncTotal     = append(packageKey, "btree", "fsync", "pending", "total")
-	mKeyFSyncTotal            = append(packageKey, "btree", "fsync", "total")
-	mKeyFSyncErrorsTotal      = append(packageKey, "btree", "fsync", "errors", "total")
-	mKeyFSyncDurations        = append(packageKey, "btree", "fsync", "durations", "seconds")
-	mKeyMemTableRotationTotal = append(packageKey, "active", "mem", "table", "rotation", "total")
+	mKeyPendingFsyncTotal     = "btree_fsync_pending_total"
+	mKeyFSyncTotal            = "btree_fsync_total"
+	mKeyFSyncErrorsTotal      = "btree_fsync_errors_total"
+	mKeyFSyncDurations        = "btree_fsync_durations_seconds"
+	mKeyMemTableRotationTotal = "active_mem_table_rotation_total"
 
-	mKeySealedMemTableTotal       = append(packageKey, "sealed", "mem", "table", "pending", "total")
-	mKeySealedMemFlushTotal       = append(packageKey, "sealed", "mem", "table", "flush", "total")
-	mKeySealedMemFlushDuration    = append(packageKey, "sealed", "mem", "table", "flush", "durations", "seconds")
-	mKeySealedMemFlushRecordTotal = append(packageKey, "sealed", "mem", "table", "flush", "record", "total")
-	mKeyWalRecoveryDuration       = append(packageKey, "wal", "recovery", "durations", "seconds")
-	mKeyWalRecoveryRecordTotal    = append(packageKey, "wal", "recovery", "record", "total")
+	mKeySealedMemTableTotal       = "sealed_mem_table_pending_total"
+	mKeySealedMemFlushTotal       = "sealed_mem_table_flush_total"
+	mKeySealedMemFlushDuration    = "sealed_mem_table_flush_durations_seconds"
+	mKeySealedMemFlushRecordTotal = "sealed_mem_table_flush_record_total"
+
+	mKeyWalRecoveryDuration    = "wal_recovery_durations_seconds"
+	mKeyWalRecoveryRecordTotal = "wal_recovery_record_total"
+)
+
+var (
+	recoveryHistBucket = tally.DurationBuckets{
+		500 * time.Millisecond,
+		1 * time.Second,
+		2 * time.Second,
+		5 * time.Second,
+		10 * time.Second,
+		30 * time.Second,
+		1 * time.Minute,
+		2 * time.Minute,
+		5 * time.Minute,
+		10 * time.Minute,
+		30 * time.Minute,
+		1 * time.Hour,
+	}
+
+	memFlushHistBuckets = tally.DurationBuckets{
+		5 * time.Millisecond,
+		10 * time.Millisecond,
+		20 * time.Millisecond,
+		50 * time.Millisecond,
+		100 * time.Millisecond,
+		200 * time.Millisecond,
+		500 * time.Millisecond,
+		1 * time.Second,
+		2 * time.Second,
+		5 * time.Second,
+		10 * time.Second,
+		30 * time.Second,
+		1 * time.Minute,
+		5 * time.Minute,
+	}
+
+	fSyncHistBuckets = tally.DurationBuckets{
+		1 * time.Millisecond,
+		2 * time.Millisecond,
+		5 * time.Millisecond,
+		10 * time.Millisecond,
+		20 * time.Millisecond,
+		50 * time.Millisecond,
+		100 * time.Millisecond,
+		200 * time.Millisecond,
+		500 * time.Millisecond,
+		1 * time.Second,
+		2 * time.Second,
+		5 * time.Second,
+		10 * time.Second,
+		30 * time.Second,
+	}
 )
 
 var (
@@ -55,16 +108,16 @@ var (
 
 // Engine manages WAL, MemTable (SkipList), and BtreeStore for a given namespace.
 type Engine struct {
-	mu                    sync.RWMutex
-	writeSeenCounter      atomic.Uint64
-	opsFlushedCounter     atomic.Uint64
-	currentOffset         atomic.Pointer[wal.Offset]
-	namespace             string
-	dataStore             internal.BTreeStore
-	walIO                 *wal.WalIO
-	walSyncer             walSyncer
-	config                *EngineConfig
-	metricsLabel          []metrics.Label
+	mu                sync.RWMutex
+	writeSeenCounter  atomic.Uint64
+	opsFlushedCounter atomic.Uint64
+	currentOffset     atomic.Pointer[wal.Offset]
+	namespace         string
+	dataStore         internal.BTreeStore
+	walIO             *wal.WalIO
+	walSyncer         walSyncer
+	config            *EngineConfig
+
 	fileLock              *flock.Flock
 	wg                    *sync.WaitGroup
 	bloom                 *bloom.BloomFilter
@@ -95,20 +148,24 @@ type Engine struct {
 	coalesceDuration time.Duration
 	notifierMu       sync.RWMutex
 	appendNotify     chan struct{}
+
+	taggedScope umetrics.Scope
 }
 
 // NewStorageEngine initializes WAL, MemTable, and BtreeStore and returns an initialized Engine for a namespace.
 func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, error) {
-	label := []metrics.Label{{Name: "namespace", Value: namespace}}
 	signal := make(chan struct{}, 2)
 	btreeFlushInterval, btreeFlushIntervalEnabled := conf.effectiveBTreeFlushInterval()
 	ctx, cancel := context.WithCancel(context.Background())
 	initMonotonic(ctx)
+	taggedScope := umetrics.AutoScope().Tagged(map[string]string{
+		"namespace": namespace,
+	})
+
 	engine := &Engine{
 		namespace:                 namespace,
 		config:                    conf,
 		wg:                        &sync.WaitGroup{},
-		metricsLabel:              label,
 		flushReqSignal:            signal,
 		pendingMetadata:           &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
 		ctx:                       ctx,
@@ -118,6 +175,7 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		btreeFlushInterval:        btreeFlushInterval,
 		btreeFlushIntervalEnabled: btreeFlushIntervalEnabled,
 		disableEntryTypeCheck:     conf.DisableEntryTypeCheck,
+		taggedScope:               taggedScope,
 	}
 
 	if err := engine.initStorage(dataDir, namespace, conf); err != nil {
@@ -303,8 +361,8 @@ func (e *Engine) recoverWAL() error {
 			slog.Int("record_count", walRecovery.RecoveredCount()),
 		),
 	)
-	metrics.IncrCounterWithLabels(mKeyWalRecoveryRecordTotal, float32(walRecovery.RecoveredCount()), e.metricsLabel)
-	metrics.MeasureSinceWithLabels(mKeyWalRecoveryDuration, startTime, e.metricsLabel)
+	e.taggedScope.Counter(mKeyWalRecoveryRecordTotal).Inc(int64(walRecovery.RecoveredCount()))
+	e.taggedScope.Histogram(mKeyWalRecoveryDuration, recoveryHistBucket).RecordDuration(time.Since(startTime))
 
 	e.writeSeenCounter.Add(uint64(walRecovery.RecoveredCount()))
 	e.recoveredEntriesCount = walRecovery.RecoveredCount()
@@ -524,7 +582,7 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct) error {
 	err = e.activeMemTable.Put(key, v)
 	if err != nil {
 		if errors.Is(err, memtable.ErrArenaSizeWillExceed) {
-			metrics.IncrCounterWithLabels(mKeyMemTableRotationTotal, 1, e.metricsLabel)
+			e.taggedScope.Counter(mKeyMemTableRotationTotal).Inc(1)
 			e.rotateMemTable()
 			err = e.activeMemTable.Put(key, v)
 			// :(
@@ -659,7 +717,7 @@ func (e *Engine) handleFlush(ctx context.Context) {
 	}
 	var mt *memtable.MemTable
 	e.mu.Lock()
-	metrics.SetGaugeWithLabels(mKeySealedMemTableTotal, float32(len(e.sealedMemTables)), e.metricsLabel)
+	e.taggedScope.Gauge(mKeySealedMemTableTotal).Update(float64(len(e.sealedMemTables)))
 	if len(e.sealedMemTables) > 0 {
 		mt = e.sealedMemTables[0]
 	}
@@ -685,9 +743,9 @@ func (e *Engine) handleFlush(ctx context.Context) {
 		e.sealedMemTables = e.sealedMemTables[1:]
 		e.mu.Unlock()
 
-		metrics.MeasureSinceWithLabels(mKeySealedMemFlushDuration, startTime, e.metricsLabel)
-		metrics.IncrCounterWithLabels(mKeySealedMemFlushRecordTotal, float32(recordProcessed), e.metricsLabel)
-		metrics.IncrCounterWithLabels(mKeySealedMemFlushTotal, 1, e.metricsLabel)
+		e.taggedScope.Histogram(mKeySealedMemFlushDuration, memFlushHistBuckets).RecordDuration(time.Since(startTime))
+		e.taggedScope.Counter(mKeySealedMemFlushRecordTotal).Inc(int64(recordProcessed))
+		e.taggedScope.Counter(mKeySealedMemFlushTotal).Inc(1)
 
 		if !e.btreeFlushIntervalEnabled {
 			select {
@@ -801,9 +859,11 @@ func (e *Engine) fSyncStore() {
 	}
 	fm := all[len(all)-1]
 
-	metrics.IncrCounterWithLabels(mKeyPendingFsyncTotal, float32(n), e.metricsLabel)
+	e.taggedScope.Counter(mKeyPendingFsyncTotal).Inc(int64(n))
+
 	startTime := time.Now()
-	metrics.IncrCounterWithLabels(mKeyFSyncTotal, 1, e.metricsLabel)
+	e.taggedScope.Counter(mKeyFSyncTotal).Inc(1)
+
 	err := internal.SaveMetadata(e.dataStore, fm.metadata.Pos, fm.metadata.RecordProcessed)
 	if err != nil {
 		log.Fatal("[dbkernel] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
@@ -815,13 +875,14 @@ func (e *Engine) fSyncStore() {
 
 	err = e.dataStore.FSync()
 	if err != nil {
-		metrics.IncrCounterWithLabels(mKeyFSyncErrorsTotal, 1, e.metricsLabel)
+		e.taggedScope.Counter(mKeyFSyncErrorsTotal).Inc(1)
 		// There is no way to recover from the underlying Fsync Issue.
 		// https://archive.fosdem.org/2019/schedule/event/postgresql_fsync/
 		// How is it possible that PostgreSQL used fsync incorrectly for 20 years.
 		log.Fatalln(fmt.Errorf("[dbkernel]: FSync operation failed: %w", err))
 	}
-	metrics.MeasureSinceWithLabels(mKeyFSyncDurations, startTime, e.metricsLabel)
+
+	e.taggedScope.Histogram(mKeyFSyncDurations, fSyncHistBuckets).RecordDuration(time.Since(startTime))
 
 	slog.Debug("[dbkernel]",
 		slog.String("message", "Flushed BTree to disk via FSync"),

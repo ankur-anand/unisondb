@@ -2,18 +2,21 @@ package dbkernel
 
 import (
 	"context"
+	"sync"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/ankur-anand/unisondb/pkg/umetrics"
 )
 
-var clockDriftGauge = promauto.NewGauge(prometheus.GaugeOpts{
-	Namespace: "unisondb",
-	Subsystem: "dbkernel",
-	Name:      "monotonic_clock_drift_seconds",
-	Help:      "Difference between wall clock and monotonic-derived time since process start.",
-})
+const (
+	mClockDriftSeconds   = "monotonic_clock_drift_seconds"
+	driftReportThreshold = 5 * time.Millisecond
+)
+
+var (
+	runtimeScope   = umetrics.AutoScope()
+	startDriftOnce sync.Once
+)
 
 // wall clock can jump forward or backward by the ntp.
 // monotonic time don't.
@@ -32,9 +35,11 @@ func StartClockDriftMonitor(ctx context.Context, interval time.Duration) {
 			select {
 			case <-ticker.C:
 				drift := measureClockDrift()
-				// report if drift is beyond ±1ms
-				if drift < -1*time.Millisecond || drift > 1*time.Millisecond {
-					clockDriftGauge.Set(drift.Seconds())
+				if drift < 0 {
+					drift = -drift
+				}
+				if drift > driftReportThreshold {
+					runtimeScope.Gauge(mClockDriftSeconds).Update(drift.Seconds())
 				}
 			case <-ctx.Done():
 				return
@@ -58,5 +63,7 @@ func HLCNow() uint64 {
 }
 
 func initMonotonic(ctx context.Context) {
-	StartClockDriftMonitor(ctx, 1*time.Second)
+	startDriftOnce.Do(func() {
+		StartClockDriftMonitor(ctx, time.Second)
+	})
 }
