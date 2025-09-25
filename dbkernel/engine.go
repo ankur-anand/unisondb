@@ -16,11 +16,11 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
-	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/memtable"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/recovery"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
+	kvdrivers2 "github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/dgraph-io/badger/v4/y"
@@ -202,7 +202,7 @@ func (e *Engine) initKVDriver(dbFile string, conf *EngineConfig) error {
 	var bTreeStore internal.BTreeStore
 	switch conf.DBEngine {
 	case BoltDBEngine:
-		db, err := kvdrivers.NewBoltdb(dbFile, conf.BtreeConfig)
+		db, err := kvdrivers2.NewBoltdb(dbFile, conf.BtreeConfig)
 		if err != nil {
 			return err
 		}
@@ -211,7 +211,7 @@ func (e *Engine) initKVDriver(dbFile string, conf *EngineConfig) error {
 			return db.NewTxnQueue(maxBatchSize)
 		}
 	case LMDBEngine:
-		db, err := kvdrivers.NewLmdb(dbFile, conf.BtreeConfig)
+		db, err := kvdrivers2.NewLmdb(dbFile, conf.BtreeConfig)
 		if err != nil {
 			return err
 		}
@@ -241,11 +241,11 @@ func tryFileLock(fileLock *flock.Flock) error {
 // loadMetaValues loads meta value that the engine stores.
 func (e *Engine) loadMetaValues() error {
 	data, err := e.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
-	if err != nil && !errors.Is(err, kvdrivers.ErrKeyNotFound) {
+	if err != nil && !errors.Is(err, kvdrivers2.ErrKeyNotFound) {
 		return err
 	}
 	// there is no value even for bloom filter.
-	if errors.Is(err, kvdrivers.ErrKeyNotFound) {
+	if errors.Is(err, kvdrivers2.ErrKeyNotFound) {
 		return nil
 	}
 	metadata := internal.UnmarshalMetadata(data)
@@ -282,7 +282,7 @@ func (e *Engine) loadBloomFilter() error {
 // recoverWAL recovers the wal if any pending writes are still not visible.
 func (e *Engine) recoverWAL() error {
 	checkpoint, err := e.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
-	if err != nil && !errors.Is(err, kvdrivers.ErrKeyNotFound) {
+	if err != nil && !errors.Is(err, kvdrivers2.ErrKeyNotFound) {
 		return fmt.Errorf("recover WAL failed %w", err)
 	}
 

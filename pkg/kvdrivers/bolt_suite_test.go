@@ -4,14 +4,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
+	kvdrivers2 "github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestBolt_Suite(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "bolt_test.bolt.db")
-	store, err := kvdrivers.NewBoltdb(path, kvdrivers.Config{
+	store, err := kvdrivers2.NewBoltdb(path, kvdrivers2.Config{
 		Namespace: "test",
 		NoSync:    true,
 	})
@@ -19,8 +19,8 @@ func TestBolt_Suite(t *testing.T) {
 	assert.NoError(t, err, "failed to create boltdb")
 	assert.NotNil(t, store, "store should not be nil")
 
-	boltConstructor := func(path string, config kvdrivers.Config) (bTreeStore, error) {
-		return kvdrivers.NewBoltdb(path, config)
+	boltConstructor := func(path string, config kvdrivers2.Config) (bTreeStore, error) {
+		return kvdrivers2.NewBoltdb(path, config)
 	}
 
 	ts := &testSuite{

@@ -6,14 +6,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
+	kvdrivers2 "github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestLMDB_Suite(t *testing.T) {
 	tempDir := t.TempDir()
 	path := filepath.Join(tempDir, "lmdb_test.lmdb")
-	store, err := kvdrivers.NewLmdb(path, kvdrivers.Config{
+	store, err := kvdrivers2.NewLmdb(path, kvdrivers2.Config{
 		Namespace: "test",
 		NoSync:    false,
 		MmapSize:  1 << 30,
@@ -24,8 +24,8 @@ func TestLMDB_Suite(t *testing.T) {
 	assert.NoError(t, err, "failed to create lmdb")
 	assert.NotNil(t, store, "store should not be nil")
 
-	lmdbConstructor := func(path string, config kvdrivers.Config) (bTreeStore, error) {
-		return kvdrivers.NewLmdb(path, config)
+	lmdbConstructor := func(path string, config kvdrivers2.Config) (bTreeStore, error) {
+		return kvdrivers2.NewLmdb(path, config)
 	}
 
 	ts := &testSuite{
@@ -48,15 +48,15 @@ func TestLMDB_Suite(t *testing.T) {
 	assert.NoError(t, store.Close(), "failed to close store")
 }
 
-func openLMDBTemp(t *testing.T) (*kvdrivers.LmdbEmbed, string) {
+func openLMDBTemp(t *testing.T) (*kvdrivers2.LmdbEmbed, string) {
 	t.Helper()
 	dir := t.TempDir()
-	conf := kvdrivers.Config{
+	conf := kvdrivers2.Config{
 		Namespace: "test",
 		NoSync:    true,
 		MmapSize:  1 << 30,
 	}
-	db, err := kvdrivers.NewLmdb(dir, conf)
+	db, err := kvdrivers2.NewLmdb(dir, conf)
 	assert.NoError(t, err)
 	return db, dir
 }
@@ -106,7 +106,7 @@ func TestLMDB_Restore_FromBufferAndFileSnapshots(t *testing.T) {
 	assert.NoError(t, target.Restore(bytes.NewReader(buf.Bytes())))
 
 	_, err = target.GetKV([]byte("old_k"))
-	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+	assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 	got, err := target.GetKV([]byte("new_k"))
 	assert.NoError(t, err)
 	assert.Equal(t, []byte("new_v"), got)

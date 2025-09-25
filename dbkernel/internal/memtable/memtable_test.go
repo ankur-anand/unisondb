@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
-	"github.com/ankur-anand/unisondb/dbkernel/internal/kvdrivers"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
+	kvdrivers2 "github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/dgraph-io/badger/v4/y"
@@ -29,7 +29,7 @@ func setupMemTableWithLMDB(t *testing.T, capacity int64) (*MemTable, internal.BT
 
 	dbFile := filepath.Join(dir, "test_flush.db")
 
-	db, err := kvdrivers.NewLmdb(dbFile, kvdrivers.Config{
+	db, err := kvdrivers2.NewLmdb(dbFile, kvdrivers2.Config{
 		Namespace: testNamespace,
 		NoSync:    true,
 		MmapSize:  1 << 30,
@@ -62,7 +62,7 @@ func setupMemTableWithBoltDB(t *testing.T, capacity int64) (*MemTable, internal.
 
 	dbFile := filepath.Join(dir, "test_flush.db")
 
-	db, err := kvdrivers.NewBoltdb(dbFile, kvdrivers.Config{
+	db, err := kvdrivers2.NewBoltdb(dbFile, kvdrivers2.Config{
 		Namespace: testNamespace,
 		NoSync:    true,
 		MmapSize:  1 << 30,
@@ -351,7 +351,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 		for k := range kv {
 			retrievedValue, err := db.GetKV([]byte(k))
 			assert.Nil(t, retrievedValue)
-			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "failed to GetKV")
+			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound, "failed to GetKV")
 		}
 	})
 
@@ -448,7 +448,7 @@ func TestRow_KeysPut_Delete_GetRows_Flush(t *testing.T) {
 	assert.NoError(t, err, "failed to processBatch")
 	assert.Equal(t, count, 52, "expected records to be flushed")
 	_, err = db.ScanRowCells([]byte(randomRow), nil)
-	assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
+	assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 
 	values := mmTable.GetRowYValue([]byte(randomRow))
 	buildColumns = make(map[string][]byte)
