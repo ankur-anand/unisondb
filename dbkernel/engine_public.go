@@ -286,7 +286,7 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	// if the mem table doesn't have this key associated action or log.
 	// directly go to the boltdb to fetch the same.
 	if yValue.Meta == byte(logrecord.LogOperationTypeNoOperation) {
-		return e.dataStore.Get(key)
+		return e.dataStore.GetKV(key)
 	}
 
 	// key deleted
@@ -447,9 +447,14 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 	}
 
 	// get the oldest value from the store.
-	columnsValue, err := e.dataStore.GetRowColumns(key, predicateFunc)
+	columnsValue, err := e.dataStore.ScanRowCells(key, predicateFunc)
 	if err != nil && !errors.Is(err, ErrKeyNotFound) {
 		return nil, err
+	}
+
+	// ensure non-nil map before merging memtable deltas.
+	if columnsValue == nil {
+		columnsValue = make(map[string][]byte)
 	}
 
 	buildColumnMap(columnsValue, vs)

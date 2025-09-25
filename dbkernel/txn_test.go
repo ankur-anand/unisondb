@@ -66,7 +66,7 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 	assert.Equal(t, uint64(1), engine.OpsReceivedCount())
 	// Retrieve value
 	retrievedValue, err := engine.Get(key)
-	assert.NoError(t, err, "Get operation should succeed")
+	assert.NoError(t, err, "GetKV operation should succeed")
 	assert.Equal(t, value, retrievedValue, "Retrieved value should match the inserted value")
 
 	batchKey := []byte(gofakeit.Name())
@@ -103,15 +103,15 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 	// write should not be visible for now.
 	got, err := engine.Get(batchKey)
 	assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Key not Found Error should be present.")
-	assert.Nil(t, got, "Get operation should succeed")
+	assert.Nil(t, got, "GetKV operation should succeed")
 
 	err = txn.Commit()
 	assert.NoError(t, err, "Commit operation should succeed")
 
 	got, err = engine.Get(batchKey)
 
-	assert.NoError(t, err, "Get operation should succeed")
-	assert.NotNil(t, got, "Get operation should succeed")
+	assert.NoError(t, err, "GetKV operation should succeed")
+	assert.NotNil(t, got, "GetKV operation should succeed")
 	assert.Equal(t, got, fullValue.Bytes(), "Retrieved value should match the inserted value")
 }
 
@@ -149,13 +149,13 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 
 			value, err = engine.Get(key)
 			assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Key not Found Error should be present.")
-			assert.Nil(t, value, "Get operation should succeed")
+			assert.Nil(t, value, "GetKV operation should succeed")
 		}
 
 		assert.NoError(t, txn.Commit(), "Commit operation should succeed")
 		for key, value := range kv {
 			receivedValue, err := engine.Get([]byte(key))
-			assert.NoError(t, err, "Get operation should succeed")
+			assert.NoError(t, err, "GetKV operation should succeed")
 			assert.Equal(t, value, receivedValue, "Retrieved value should match the inserted value")
 		}
 	})
@@ -171,7 +171,7 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 			err := txn.AppendKVTxn([]byte(key), nil)
 			assert.NoError(t, err, "Append operation should succeed")
 			value, err := engine.Get([]byte(key))
-			assert.NoError(t, err, "Get operation should succeed")
+			assert.NoError(t, err, "GetKV operation should succeed")
 			assert.Equal(t, kv[key], value, "uncommited delete should not delete the inserted value")
 		}
 
@@ -183,13 +183,13 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 			receivedValue, err := engine.Get([]byte(key))
 			_, ok := deletedKeys[key]
 			if !ok {
-				assert.NoError(t, err, "Get operation should succeed")
+				assert.NoError(t, err, "GetKV operation should succeed")
 				assert.Equal(t, value, receivedValue, "Retrieved value should match the inserted value")
 			}
 
 			if ok {
 				assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Key not Found Error should be present.")
-				assert.Nil(t, receivedValue, "Get operation should succeed")
+				assert.Nil(t, receivedValue, "GetKV operation should succeed")
 			}
 
 		}
@@ -230,7 +230,7 @@ func TestTxn_Interrupted(t *testing.T) {
 
 			value, err = engine.Get(key)
 			assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Key not Found Error should be present.")
-			assert.Nil(t, value, "Get operation should succeed")
+			assert.Nil(t, value, "GetKV operation should succeed")
 			assert.Nil(t, engine.CurrentOffset(), "uncommited should not cause the offset increase")
 		}
 	})
@@ -244,7 +244,7 @@ func TestTxn_Interrupted(t *testing.T) {
 			assert.NoError(t, err, "Append operation should succeed")
 
 			value, err = engine.Get(key)
-			assert.NoError(t, err, "Get operation should succeed")
+			assert.NoError(t, err, "GetKV operation should succeed")
 			assert.Equal(t, value, value, "Retrieved value should match the inserted value")
 		}
 	})
@@ -305,8 +305,8 @@ func Test_RowColumn_Txn(t *testing.T) {
 
 	for rowKey, entries := range rowsEntries {
 		value, err := engine.GetRowColumns(rowKey, nil)
-		assert.NoError(t, err, "Get operation should succeed")
-		assert.Equal(t, entries, value, "Get operation should succeed")
+		assert.NoError(t, err, "GetKV operation should succeed")
+		assert.Equal(t, entries, value, "GetKV operation should succeed")
 	}
 
 	txn2, err := engine.NewTxn(logrecord.LogOperationTypeDelete, logrecord.LogEntryTypeRow)
@@ -322,8 +322,8 @@ func Test_RowColumn_Txn(t *testing.T) {
 	assert.NoError(t, txn2.Commit(), "Commit operation should succeed")
 	for rowKey := range rowsEntries {
 		value, err := engine.GetRowColumns(rowKey, nil)
-		assert.NoError(t, err, "Get operation should succeed")
-		assert.Equal(t, len(value), 0, "Get operation should succeed")
+		assert.NoError(t, err, "GetKV operation should succeed")
+		assert.Equal(t, len(value), 0, "GetKV operation should succeed")
 	}
 
 	txn3, err := engine.NewTxn(logrecord.LogOperationTypeDeleteRowByKey, logrecord.LogEntryTypeRow)
@@ -336,7 +336,7 @@ func Test_RowColumn_Txn(t *testing.T) {
 	assert.NoError(t, txn3.Commit(), "Commit operation should succeed")
 	for rowKey := range rowsEntries {
 		_, err := engine.GetRowColumns(rowKey, nil)
-		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Get operation should succeed")
+		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "GetKV operation should succeed")
 	}
 	assert.Equal(t, txn3.CommitOffset(), engine.CurrentOffset(), "Commit operation should succeed")
 }

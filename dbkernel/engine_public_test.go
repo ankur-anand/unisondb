@@ -59,20 +59,20 @@ func TestPutGet_Delete(t *testing.T) {
 
 	t.Run("get", func(t *testing.T) {
 		retrievedValue, err := engine.Get(key)
-		assert.NoError(t, err, "Get operation should succeed")
+		assert.NoError(t, err, "GetKV operation should succeed")
 		assert.Equal(t, uint64(1), engine.OpsReceivedCount(), "get should not increase ops count")
 		assert.Equal(t, value, retrievedValue, "Retrieved value should match the inserted value")
 	})
 
 	t.Run("delete", func(t *testing.T) {
 		err = engine.Delete(key)
-		assert.NoError(t, err, "Delete operation should succeed")
+		assert.NoError(t, err, "DeleteKV operation should succeed")
 		assert.Equal(t, uint64(2), engine.OpsReceivedCount(), "delete should increase ops count")
 	})
 
 	t.Run("delete_get", func(t *testing.T) {
 		retrievedValue, err := engine.Get(key)
-		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Get operation should succeed")
+		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "GetKV operation should succeed")
 		assert.Nil(t, retrievedValue, "Retrieved value should match the inserted value")
 	})
 }
@@ -683,7 +683,7 @@ func TestEngineBatchKV_APIs(t *testing.T) {
 		}
 
 		err := engine.BatchPut(keys, values)
-		assert.NoError(t, err, "BatchPut operation should succeed")
+		assert.NoError(t, err, "BatchPutKV operation should succeed")
 	})
 
 	t.Run("get_kv", func(t *testing.T) {
@@ -696,7 +696,7 @@ func TestEngineBatchKV_APIs(t *testing.T) {
 
 	t.Run("delete_kv", func(t *testing.T) {
 		err := engine.BatchDelete(keys)
-		assert.NoError(t, err, "BatchDelete operation should succeed")
+		assert.NoError(t, err, "BatchDeleteKV operation should succeed")
 	})
 
 	t.Run("get_kv", func(t *testing.T) {
@@ -731,7 +731,7 @@ func TestEngine_NewReaderWithStart(t *testing.T) {
 		}
 
 		err := engine.BatchPut(keys, values)
-		assert.NoError(t, err, "BatchPut operation should succeed")
+		assert.NoError(t, err, "BatchPutKV operation should succeed")
 	})
 
 	offset := &wal.Offset{SegmentID: 10000}

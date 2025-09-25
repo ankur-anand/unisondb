@@ -165,7 +165,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 }
 
 // AppendColumnTxn appends the Columns update type Txn to wal for the provided rowKey.
-// Update/Delete Ops for column is decided by the Log Operation type.
+// Update/DeleteKV Ops for column is decided by the Log Operation type.
 // Single Txn Cannot contain both update and delete ops.
 // Caller can set the Columns Key to empty value, if deleted needs to be part of same Txn.
 func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) error {

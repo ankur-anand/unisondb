@@ -344,56 +344,6 @@ func (e *Engine) recoverWAL() error {
 	return nil
 }
 
-func (e *Engine) getEntryTypeForKeyFromMemTable(key []byte) (logrecord.LogEntryType, bool) {
-	// fast negative check
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	if !e.bloom.Test(key) {
-		return 0, false
-	}
-
-	valueType, ok := e.activeMemTable.GetEntryTpe(key)
-	if !ok {
-		// first latest value
-		for i := len(e.sealedMemTables) - 1; i >= 0; i-- {
-			if valueType, ok = e.sealedMemTables[i].GetEntryTpe(key); ok {
-				break
-			}
-		}
-	}
-
-	return valueType, ok
-}
-
-func (e *Engine) getEntryTypeForKey(key []byte) (logrecord.LogEntryType, bool) {
-	entryType, err := e.dataStore.GetValueType(key)
-	if err != nil {
-		return 0, false
-	}
-
-	switch entryType {
-	case kvdrivers.KeyValueValueEntry:
-		return logrecord.LogEntryTypeKV, true
-	case kvdrivers.ChunkedValueEntry:
-		return logrecord.LogEntryTypeKV, true
-	case kvdrivers.RowColumnValueEntry:
-		return logrecord.LogEntryTypeRow, true
-	default:
-		return 0, false
-	}
-}
-
-func (e *Engine) getEntryType(key []byte) (logrecord.LogEntryType, bool) {
-	if e.disableEntryTypeCheck {
-		return 0, false
-	}
-	valueType, ok := e.getEntryTypeForKeyFromMemTable(key)
-	if !ok {
-		valueType, ok = e.getEntryTypeForKey(key)
-	}
-	return valueType, ok
-}
-
 // persistKeyValue writes a key-value pair to WAL and MemTable, ensuring durability.
 // multistep process to persist the key-value pair:
 // 1. Encodes the record.
@@ -412,10 +362,6 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 	hintSize := 512
 	checksum := uint32(0)
 	for i, key := range keys {
-		valueType, ok := e.getEntryType(key)
-		if ok && valueType != logrecord.LogEntryTypeKV {
-			return fmt.Errorf("%w: expected KV, found %s", ErrMisMatchKeyType, valueType.String())
-		}
 		var kv []byte
 		switch op {
 		case logrecord.LogOperationTypeDelete:
@@ -476,10 +422,6 @@ func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [
 	hintSize := 512
 	checksum := uint32(0)
 	for i, entry := range rowKeys {
-		valueType, ok := e.getEntryType(entry)
-		if ok && valueType != logrecord.LogEntryTypeRow {
-			return fmt.Errorf("%w: expected Row, found %s", ErrMisMatchKeyType, valueType.String())
-		}
 		var re []byte
 		switch op {
 		case logrecord.LogOperationTypeDeleteRowByKey:
