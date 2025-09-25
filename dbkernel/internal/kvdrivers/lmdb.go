@@ -685,7 +685,6 @@ func (l *LmdbEmbed) writeSnapshotToTemp(r io.Reader) (string, error) {
 }
 
 func (l *LmdbEmbed) swapInSnapshot(tmpPath string) error {
-
 	if err := l.env.Close(); err != nil {
 		return fmt.Errorf("restore: close env: %w", err)
 	}
