@@ -166,7 +166,7 @@ func TestRelayer_StartRelay(t *testing.T) {
 		key := gofakeit.UUID()
 		val := gofakeit.Sentence(i + 1)
 		insertedKV[key] = val
-		err := mockedEngine.Put([]byte(key), []byte(val))
+		err := mockedEngine.PutKV([]byte(key), []byte(val))
 		assert.NoError(t, err, "error putting value to engine")
 	}
 

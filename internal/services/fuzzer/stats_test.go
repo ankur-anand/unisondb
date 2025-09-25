@@ -18,9 +18,9 @@ func TestFuzzStats_BasicUsage(t *testing.T) {
 
 	ns := "test-namespace"
 
-	stats.Inc(ns, "Put")
-	stats.Inc(ns, "Put")
-	stats.Inc(ns, "Delete")
+	stats.Inc(ns, "PutKV")
+	stats.Inc(ns, "PutKV")
+	stats.Inc(ns, "DeleteKV")
 	stats.IncError(ns)
 
 	time.Sleep(10 * time.Millisecond)
@@ -29,8 +29,8 @@ func TestFuzzStats_BasicUsage(t *testing.T) {
 	assert.Contains(t, snapshot, ns)
 
 	nsStats := snapshot[ns]
-	assert.Equal(t, int64(2), nsStats.OpCount["Put"])
-	assert.Equal(t, int64(1), nsStats.OpCount["Delete"])
+	assert.Equal(t, int64(2), nsStats.OpCount["PutKV"])
+	assert.Equal(t, int64(1), nsStats.OpCount["DeleteKV"])
 	assert.Equal(t, int64(1), nsStats.ErrorCount)
 	assert.Greater(t, nsStats.Uptime, float64(0), "uptime should be positive")
 	assert.Greater(t, nsStats.OpsRate, float64(0), "ops rate should be positive")
@@ -40,7 +40,7 @@ func TestFuzzStats_ConcurrentAccess(t *testing.T) {
 	stats := NewFuzzStats()
 
 	ns := "concurrent-ns"
-	op := "BatchPut"
+	op := "BatchPutKV"
 
 	done := make(chan struct{})
 
@@ -69,9 +69,9 @@ func TestFuzzStats_ConcurrentAccess(t *testing.T) {
 func TestFuzzStats_HandleMetrics(t *testing.T) {
 
 	stats := NewFuzzStats()
-	stats.Inc("test", "Put")
-	stats.Inc("test", "Put")
-	stats.Inc("test", "Delete")
+	stats.Inc("test", "PutKV")
+	stats.Inc("test", "PutKV")
+	stats.Inc("test", "DeleteKV")
 	stats.IncError("test")
 	stats.ObserveLatency("test", 15*time.Millisecond)
 	time.Sleep(10 * time.Millisecond)
@@ -94,8 +94,8 @@ func TestFuzzStats_HandleMetrics(t *testing.T) {
 	nsStats, ok := data["test"]
 	assert.True(t, ok, "namespace 'test' should be present")
 
-	assert.Equal(t, int64(2), nsStats.OpCount["Put"])
-	assert.Equal(t, int64(1), nsStats.OpCount["Delete"])
+	assert.Equal(t, int64(2), nsStats.OpCount["PutKV"])
+	assert.Equal(t, int64(1), nsStats.OpCount["DeleteKV"])
 	assert.Equal(t, int64(1), nsStats.ErrorCount)
 	assert.Greater(t, nsStats.Uptime, float64(0))
 }
@@ -108,7 +108,7 @@ func TestWriteFuzzRunCSV(t *testing.T) {
 	stats := map[string]NamespaceStats{
 		"test-ns": {
 			OpCount: map[string]int64{
-				"Put": 10,
+				"PutKV": 10,
 			},
 			ErrorCount: 5,
 			OpsRate:    123.45,

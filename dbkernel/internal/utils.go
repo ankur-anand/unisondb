@@ -32,7 +32,7 @@ func HandleChunkedValuesTxn(record *logrecord.LogRecord, walIO *wal.WalIO, store
 		values[i] = kv.Value
 	}
 
-	return len(records), store.SetChunks(key, values, checksum)
+	return len(records), store.SetLobChunks(key, values, checksum)
 }
 
 // GetWalRecord returns the underlying wal record.

@@ -145,8 +145,14 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		assert.Equal(t, totalRecordCount, recoveryInstance.recoveredCount, "60 record + 1 txn commit record")
 		assert.Equal(t, *recoveryInstance.lastRecoveredPos, *lastOffset)
 		for k := range allCommitedKeys {
-			value, err := db.Get([]byte(k))
-			assert.NoError(t, err)
+			chunks, chErr := db.GetLOBChunks([]byte(k))
+			if chErr == nil {
+				assert.Greater(t, len(chunks), 0)
+				continue
+			}
+			// not chunked, must be KV
+			value, kvErr := db.GetKV([]byte(k))
+			assert.NoError(t, kvErr)
 			assert.NotNil(t, value)
 		}
 	})
@@ -179,13 +185,19 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		assert.Equal(t, 0, recoveryInstance.recoveredCount, "0")
 		assert.Equal(t, *recoveryInstance.lastRecoveredPos, *lastOffset)
 		for k := range allCommitedKeys {
-			value, err := db.Get([]byte(k))
-			assert.NoError(t, err)
+			chunks, chErr := db.GetLOBChunks([]byte(k))
+			if chErr == nil {
+				assert.Greater(t, len(chunks), 0)
+				continue
+			}
+			// not chunked, must be KV
+			value, kvErr := db.GetKV([]byte(k))
+			assert.NoError(t, kvErr)
 			assert.NotNil(t, value)
 		}
 
 		for k := range unCommitedKeys {
-			value, err := db.Get([]byte(k))
+			value, err := db.GetKV([]byte(k))
 			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value)
 		}
@@ -239,9 +251,15 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		assert.Equal(t, *recoveryInstance.lastRecoveredPos, *lastOffset)
 		assert.Equal(t, 11, recoveryInstance.recoveredCount, "61+10 record + 1 txn commit record")
 		for k := range allCommitedKeys {
-			value, err := db.Get([]byte(k))
-			assert.NoError(t, err, "key %s should be present", k)
-			assert.NotNil(t, value, "key %s should not be nil", k)
+			chunks, chErr := db.GetLOBChunks([]byte(k))
+			if chErr == nil {
+				assert.Greater(t, len(chunks), 0)
+				continue
+			}
+			// not chunked, must be KV
+			value, kvErr := db.GetKV([]byte(k))
+			assert.NoError(t, kvErr)
+			assert.NotNil(t, value)
 		}
 
 		totalRecordCount += 11
@@ -282,13 +300,19 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 	t.Run("validate btree dataStore", func(t *testing.T) {
 		assert.NoError(t, db.FSync())
 		for k := range allCommitedKeys {
-			value, err := db.Get([]byte(k))
-			assert.NoError(t, err)
+			chunks, chErr := db.GetLOBChunks([]byte(k))
+			if chErr == nil {
+				assert.Greater(t, len(chunks), 0)
+				continue
+			}
+			// not chunked, must be KV
+			value, kvErr := db.GetKV([]byte(k))
+			assert.NoError(t, kvErr)
 			assert.NotNil(t, value)
 		}
 
 		for k := range unCommitedKeys {
-			value, err := db.Get([]byte(k))
+			value, err := db.GetKV([]byte(k))
 			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value)
 		}
@@ -331,7 +355,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		assert.Equal(t, *recovery.lastRecoveredPos, *lastOffset)
 		assert.Equal(t, 1, recovery.recoveredCount)
 		for _, key := range deleteKeys {
-			value, err := db.Get([]byte(key))
+			value, err := db.GetKV([]byte(key))
 			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value, "deleted key value should be nil")
 			delete(allCommitedKeys, key)
@@ -405,7 +429,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		assert.NoError(t, db.FSync())
 
 		for _, key := range deleteKeys {
-			value, err := db.Get([]byte(key))
+			value, err := db.GetKV([]byte(key))
 			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "%s", key)
 			assert.Nil(t, value, "deleted key value should be nil %s", key)
 			allCommitedDeleteKeys[key] = struct{}{}
@@ -438,7 +462,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		assert.Equal(t, 63, recoveryInstance.recoveredCount, "total record recovered failed")
 
 		for rKey, rValue := range insertedRows {
-			columns, err := db.GetRowColumns([]byte(rKey), nil)
+			columns, err := db.ScanRowCells([]byte(rKey), nil)
 			assert.NoError(t, err, "failed to read row columns")
 			assert.Equal(t, len(rValue), len(columns))
 			assert.Equal(t, rValue, columns)
@@ -472,7 +496,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		assert.Equal(t, *recoveryInstance.lastRecoveredPos, *lastOffset)
 		assert.Equal(t, 64, recoveryInstance.recoveredCount, "total record recovered failed")
 
-		columns, err := db.GetRowColumns([]byte(randomRow), nil)
+		columns, err := db.ScanRowCells([]byte(randomRow), nil)
 		assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 		assert.Empty(t, columns)
 	})
@@ -512,7 +536,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		assert.Equal(t, *recoveryInstance.lastRecoveredPos, *lastOffset)
 		assert.Equal(t, 65, recoveryInstance.recoveredCount, "total record recovered failed")
 
-		columns, err := db.GetRowColumns([]byte(randomRow), nil)
+		columns, err := db.ScanRowCells([]byte(randomRow), nil)
 		assert.NoError(t, err, "failed to read row columns")
 		assert.NotContains(t, columns, deletedColumns)
 		metaData := internal.Metadata{
@@ -563,7 +587,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		assert.Equal(t, *recoveryInstance.lastRecoveredPos, *lastOffset)
 		assert.Equal(t, 11, recoveryInstance.recoveredCount, "total record recovered failed")
 		for rKey, rValue := range kvDB {
-			columns, err := db.GetRowColumns([]byte(rKey), nil)
+			columns, err := db.ScanRowCells([]byte(rKey), nil)
 			assert.NoError(t, err, "failed to read row columns")
 			assert.Equal(t, len(rValue), len(columns))
 			assert.Equal(t, rValue, columns)
@@ -603,27 +627,33 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		assert.Equal(t, *recoveryInstance.LastRecoveredOffset(), *lastOffset)
 		assert.Equal(t, 22, recoveryInstance.RecoveredCount(), "total record recovered failed")
 		for rKey := range cleanupKVEntries {
-			columns, err := db.GetRowColumns([]byte(rKey), nil)
-			assert.NoError(t, err, "failed to read row columns")
+			columns, err := db.ScanRowCells([]byte(rKey), nil)
+			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound, "row %s should be fully deleted", rKey)
 			assert.Len(t, columns, 0)
 		}
 	})
 
 	t.Run("btree_store_validator", func(t *testing.T) {
 		for k := range allCommitedKeys {
-			value, err := db.Get([]byte(k))
-			assert.NoError(t, err)
+			chunks, chErr := db.GetLOBChunks([]byte(k))
+			if chErr == nil {
+				assert.Greater(t, len(chunks), 0)
+				continue
+			}
+			// not chunked, must be KV
+			value, kvErr := db.GetKV([]byte(k))
+			assert.NoError(t, kvErr)
 			assert.NotNil(t, value)
 		}
 
 		for k := range unCommitedKeys {
-			value, err := db.Get([]byte(k))
+			value, err := db.GetKV([]byte(k))
 			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value)
 		}
 
 		for key := range allCommitedDeleteKeys {
-			value, err := db.Get([]byte(key))
+			value, err := db.GetKV([]byte(key))
 			assert.ErrorIs(t, err, kvdrivers.ErrKeyNotFound)
 			assert.Nil(t, value, "deleted key value should be nil %s", key)
 		}

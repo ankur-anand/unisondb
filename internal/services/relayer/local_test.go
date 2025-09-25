@@ -29,7 +29,7 @@ func TestLocalWalRelayer(t *testing.T) {
 		for {
 			select {
 			case <-ticker.C:
-				err := engine.Put([]byte(gofakeit.UUID()), []byte(gofakeit.UUID()))
+				err := engine.PutKV([]byte(gofakeit.UUID()), []byte(gofakeit.UUID()))
 				if errors.Is(err, dbkernel.ErrInCloseProcess) {
 					return
 				}

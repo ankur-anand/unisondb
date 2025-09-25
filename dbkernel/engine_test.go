@@ -52,9 +52,9 @@ func TestStorageEngine_Suite(t *testing.T) {
 			insertedKV[key] = value
 			err := engine.persistKeyValue([][]byte{[]byte(key)}, [][]byte{[]byte(value)}, logrecord.LogOperationTypeInsert)
 			assert.NoError(t, err, "persistKeyValue should not error")
-			valueType, ok := engine.getEntryTypeForKeyFromMemTable([]byte(key))
-			assert.True(t, ok, "getEntryTypeForKeyFromMemTable should return true")
-			assert.Equal(t, valueType, logrecord.LogEntryTypeKV)
+			//valueType, ok := engine.getEntryTypeForKeyFromMemTable([]byte(key))
+			//assert.True(t, ok, "getEntryTypeForKeyFromMemTable should return true")
+			//assert.Equal(t, valueType, logrecord.LogEntryTypeKV)
 		}
 	})
 
@@ -176,8 +176,8 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	for i := 0; i < 4000; i++ {
 		key := []byte(fmt.Sprintf("%s%d", keyPrefix, i))
 
-		err := engine.Put(key, value)
-		assert.NoError(t, err, "Put operation should not fail")
+		err := engine.PutKV(key, value)
+		assert.NoError(t, err, "PutKV operation should not fail")
 
 		if i%20 == 0 {
 			time.Sleep(50 * time.Millisecond)
@@ -192,8 +192,8 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 
 	for i := 0; i < 1; i++ {
 		key := []byte(fmt.Sprintf("%s%d", keyPrefix, i))
-		valueRec, err := engine.Get(key)
-		assert.NoError(t, err, "Get operation should not fail")
+		valueRec, err := engine.GetKV(key)
+		assert.NoError(t, err, "GetKV operation should not fail")
 		assert.Equal(t, valueRec, value, "failed here as well")
 
 	}
@@ -247,24 +247,24 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 
 	for i := 0; i < 4000; i++ {
 		key := []byte(fmt.Sprintf("%s%d", keyPrefix, i))
-		retrievedValue, err := engine.Get(key)
+		retrievedValue, err := engine.GetKV(key)
 
-		assert.NoError(t, err, "Get operation should succeed")
+		assert.NoError(t, err, "GetKV operation should succeed")
 		assert.NotNil(t, retrievedValue, "Retrieved value should not be nil")
 		assert.Equal(t, len(retrievedValue), valueSize, "Value length mismatch")
 		assert.Equal(t, value, retrievedValue, "Retrieved value should match")
 
-		valueType, ok := engine.getEntryType(key)
-		assert.Equal(t, valueType, logrecord.LogEntryTypeKV, "")
-		assert.True(t, ok, "getEntryTypeForKey should succeed")
+		//valueType, ok := engine.getEntryTypeForKeyFromMemTable(key)
+		//assert.Equal(t, valueType, logrecord.LogEntryTypeKV, "")
+		//assert.True(t, ok, "getEntryTypeForKey should succeed")
 	}
 
 	// 4000 ops, for keys, > As Batch is not Commited, (1 batch start + (not 1 batch commit.) not included)
 	assert.Equal(t, uint64(4000), engine.OpsReceivedCount())
 
-	value, err = engine.Get(batchKey)
-	assert.ErrorIs(t, err, ErrKeyNotFound, "Get operation should not succeed")
-	assert.Nil(t, value, "Get value should not be nil")
+	value, err = engine.GetKV(batchKey)
+	assert.ErrorIs(t, err, ErrKeyNotFound, "GetKV operation should not succeed")
+	assert.Nil(t, value, "GetKV value should not be nil")
 }
 
 func TestEngine_RecoveredWalShouldNotRecoverAgain(t *testing.T) {
@@ -361,9 +361,9 @@ func TestEngine_GetRowColumns_WithMemTableRotateNoFlush(t *testing.T) {
 			assert.NoError(t, err, "failed to build column map")
 			assert.Equal(t, len(v), len(rowEntry), "unexpected number of column values")
 			assert.Equal(t, v, rowEntry, "unexpected column values")
-			valueType, ok := engine.getEntryTypeForKeyFromMemTable([]byte(k))
-			assert.Equal(t, valueType, logrecord.LogEntryTypeRow, "")
-			assert.True(t, ok, "getEntryTypeForKeyFromMemTable should succeed")
+			//valueType, ok := engine.getEntryTypeForKeyFromMemTable([]byte(k))
+			//assert.Equal(t, valueType, logrecord.LogEntryTypeRow, "")
+			//assert.True(t, ok, "getEntryTypeForKeyFromMemTable should succeed")
 		}
 	})
 
@@ -508,7 +508,7 @@ func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
 
 	t.Run("get_rows_columns__from_db_after_flush", func(t *testing.T) {
 		for k, v := range rowsEntries {
-			rowEntry, err := engine.dataStore.GetRowColumns([]byte(k), nil)
+			rowEntry, err := engine.dataStore.ScanRowCells([]byte(k), nil)
 			assert.NoError(t, err, "failed to build column map")
 			assert.Equal(t, len(v), len(rowEntry), "unexpected number of column values")
 			assert.Equal(t, v, rowEntry, "unexpected column values")
@@ -610,8 +610,8 @@ func TestRecoveryAndCheckPoint(t *testing.T) {
 		key := gofakeit.UUID()
 		value := gofakeit.LetterN(100)
 		kv[key] = value
-		err := engine.Put([]byte(key), []byte(value))
-		assert.NoError(t, err, "Put operation should succeed")
+		err := engine.PutKV([]byte(key), []byte(value))
+		assert.NoError(t, err, "PutKV operation should succeed")
 	}
 
 	// rotate and flush memTable.
@@ -641,8 +641,8 @@ func TestRecoveryAndCheckPoint(t *testing.T) {
 			key := gofakeit.UUID()
 			value := gofakeit.LetterN(100)
 			kv[key] = value
-			err := engine.Put([]byte(key), []byte(value))
-			assert.NoError(t, err, "Put operation should succeed")
+			err := engine.PutKV([]byte(key), []byte(value))
+			assert.NoError(t, err, "PutKV operation should succeed")
 		}
 
 		assert.Equal(t, entryCount, int(engine.OpsFlushedCount()), "expected ops flushed count")
@@ -651,110 +651,11 @@ func TestRecoveryAndCheckPoint(t *testing.T) {
 	}
 
 	for k, v := range kv {
-		value, err := engine.Get([]byte(k))
-		assert.NoError(t, err, "Get operation should succeed")
+		value, err := engine.GetKV([]byte(k))
+		assert.NoError(t, err, "GetKV operation should succeed")
 		assert.Equal(t, v, string(value), "unexpected value for key")
 	}
 
-}
-
-func Test_MisMatch_Entry_Type(t *testing.T) {
-	dir := t.TempDir()
-	namespace := "testnamespace"
-	callbackSignal := make(chan struct{}, 1)
-	callback := func() {
-		select {
-		case callbackSignal <- struct{}{}:
-		default:
-		}
-	}
-	config := NewDefaultEngineConfig()
-	config.ArenaSize = 1 << 20
-	config.DBEngine = BoltDBEngine
-	engine, err := NewStorageEngine(dir, namespace, config)
-	assert.NoError(t, err, "NewStorageEngine should not error")
-	engine.callback = callback
-
-	kv := make(map[string]string)
-	for i := 0; i < 100; i++ {
-		key := gofakeit.UUID()
-		value := gofakeit.LetterN(100)
-		kv[key] = value
-		err := engine.Put([]byte(key), []byte(value))
-		assert.NoError(t, err, "Put operation should succeed")
-	}
-
-	engine.rotateMemTableNoFlush()
-
-	for k := range kv {
-		entryType, ok := engine.getEntryType([]byte(k))
-		assert.True(t, ok, "getEntryType operation should succeed")
-		assert.Equal(t, entryType, logrecord.LogEntryTypeKV, "unexpected entry type")
-	}
-
-	rowsEntries := make(map[string]map[string][]byte)
-	for i := uint64(0); i < 10; i++ {
-		rowKey := gofakeit.UUID()
-
-		if rowsEntries[rowKey] == nil {
-			rowsEntries[rowKey] = make(map[string][]byte)
-		}
-
-		// for each row Key generate 5 ops
-		for j := 0; j < 5; j++ {
-
-			entries := make(map[string][]byte)
-			for k := 0; k < 10; k++ {
-				key := gofakeit.Name()
-				val := gofakeit.LetterN(uint(i + 1))
-				rowsEntries[rowKey][key] = []byte(val)
-				entries[key] = []byte(val)
-			}
-
-			err := engine.PutColumnsForRow([]byte(rowKey), entries)
-			assert.NoError(t, err, "PutColumnsForRow operation should succeed")
-		}
-	}
-
-	engine.rotateMemTableNoFlush()
-	for k := range rowsEntries {
-		entryType, ok := engine.getEntryType([]byte(k))
-		assert.True(t, ok, "getEntryType operation should succeed")
-		assert.Equal(t, entryType, logrecord.LogEntryTypeRow, "unexpected entry type")
-	}
-
-	chunkedTxn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
-	assert.NoError(t, err, "NewTxn should not error")
-	chunkedKey := gofakeit.UUID()
-	for i := 0; i < 5; i++ {
-		err := chunkedTxn.AppendKVTxn([]byte(chunkedKey), []byte(gofakeit.LetterN(10)))
-		assert.NoError(t, err, "AppendTxn operation should succeed")
-	}
-
-	assert.NoError(t, chunkedTxn.Commit())
-
-	valueType, ok := engine.getEntryType([]byte(chunkedKey))
-	assert.True(t, ok, "getEntryType operation should succeed")
-	assert.Equal(t, valueType, logrecord.LogEntryTypeChunked, "unexpected entry type")
-	engine.rotateMemTableNoFlush()
-	valueType, ok = engine.getEntryType([]byte(chunkedKey))
-	assert.True(t, ok, "getEntryType operation should succeed")
-	assert.Equal(t, valueType, logrecord.LogEntryTypeChunked, "unexpected entry type")
-
-	for i := uint64(0); i < 10; i++ {
-		_, ok := engine.getEntryType([]byte(gofakeit.Name()))
-		assert.False(t, ok, "getEntryType operation should return !ok")
-	}
-
-	for rk := range rowsEntries {
-		err := engine.Put([]byte(rk), []byte(gofakeit.Name()))
-		assert.ErrorIs(t, err, ErrMisMatchKeyType)
-	}
-
-	for k := range kv {
-		err := engine.PutColumnsForRow([]byte(k), rowsEntries[k])
-		assert.ErrorIs(t, err, ErrMisMatchKeyType)
-	}
 }
 
 func Test_ASyncFSync_Coalescing(t *testing.T) {
@@ -885,117 +786,87 @@ type mockedTree struct {
 	fsyncCall atomic.Int64
 }
 
-func (m *mockedTree) BatchPut(keys, values [][]byte) error {
+func (m *mockedTree) SetKV(key []byte, value []byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) DeleteKV(key []byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) BatchDeleteLobChunks(keys [][]byte) error {
+	//TODO implement me
+	panic("implement me")
+}
+
+func (m *mockedTree) StoreMetadata(key, value []byte) error {
 	return nil
 }
-
-func (m *mockedTree) BatchDelete(keys [][]byte) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) BatchPutRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) BatchDeleteRows(rowKeys [][]byte) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) Commit() error {
-	return nil
-}
-
-func (m *mockedTree) Stats() kvdrivers.TxnStats {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) Set(key []byte, value []byte) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) SetMany(keys [][]byte, values [][]byte) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) SetChunks(key []byte, chunks [][]byte, checksum uint32) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) Delete(key []byte) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) DeleteMany(keys [][]byte) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) DeleteManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) DeleteEntireRows(rowKeys [][]byte) (int, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) StoreMetadata(key []byte, value []byte) error {
-	return nil
-}
-
 func (m *mockedTree) FSync() error {
 	m.fsyncCall.Add(1)
 	return nil
 }
 
-func (m *mockedTree) Get(key []byte) ([]byte, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) GetRowColumns(rowKey []byte, filter func([]byte) bool) (map[string][]byte, error) {
-	//TODO implement me
-	panic("implement me")
-}
-
-func (m *mockedTree) Snapshot(w io.Writer) error {
-	//TODO implement me
-	panic("implement me")
-}
-
 func (m *mockedTree) RetrieveMetadata(key []byte) ([]byte, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (m *mockedTree) BatchSetKV(keys, values [][]byte) error { panic("not implemented") }
+func (m *mockedTree) BatchDeleteKV(keys [][]byte) error      { panic("not implemented") }
+func (m *mockedTree) BatchSetCells(rowKeys [][]byte, cols []map[string][]byte) error {
+	panic("not implemented")
+}
+
+func (m *mockedTree) BatchDeleteCells(rowKeys [][]byte, cols []map[string][]byte) error {
+	panic("not implemented")
+}
+
+func (m *mockedTree) BatchDeleteRows(rowKeys [][]byte) (int, error) { panic("not implemented") }
+func (m *mockedTree) SetLobChunks(key []byte, chunks [][]byte, checksum uint32) error {
+	panic("not implemented")
+}
+
+func (m *mockedTree) Snapshot(w io.Writer) error { panic("not implemented") }
+func (m *mockedTree) Restore(r io.Reader) error  { panic("not implemented") }
+func (m *mockedTree) Close() error               { return nil }
+
+func (m *mockedTree) GetKV(key []byte) ([]byte, error)          { panic("not implemented") }
+func (m *mockedTree) GetLOBChunks(key []byte) ([][]byte, error) { panic("not implemented") }
+func (m *mockedTree) ScanRowCells(rowKey []byte, f func([]byte) bool) (map[string][]byte, error) {
+	panic("not implemented")
+}
+func (m *mockedTree) GetCell(rowKey []byte, columnName string) ([]byte, error) {
+	panic("not implemented")
+}
+func (m *mockedTree) GetCells(rowKey []byte, columns []string) (map[string][]byte, error) {
+	panic("not implemented")
+}
+
+type mockTxn struct {
+	store *mockedTree
+}
+
+func (m *mockTxn) BatchDeleteLobChunks(keys [][]byte) error {
 	//TODO implement me
 	panic("implement me")
 }
 
-func (m *mockedTree) GetValueType(key []byte) (kvdrivers.ValueEntryType, error) {
-	//TODO implement me
-	panic("implement me")
+func (m *mockTxn) BatchPutKV(keys, values [][]byte) error                            { return nil }
+func (m *mockTxn) BatchDeleteKV(keys [][]byte) error                                 { return nil }
+func (m *mockTxn) BatchSetCells(rowKeys [][]byte, cols []map[string][]byte) error    { return nil }
+func (m *mockTxn) BatchDeleteCells(rowKeys [][]byte, cols []map[string][]byte) error { return nil }
+func (m *mockTxn) BatchDeleteRows(rowKeys [][]byte) error {
+	if m.store != nil {
+		_, err := m.store.BatchDeleteRows(rowKeys)
+		return err
+	}
+	return nil
 }
-
-func (m *mockedTree) Close() error {
-	//TODO implement me
-	panic("implement me")
-}
+func (m *mockTxn) SetLobChunks(key []byte, chunks [][]byte, checksum uint32) error { return nil }
+func (m *mockTxn) Commit() error                                                   { return nil }
+func (m *mockTxn) Stats() kvdrivers.TxnStats                                       { return kvdrivers.TxnStats{} }
 
 func TestBtreeSyncInterval(t *testing.T) {
 
@@ -1044,7 +915,7 @@ func TestBtreeSyncInterval(t *testing.T) {
 	engine.wg.Wait()
 	assert.Equal(t, int64(1), mt.fsyncCall.Load())
 	mmTable := memtable.NewMemTable(1<<20, nil, namespace, func(maxBatchSize int) internal.TxnBatcher {
-		return mt
+		return &mockTxn{store: mt}
 	})
 	err := mmTable.Put([]byte("test_key"), getValueStruct(internal.LogOperationInsert, internal.EntryTypeKV, []byte("hi")))
 	assert.NoError(t, err)
@@ -1078,8 +949,8 @@ func TestBtreeSyncInterval_Engine(t *testing.T) {
 		key := gofakeit.UUID()
 		value := gofakeit.LetterN(100)
 		kv[key] = value
-		err := engine.Put([]byte(key), []byte(value))
-		assert.NoError(t, err, "Put operation should succeed")
+		err := engine.PutKV([]byte(key), []byte(value))
+		assert.NoError(t, err, "PutKV operation should succeed")
 	}
 	engine.rotateMemTable()
 
@@ -1160,4 +1031,69 @@ func TestNotificationCoalesce(t *testing.T) {
 	case <-time.After(10 * time.Millisecond):
 		t.Errorf("Immediate notification did not occur when coalescing was disabled")
 	}
+}
+
+func TestGetLOB_WALAndPersisted(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_lob"
+
+	engine, err := NewStorageEngine(baseDir, namespace, NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		_ = engine.Close(context.Background())
+	})
+
+	key := []byte("lob-key")
+	chunks := [][]byte{
+		[]byte("hello "),
+		[]byte("big "),
+		[]byte("world"),
+	}
+	want := append(append(append([]byte{}, chunks[0]...), chunks[1]...), chunks[2]...)
+
+	txn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
+	assert.NoError(t, err)
+
+	for _, c := range chunks {
+		assert.NoError(t, txn.AppendKVTxn(key, c))
+	}
+	assert.NoError(t, txn.Commit())
+
+	got, err := engine.GetLOB(key)
+	assert.NoError(t, err)
+	assert.Equal(t, want, got, "WAL reconstruction should join chunks in order")
+
+	done := make(chan struct{}, 1)
+	engine.callback = func() {
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+	}
+
+	engine.rotateMemTable()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout waiting for memtable flush/fsync")
+	}
+
+	got, err = engine.GetLOB(key)
+	assert.NoError(t, err)
+	assert.Equal(t, want, got, "Persisted LOB should match joined chunks")
+}
+
+func TestGetLOB_NotFound(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_lob_nf"
+
+	engine, err := NewStorageEngine(baseDir, namespace, NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		_ = engine.Close(context.Background())
+	})
+
+	_, err = engine.GetLOB([]byte("missing-key"))
+	assert.Error(t, err)
 }

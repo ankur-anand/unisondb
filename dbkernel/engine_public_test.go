@@ -52,27 +52,27 @@ func TestPutGet_Delete(t *testing.T) {
 	value := []byte(gofakeit.Sentence(100))
 
 	t.Run("set", func(t *testing.T) {
-		err = engine.Put(key, value)
-		assert.NoError(t, err, "Put operation should succeed")
+		err = engine.PutKV(key, value)
+		assert.NoError(t, err, "PutKV operation should succeed")
 		assert.Equal(t, uint64(1), engine.OpsReceivedCount())
 	})
 
 	t.Run("get", func(t *testing.T) {
-		retrievedValue, err := engine.Get(key)
-		assert.NoError(t, err, "Get operation should succeed")
+		retrievedValue, err := engine.GetKV(key)
+		assert.NoError(t, err, "GetKV operation should succeed")
 		assert.Equal(t, uint64(1), engine.OpsReceivedCount(), "get should not increase ops count")
 		assert.Equal(t, value, retrievedValue, "Retrieved value should match the inserted value")
 	})
 
 	t.Run("delete", func(t *testing.T) {
-		err = engine.Delete(key)
-		assert.NoError(t, err, "Delete operation should succeed")
+		err = engine.DeleteKV(key)
+		assert.NoError(t, err, "DeleteKV operation should succeed")
 		assert.Equal(t, uint64(2), engine.OpsReceivedCount(), "delete should increase ops count")
 	})
 
 	t.Run("delete_get", func(t *testing.T) {
-		retrievedValue, err := engine.Get(key)
-		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Get operation should succeed")
+		retrievedValue, err := engine.GetKV(key)
+		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "GetKV operation should succeed")
 		assert.Nil(t, retrievedValue, "Retrieved value should match the inserted value")
 	})
 }
@@ -99,7 +99,7 @@ func TestConcurrentWrites(t *testing.T) {
 			defer wg.Done()
 			key := []byte("key_" + strconv.Itoa(i))
 			value := []byte("value_" + strconv.Itoa(i))
-			assert.NoError(t, engine.Put(key, value))
+			assert.NoError(t, engine.PutKV(key, value))
 		}(i)
 	}
 
@@ -110,7 +110,7 @@ func TestConcurrentWrites(t *testing.T) {
 		key := []byte("key_" + strconv.Itoa(i))
 		value := []byte("value_" + strconv.Itoa(i))
 
-		retrievedValue, err := engine.Get(key)
+		retrievedValue, err := engine.GetKV(key)
 		assert.NoError(t, err)
 		assert.Equal(t, value, retrievedValue, "Concurrent write mismatch")
 	}
@@ -127,7 +127,7 @@ func TestSnapshot(t *testing.T) {
 	key := []byte("persist_key")
 	value := []byte("persist_value")
 
-	err = engine.Put(key, value)
+	err = engine.PutKV(key, value)
 	assert.NoError(t, err)
 
 	err = engine.Close(t.Context())
@@ -136,7 +136,7 @@ func TestSnapshot(t *testing.T) {
 	engine, err = dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
 	assert.NoError(t, err)
 
-	retrievedValue, err := engine.Get(key)
+	retrievedValue, err := engine.GetKV(key)
 	assert.NoError(t, err)
 	assert.Equal(t, value, retrievedValue, "data should be recoverable")
 	assert.Equal(t, uint64(1), engine.OpsReceivedCount())
@@ -188,15 +188,15 @@ func TestEngine_WaitForAppend(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		time.Sleep(100 * time.Millisecond)
-		err := engine.Put(key, value)
-		assert.NoError(t, err, "Put operation should succeed")
+		err := engine.PutKV(key, value)
+		assert.NoError(t, err, "PutKV operation should succeed")
 	}()
 
 	err = engine.WaitForAppendOrDone(callerDone, 3*time.Second, nil)
-	assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after Put")
+	assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after PutKV")
 
 	err = engine.WaitForAppendOrDone(callerDone, timeout, nil)
-	assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after Put and when last seen is nil")
+	assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after PutKV and when last seen is nil")
 
 	cancelErr := make(chan error)
 	go func() {
@@ -217,11 +217,11 @@ func TestEngine_WaitForAppend(t *testing.T) {
 	assert.ErrorIs(t, err, context.Canceled, "WaitForAppendOrDone should return error for cancelled context")
 
 	lastOffset := engine.CurrentOffset()
-	err = engine.Put(key, value)
-	assert.NoError(t, err, "Put operation should succeed")
+	err = engine.PutKV(key, value)
+	assert.NoError(t, err, "PutKV operation should succeed")
 
 	err = engine.WaitForAppendOrDone(callerDone, timeout, lastOffset)
-	assert.NoError(t, err, "WaitForAppendOrDone should return without error after Put")
+	assert.NoError(t, err, "WaitForAppendOrDone should return without error after PutKV")
 	wg.Wait()
 }
 
@@ -254,13 +254,13 @@ func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
 			defer wg.Done()
 			readyWg.Done()
 			err := engine.WaitForAppendOrDone(callerDone, 10*time.Second, nil)
-			assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after Put")
+			assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after PutKV")
 		}()
 	}
 
 	readyWg.Wait()
-	err = engine.Put(key, value)
-	assert.NoError(t, err, "Put operation should succeed")
+	err = engine.PutKV(key, value)
+	assert.NoError(t, err, "PutKV operation should succeed")
 	wg.Wait()
 	close(callerDone)
 }
@@ -289,7 +289,7 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 	defer close(callerDone)
 	read := func(reader *dbkernel.Reader) {
 		err := engine.WaitForAppendOrDone(callerDone, 1*time.Minute, nil)
-		assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after Put")
+		assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after PutKV")
 		for {
 			value, _, err := reader.Next()
 			if err != nil {
@@ -310,8 +310,8 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 	assert.NoError(t, err, "NewReader should return without error")
 	go read(reader)
 
-	err = engine.Put(putKey, putValue)
-	assert.NoError(t, err, "Put operation should succeed")
+	err = engine.PutKV(putKey, putValue)
+	assert.NoError(t, err, "PutKV operation should succeed")
 
 	select {
 	case <-eof:
@@ -328,8 +328,8 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 	go read(reader)
 
 	for k, v := range putKV {
-		err = engine.Put([]byte(k), v)
-		assert.NoError(t, err, "Put operation should succeed")
+		err = engine.PutKV([]byte(k), v)
+		assert.NoError(t, err, "PutKV operation should succeed")
 	}
 	select {
 	case <-eof:
@@ -451,7 +451,7 @@ func TestEngineLinearizability(t *testing.T) {
 				key := fmt.Sprintf("key-%d-%d", clientId, j%10)
 
 				if j%3 == 0 {
-					val, err := engine.Get([]byte(key))
+					val, err := engine.GetKV([]byte(key))
 
 					result := ""
 					if err == nil {
@@ -465,7 +465,7 @@ func TestEngineLinearizability(t *testing.T) {
 					}, result)
 				} else {
 					value := fmt.Sprintf("value-%d-%d", clientId, j)
-					err := engine.Put([]byte(key), []byte(value))
+					err := engine.PutKV([]byte(key), []byte(value))
 
 					result := "ok"
 					if err != nil {
@@ -682,26 +682,26 @@ func TestEngineBatchKV_APIs(t *testing.T) {
 			values = append(values, []byte(val))
 		}
 
-		err := engine.BatchPut(keys, values)
-		assert.NoError(t, err, "BatchPut operation should succeed")
+		err := engine.BatchPutKV(keys, values)
+		assert.NoError(t, err, "BatchPutKV operation should succeed")
 	})
 
 	t.Run("get_kv", func(t *testing.T) {
 		for i, key := range keys {
-			got, err := engine.Get(key)
+			got, err := engine.GetKV(key)
 			assert.NoError(t, err, "failed to get kv")
 			assert.Equal(t, values[i], got, "unexpected kv")
 		}
 	})
 
 	t.Run("delete_kv", func(t *testing.T) {
-		err := engine.BatchDelete(keys)
-		assert.NoError(t, err, "BatchDelete operation should succeed")
+		err := engine.BatchDeleteKV(keys)
+		assert.NoError(t, err, "BatchDeleteKV operation should succeed")
 	})
 
 	t.Run("get_kv", func(t *testing.T) {
 		for _, key := range keys {
-			_, err := engine.Get(key)
+			_, err := engine.GetKV(key)
 			assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "failed to get kv")
 		}
 	})
@@ -730,8 +730,8 @@ func TestEngine_NewReaderWithStart(t *testing.T) {
 			values = append(values, []byte(val))
 		}
 
-		err := engine.BatchPut(keys, values)
-		assert.NoError(t, err, "BatchPut operation should succeed")
+		err := engine.BatchPutKV(keys, values)
+		assert.NoError(t, err, "BatchPutKV operation should succeed")
 	})
 
 	offset := &wal.Offset{SegmentID: 10000}

@@ -35,7 +35,7 @@ func (k *KVReaderService) Get(request *v2.GetRequest, g grpc.ServerStreamingServ
 		return services.ToGRPCError(namespace, reqID, method, services.ErrNamespaceNotExists)
 	}
 
-	value, err := engine.Get(request.GetKey())
+	value, err := engine.GetKV(request.GetKey())
 	if errors.Is(err, storage.ErrKeyNotFound) {
 		return services.ErrKeyNotFound
 	}

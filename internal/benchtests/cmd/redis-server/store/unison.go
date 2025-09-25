@@ -29,11 +29,11 @@ func (k *KVAlchemy) Close() error {
 }
 
 func (k *KVAlchemy) Set(key, value []byte) error {
-	return k.engine.Put(key, value)
+	return k.engine.PutKV(key, value)
 }
 
 func (k *KVAlchemy) Get(key []byte) ([]byte, error) {
-	return k.engine.Get(key)
+	return k.engine.GetKV(key)
 }
 
 func (k *KVAlchemy) TotalOpsCount() uint64 {

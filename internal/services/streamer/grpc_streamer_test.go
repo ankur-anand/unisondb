@@ -242,7 +242,7 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 			}
 			value := []byte(gofakeit.LetterN(5))
 			data := bytes.Repeat(value, valueSize)
-			err = se.Put(key, data)
+			err = se.PutKV(key, data)
 			assert.NoError(t, err)
 		}
 		engines[nameSpace] = se
@@ -289,7 +289,7 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 				}
 				value := []byte(gofakeit.LetterN(1))
 				data := bytes.Repeat(value, valueSize)
-				err = engines[nameSpaces[0]].Put(key, data)
+				err = engines[nameSpaces[0]].PutKV(key, data)
 				assert.NoError(t, err)
 			case <-timer.C:
 				return nil
@@ -376,7 +376,7 @@ func TestServer_StreamWAL_Client(t *testing.T) {
 			}
 			value := []byte(gofakeit.LetterN(5))
 			data := bytes.Repeat(value, valueSize)
-			err = se.Put(key, data)
+			err = se.PutKV(key, data)
 			assert.NoError(t, err)
 		}
 		engines[nameSpace] = se
@@ -430,7 +430,7 @@ func TestServer_StreamWAL_Client(t *testing.T) {
 				}
 				value := []byte(gofakeit.LetterN(5))
 				data := bytes.Repeat(value, valueSize)
-				err := engines[nameSpaces[0]].Put(key, data)
+				err := engines[nameSpaces[0]].PutKV(key, data)
 				assert.NoError(t, err)
 			}
 			cancel()
@@ -479,7 +479,7 @@ func TestServer_StreamWAL_MaxRetry(t *testing.T) {
 			}
 			value := []byte(gofakeit.LetterN(5))
 			data := bytes.Repeat(value, valueSize)
-			err = se.Put(key, data)
+			err = se.PutKV(key, data)
 			assert.NoError(t, err)
 		}
 		engines[nameSpace] = se

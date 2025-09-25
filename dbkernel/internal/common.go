@@ -7,52 +7,55 @@ import (
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 )
 
+// TxnBatcher batches ops and applies them atomically on Commit.
 type TxnBatcher interface {
-	BatchPut(keys, values [][]byte) error
-	BatchDelete(keys [][]byte) error
-	SetChunks(key []byte, chunks [][]byte, checksum uint32) error
-	BatchPutRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
-	BatchDeleteRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	BatchPutKV(keys, values [][]byte) error
+	BatchDeleteKV(keys [][]byte) error
+
+	SetLobChunks(key []byte, chunks [][]byte, checksum uint32) error
+	BatchDeleteLobChunks(keys [][]byte) error
+
+	BatchSetCells(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	BatchDeleteCells(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
 	BatchDeleteRows(rowKeys [][]byte) error
+
 	Commit() error
 	Stats() kvdrivers.TxnStats
 }
 
-// BtreeWriter defines the interface for interacting with a B-tree based storage
-// for setting individual values, chunks and many value at once.
 type BtreeWriter interface {
-	// Set associates a value with a key.
-	Set(key []byte, value []byte) error
-	// SetMany associates multiple values with corresponding keys.
-	SetMany(keys [][]byte, values [][]byte) error
-	// SetChunks stores a value that has been split into chunks, associating them with a single key.
-	SetChunks(key []byte, chunks [][]byte, checksum uint32) error
-	// Delete deletes a value with a key.
-	Delete(key []byte) error
-	// DeleteMany delete multiple values with corresponding keys.
-	DeleteMany(keys [][]byte) error
+	SetKV(key []byte, value []byte) error
+	BatchSetKV(keys [][]byte, values [][]byte) error
+	DeleteKV(key []byte) error
+	BatchDeleteKV(keys [][]byte) error
 
-	SetManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
-	DeleteManyRowColumns(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
-	DeleteEntireRows(rowKeys [][]byte) (int, error)
+	SetLobChunks(key []byte, chunks [][]byte, checksum uint32) error
+	BatchDeleteLobChunks(keys [][]byte) error
+
+	BatchSetCells(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	BatchDeleteCells(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error
+	BatchDeleteRows(rowKeys [][]byte) (int, error)
 
 	StoreMetadata(key []byte, value []byte) error
 	FSync() error
+	Restore(r io.Reader) error
 }
 
-// BtreeReader defines the interface for interacting with a B-tree based storage
-// for getting individual values, chunks and many value at once.
 type BtreeReader interface {
-	// Get retrieves a value associated with a key.
-	Get(key []byte) ([]byte, error)
-	GetRowColumns(rowKey []byte, filter func([]byte) bool) (map[string][]byte, error)
-	// Snapshot writes the complete database to the provided io writer.
-	Snapshot(w io.Writer) error
+	GetKV(key []byte) ([]byte, error)
+
+	GetLOBChunks(key []byte) ([][]byte, error)
+
+	ScanRowCells(rowKey []byte, filter func(columnKey []byte) bool) (map[string][]byte, error)
+
+	GetCell(rowKey []byte, columnName string) ([]byte, error)
+	GetCells(rowKey []byte, columns []string) (map[string][]byte, error)
+
 	RetrieveMetadata(key []byte) ([]byte, error)
-	GetValueType(key []byte) (kvdrivers.ValueEntryType, error)
+	Snapshot(w io.Writer) error
 }
 
-// BTreeStore combines the BtreeWriter and BtreeReader interfaces.
+// BTreeStore combines writer + reader + lifecycle.
 type BTreeStore interface {
 	BtreeWriter
 	BtreeReader
