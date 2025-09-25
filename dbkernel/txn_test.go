@@ -60,12 +60,12 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 	key := []byte("test_key")
 	value := []byte(gofakeit.Sentence(100))
 
-	// Put key-value pair
-	err = engine.Put(key, value)
-	assert.NoError(t, err, "Put operation should succeed")
+	// PutKV key-value pair
+	err = engine.PutKV(key, value)
+	assert.NoError(t, err, "PutKV operation should succeed")
 	assert.Equal(t, uint64(1), engine.OpsReceivedCount())
 	// Retrieve value
-	retrievedValue, err := engine.Get(key)
+	retrievedValue, err := engine.GetKV(key)
 	assert.NoError(t, err, "GetKV operation should succeed")
 	assert.Equal(t, value, retrievedValue, "Retrieved value should match the inserted value")
 
@@ -101,14 +101,14 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 
 	// get value without commit
 	// write should not be visible for now.
-	got, err := engine.Get(batchKey)
+	got, err := engine.GetKV(batchKey)
 	assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Key not Found Error should be present.")
 	assert.Nil(t, got, "GetKV operation should succeed")
 
 	err = txn.Commit()
 	assert.NoError(t, err, "Commit operation should succeed")
 
-	got, err = engine.Get(batchKey)
+	got, err = engine.GetKV(batchKey)
 
 	assert.NoError(t, err, "GetKV operation should succeed")
 	assert.NotNil(t, got, "GetKV operation should succeed")
@@ -147,14 +147,14 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 			err := txn.AppendKVTxn(key, value)
 			assert.NoError(t, err, "Append operation should succeed")
 
-			value, err = engine.Get(key)
+			value, err = engine.GetKV(key)
 			assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Key not Found Error should be present.")
 			assert.Nil(t, value, "GetKV operation should succeed")
 		}
 
 		assert.NoError(t, txn.Commit(), "Commit operation should succeed")
 		for key, value := range kv {
-			receivedValue, err := engine.Get([]byte(key))
+			receivedValue, err := engine.GetKV([]byte(key))
 			assert.NoError(t, err, "GetKV operation should succeed")
 			assert.Equal(t, value, receivedValue, "Retrieved value should match the inserted value")
 		}
@@ -170,7 +170,7 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 			deletedKeys[key] = struct{}{}
 			err := txn.AppendKVTxn([]byte(key), nil)
 			assert.NoError(t, err, "Append operation should succeed")
-			value, err := engine.Get([]byte(key))
+			value, err := engine.GetKV([]byte(key))
 			assert.NoError(t, err, "GetKV operation should succeed")
 			assert.Equal(t, kv[key], value, "uncommited delete should not delete the inserted value")
 		}
@@ -180,7 +180,7 @@ func TestTxn_Batch_KV_Commit(t *testing.T) {
 
 	t.Run("verify_kv", func(t *testing.T) {
 		for key, value := range kv {
-			receivedValue, err := engine.Get([]byte(key))
+			receivedValue, err := engine.GetKV([]byte(key))
 			_, ok := deletedKeys[key]
 			if !ok {
 				assert.NoError(t, err, "GetKV operation should succeed")
@@ -228,7 +228,7 @@ func TestTxn_Interrupted(t *testing.T) {
 			err := txn.AppendKVTxn(key, value)
 			assert.NoError(t, err, "Append operation should succeed")
 
-			value, err = engine.Get(key)
+			value, err = engine.GetKV(key)
 			assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Key not Found Error should be present.")
 			assert.Nil(t, value, "GetKV operation should succeed")
 			assert.Nil(t, engine.CurrentOffset(), "uncommited should not cause the offset increase")
@@ -240,10 +240,10 @@ func TestTxn_Interrupted(t *testing.T) {
 			key := []byte(gofakeit.UUID())
 			value := []byte(gofakeit.Sentence(500))
 			kv[string(key)] = value
-			err := engine.Put(key, value)
+			err := engine.PutKV(key, value)
 			assert.NoError(t, err, "Append operation should succeed")
 
-			value, err = engine.Get(key)
+			value, err = engine.GetKV(key)
 			assert.NoError(t, err, "GetKV operation should succeed")
 			assert.Equal(t, value, value, "Retrieved value should match the inserted value")
 		}

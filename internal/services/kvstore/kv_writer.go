@@ -39,7 +39,7 @@ func (k *KVWriterService) Put(ctx context.Context, request *v2.PutRequest) (*v2.
 		return nil, services.ToGRPCError(namespace, reqID, method, services.ErrNamespaceNotExists)
 	}
 
-	if err := engine.Put(request.Key, request.Value); err != nil {
+	if err := engine.PutKV(request.Key, request.Value); err != nil {
 		return nil, services.ToGRPCError(namespace, reqID, method, err)
 	}
 
@@ -68,7 +68,7 @@ func (k *KVWriterService) PutStream(g grpc.ClientStreamingServer[v2.PutStreamReq
 		}
 
 		for _, putReq := range msg.KvPairs {
-			if err := engine.Put(putReq.Key, putReq.Value); err != nil {
+			if err := engine.PutKV(putReq.Key, putReq.Value); err != nil {
 				return services.ToGRPCError(namespace, reqID, method, err)
 			}
 		}
@@ -175,7 +175,7 @@ func (k *KVWriterService) Delete(ctx context.Context, request *v2.DeleteRequest)
 	if !ok {
 		return nil, services.ToGRPCError(namespace, reqID, method, services.ErrNamespaceNotExists)
 	}
-	if err := engine.Delete(request.Key); err != nil {
+	if err := engine.DeleteKV(request.Key); err != nil {
 		return nil, services.ToGRPCError(namespace, reqID, method, err)
 	}
 
@@ -204,7 +204,7 @@ func (k *KVWriterService) DeleteStream(g grpc.ClientStreamingServer[v2.DeleteStr
 		}
 
 		for _, delReq := range msg.Deletes {
-			if err := engine.Delete(delReq.Key); err != nil {
+			if err := engine.DeleteKV(delReq.Key); err != nil {
 				return services.ToGRPCError(namespace, reqID, method, err)
 			}
 		}

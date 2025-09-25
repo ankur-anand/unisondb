@@ -19,28 +19,28 @@ type mockEngine struct {
 	deleteColumnsCalls int
 }
 
-func (m *mockEngine) Put(key, value []byte) error {
+func (m *mockEngine) PutKV(key, value []byte) error {
 	m.mu.Lock()
 	m.putCalls++
 	m.mu.Unlock()
 	return nil
 }
 
-func (m *mockEngine) BatchPut(keys, values [][]byte) error {
+func (m *mockEngine) BatchPutKV(keys, values [][]byte) error {
 	m.mu.Lock()
 	m.batchPutCalls++
 	m.mu.Unlock()
 	return nil
 }
 
-func (m *mockEngine) Delete(key []byte) error {
+func (m *mockEngine) DeleteKV(key []byte) error {
 	m.mu.Lock()
 	m.deleteCalls++
 	m.mu.Unlock()
 	return nil
 }
 
-func (m *mockEngine) BatchDelete(keys [][]byte) error {
+func (m *mockEngine) BatchDeleteKV(keys [][]byte) error {
 	m.mu.Lock()
 	m.batchDeleteCalls++
 	m.mu.Unlock()
@@ -61,7 +61,7 @@ func (m *mockEngine) DeleteColumnsForRow(rowKey []byte, columnEntries map[string
 	return nil
 }
 
-func (m *mockEngine) Get(key []byte) ([]byte, error) {
+func (m *mockEngine) GetKV(key []byte) ([]byte, error) {
 	return nil, nil
 }
 
@@ -85,10 +85,10 @@ func TestFuzzEngineOps_Basic(t *testing.T) {
 	assert.Contains(t, snapshot, "test")
 
 	nsStats := snapshot["test"]
-	assert.Equal(t, int64(engine.putCalls), nsStats.OpCount["Put"])
-	assert.Equal(t, int64(engine.batchPutCalls), nsStats.OpCount["BatchPut"])
-	assert.Equal(t, int64(engine.deleteCalls), nsStats.OpCount["Delete"])
-	assert.Equal(t, int64(engine.batchDeleteCalls), nsStats.OpCount["BatchDelete"])
+	assert.Equal(t, int64(engine.putCalls), nsStats.OpCount["PutKV"])
+	assert.Equal(t, int64(engine.batchPutCalls), nsStats.OpCount["BatchPutKV"])
+	assert.Equal(t, int64(engine.deleteCalls), nsStats.OpCount["DeleteKV"])
+	assert.Equal(t, int64(engine.batchDeleteCalls), nsStats.OpCount["BatchDeleteKV"])
 	assert.Equal(t, int64(engine.putColumnsCalls), nsStats.OpCount["PutColumnsForRow"])
 	assert.Equal(t, int64(engine.deleteColumnsCalls), nsStats.OpCount["DeleteColumnsForRow"])
 	assert.Greater(t, nsStats.Uptime, float64(0), "uptime should be positive")
@@ -97,13 +97,13 @@ func TestFuzzEngineOps_Basic(t *testing.T) {
 
 type noopEngine struct{}
 
-func (n *noopEngine) Put(key, value []byte) error                                       { return nil }
-func (n *noopEngine) BatchPut(keys, values [][]byte) error                              { return nil }
-func (n *noopEngine) Delete(key []byte) error                                           { return nil }
-func (n *noopEngine) BatchDelete(keys [][]byte) error                                   { return nil }
+func (n *noopEngine) PutKV(key, value []byte) error                                     { return nil }
+func (n *noopEngine) BatchPutKV(keys, values [][]byte) error                            { return nil }
+func (n *noopEngine) DeleteKV(key []byte) error                                         { return nil }
+func (n *noopEngine) BatchDeleteKV(keys [][]byte) error                                 { return nil }
 func (n *noopEngine) PutColumnsForRow(rowKey []byte, column map[string][]byte) error    { return nil }
 func (n *noopEngine) DeleteColumnsForRow(rowKey []byte, column map[string][]byte) error { return nil }
-func (n *noopEngine) Get(key []byte) ([]byte, error)                                    { return nil, nil }
+func (n *noopEngine) GetKV(key []byte) ([]byte, error)                                  { return nil, nil }
 func (n *noopEngine) GetRowColumns(rowKey string, predicate func(columnKey string) bool) (map[string][]byte, error) {
 	return nil, nil
 }

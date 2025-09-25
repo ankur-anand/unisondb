@@ -52,7 +52,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 			key := fmt.Sprintf("key_%d", i)
 			value := gofakeit.Sentence(i + 1)
 			kvInserted[key] = []byte(value)
-			err := engine.Put([]byte(key), []byte(value))
+			err := engine.PutKV([]byte(key), []byte(value))
 			assert.NoError(t, err)
 		}
 	})
@@ -73,7 +73,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 
 	t.Run("validate_replicate_tx_none_kv", func(t *testing.T) {
 		for k, v := range kvInserted {
-			got, err := replicaEngine.Get([]byte(k))
+			got, err := replicaEngine.GetKV([]byte(k))
 			assert.NoError(t, err, "error reading from replicator")
 			assert.Equal(t, v, got, "invalid replicator value")
 		}
@@ -170,7 +170,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 	t.Run("insert_delete_non_txn_kv", func(t *testing.T) {
 		deleteKey := fmt.Sprintf("key_%d", 1)
 		deletedKeys[deleteKey] = struct{}{}
-		assert.NoError(t, engine.Delete([]byte(deleteKey)), "error deleting key")
+		assert.NoError(t, engine.DeleteKV([]byte(deleteKey)), "error deleting key")
 	})
 
 	t.Run("replicate_combined_txn_delete", func(t *testing.T) {
@@ -192,12 +192,12 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 
 	t.Run("replicate_validate_txn_not_commited", func(t *testing.T) {
 		for k := range deletedKeys {
-			_, err := replicaEngine.Get([]byte(k))
+			_, err := replicaEngine.GetKV([]byte(k))
 			assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "deleted key should error with Key Not Found")
 		}
 		for i := 0; i < 10; i++ {
 			key := fmt.Sprintf("txn_key_%d", i)
-			_, err := replicaEngine.Get([]byte(key))
+			_, err := replicaEngine.GetKV([]byte(key))
 			assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "non commited key should error with Key Not Found")
 		}
 	})
@@ -220,7 +220,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 		assert.Equal(t, replicaEngine.CurrentOffset(), engine.CurrentOffset(), "offset of both the engine should be the same")
 		for i := 0; i < 10; i++ {
 			key := fmt.Sprintf("txn_key_%d", i)
-			got, err := replicaEngine.Get([]byte(key))
+			got, err := replicaEngine.GetKV([]byte(key))
 			assert.NoError(t, err, "error reading from replica")
 			assert.Equal(t, got, kvInserted[key], "invalid replicator value")
 		}
@@ -252,7 +252,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 		}
 
 		assert.Equal(t, replicaEngine.CurrentOffset(), engine.CurrentOffset(), "offset of both the engine should be the same")
-		chunkedValue, err := replicaEngine.Get([]byte(chunkedKey))
+		chunkedValue, err := replicaEngine.GetKV([]byte(chunkedKey))
 		assert.NoError(t, err, "error reading from chunked reader")
 		assert.Equal(t, chunkedValue, chunkedAppendedValue, "invalid chunked value")
 	})
@@ -405,7 +405,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 		}
 
 		for key := range deletedKeys {
-			_, err := replicaEngine.Get([]byte(key))
+			_, err := replicaEngine.GetKV([]byte(key))
 			assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "deleted key should not return")
 		}
 	})

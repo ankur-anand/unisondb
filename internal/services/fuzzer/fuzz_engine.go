@@ -15,14 +15,14 @@ import (
 )
 
 type Engine interface {
-	Put(key, value []byte) error
-	BatchPut(keys, values [][]byte) error
-	Delete(key []byte) error
-	BatchDelete(keys [][]byte) error
+	PutKV(key, value []byte) error
+	BatchPutKV(keys, values [][]byte) error
+	DeleteKV(key []byte) error
+	BatchDeleteKV(keys [][]byte) error
 	PutColumnsForRow(rowKey []byte, columnEntries map[string][]byte) error
 	DeleteColumnsForRow(rowKey []byte, columnEntries map[string][]byte) error
 
-	Get(key []byte) ([]byte, error)
+	GetKV(key []byte) ([]byte, error)
 	GetRowColumns(rowKey string, predicate func(columnKey string) bool) (map[string][]byte, error)
 }
 
@@ -267,10 +267,10 @@ func executeRandomOp(e Engine, keyPool, rowKeyPool *KeyPool, columnPool *ColumnP
 		name string
 		fn   func() error
 	}{
-		{"Put", func() error { return e.Put(keys[0], values[0]) }},
-		{"BatchPut", func() error { return e.BatchPut(keys, values) }},
-		{"Delete", func() error { return e.Delete(keys[1]) }},
-		{"BatchDelete", func() error { return e.BatchDelete(keys) }},
+		{"PutKV", func() error { return e.PutKV(keys[0], values[0]) }},
+		{"BatchPutKV", func() error { return e.BatchPutKV(keys, values) }},
+		{"DeleteKV", func() error { return e.DeleteKV(keys[1]) }},
+		{"BatchDeleteKV", func() error { return e.BatchDeleteKV(keys) }},
 		{"PutColumnsForRow", func() error { return e.PutColumnsForRow(rowKey, columns) }},
 		{"DeleteColumnsForRow", func() error { return e.DeleteColumnsForRow(rowKey, columns) }},
 	}
@@ -281,8 +281,8 @@ func executeRandomOp(e Engine, keyPool, rowKeyPool *KeyPool, columnPool *ColumnP
 				name string
 				fn   func() error
 			}{
-				{"Get", func() error {
-					_, err := e.Get(keys[0])
+				{"GetKV", func() error {
+					_, err := e.GetKV(keys[0])
 					if !errors.Is(err, dbkernel.ErrKeyNotFound) {
 						return err
 					}

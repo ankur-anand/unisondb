@@ -153,8 +153,8 @@ func (e *Engine) GetWalCheckPoint() (*internal.Metadata, error) {
 	return &metadata, nil
 }
 
-// Put inserts a key-value pair.
-func (e *Engine) Put(key, value []byte) error {
+// PutKV inserts a key-value pair.
+func (e *Engine) PutKV(key, value []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
@@ -167,8 +167,8 @@ func (e *Engine) Put(key, value []byte) error {
 	return e.persistKeyValue([][]byte{key}, [][]byte{value}, logrecord.LogOperationTypeInsert)
 }
 
-// BatchPut insert the associated Key Value Pair.
-func (e *Engine) BatchPut(key, value [][]byte) error {
+// BatchPutKV insert the associated Key Value Pair.
+func (e *Engine) BatchPutKV(key, value [][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
@@ -180,8 +180,8 @@ func (e *Engine) BatchPut(key, value [][]byte) error {
 	return e.persistKeyValue(key, value, logrecord.LogOperationTypeInsert)
 }
 
-// Delete removes a key and its value pair.
-func (e *Engine) Delete(key []byte) error {
+// DeleteKV removes a key and its value pair.
+func (e *Engine) DeleteKV(key []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
@@ -195,8 +195,8 @@ func (e *Engine) Delete(key []byte) error {
 	return e.persistKeyValue([][]byte{key}, nil, logrecord.LogOperationTypeDelete)
 }
 
-// BatchDelete removes all the key and its value pair.
-func (e *Engine) BatchDelete(keys [][]byte) error {
+// BatchDeleteKV removes all the key and its value pair.
+func (e *Engine) BatchDeleteKV(keys [][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
@@ -245,8 +245,8 @@ func hasNewWriteSince(current, lastSeen *Offset) bool {
 		(current.SegmentID == lastSeen.SegmentID && current.Offset > lastSeen.Offset)
 }
 
-// Get retrieves the value associated with the given key.
-func (e *Engine) Get(key []byte) ([]byte, error) {
+// GetKV retrieves the value associated with the given key.
+func (e *Engine) GetKV(key []byte) ([]byte, error) {
 	if e.shutdown.Load() {
 		return nil, ErrInCloseProcess
 	}
@@ -559,4 +559,49 @@ func (e *Engine) NewReaderWithTail(startPos *Offset) (*Reader, error) {
 		return e.walIO.NewReader(wal.WithActiveTail(true))
 	}
 	return e.walIO.NewReaderWithStart(startPos, wal.WithActiveTail(true))
+}
+
+// GetLOB returns the full LOB value (joined).
+func (e *Engine) GetLOB(key []byte) ([]byte, error) {
+	if e.shutdown.Load() {
+		return nil, ErrInCloseProcess
+	}
+
+	e.mu.RLock()
+	inBloom := e.bloom.Test(key)
+	var yv y.ValueStruct
+	if inBloom {
+		yv = e.activeMemTable.Get(key)
+		if yv.Meta == byte(logrecord.LogOperationTypeNoOperation) {
+			for i := len(e.sealedMemTables) - 1; i >= 0; i-- {
+				if val := e.sealedMemTables[i].Get(key); val.Meta != byte(logrecord.LogOperationTypeNoOperation) {
+					yv = val
+					break
+				}
+			}
+		}
+	}
+	e.mu.RUnlock()
+
+	if yv.UserMeta == internal.EntryTypeChunked {
+		rec, err := internal.GetWalRecord(yv, e.walIO)
+		if err != nil {
+			return nil, err
+		}
+		return e.reconstructChunkedValue(rec)
+	}
+
+	chunks, err := e.dataStore.GetLOBChunks(key)
+	if err != nil {
+		return nil, err
+	}
+	total := 0
+	for _, c := range chunks {
+		total += len(c)
+	}
+	out := make([]byte, 0, total)
+	for _, c := range chunks {
+		out = append(out, c...)
+	}
+	return out, nil
 }

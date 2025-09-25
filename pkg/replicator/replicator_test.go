@@ -30,7 +30,7 @@ func TestReplicator_Replicate(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		key := gofakeit.UUID()
 		value := gofakeit.Sentence(100)
-		assert.NoError(t, engine.Put([]byte(key), []byte(value)), "put should not fail")
+		assert.NoError(t, engine.PutKV([]byte(key), []byte(value)), "put should not fail")
 	}
 
 	batchSize := 10
@@ -53,7 +53,7 @@ func TestReplicator_Replicate(t *testing.T) {
 			case <-ticker.C:
 				key := gofakeit.UUID()
 				value := gofakeit.Sentence(100)
-				assert.NoError(t, engine.Put([]byte(key), []byte(value)), "put should not fail")
+				assert.NoError(t, engine.PutKV([]byte(key), []byte(value)), "put should not fail")
 			}
 		}
 	}()
@@ -114,7 +114,7 @@ func TestReplicator_StartFromNonZeroOffset(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		key := []byte("key" + strconv.Itoa(i))
 		value := []byte("value" + strconv.Itoa(i))
-		assert.NoError(t, engine.Put(key, value))
+		assert.NoError(t, engine.PutKV(key, value))
 		time.Sleep(10 * time.Millisecond)
 		last := engine.CurrentOffset()
 		offsets = append(offsets, last)
@@ -171,7 +171,7 @@ func TestReplicator_ContextCancelledBeforeLoop(t *testing.T) {
 	assert.NoError(t, err)
 	t.Cleanup(func() { _ = engine.Close(context.Background()) })
 
-	assert.NoError(t, engine.Put([]byte("key"), []byte("value")))
+	assert.NoError(t, engine.PutKV([]byte("key"), []byte("value")))
 
 	rep := NewReplicator(engine, 5, 1*time.Second, nil, "testing")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -195,7 +195,7 @@ func TestReplicator_SendFuncBlockedCtxDone(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		key := gofakeit.UUID()
 		value := gofakeit.Sentence(10)
-		assert.NoError(t, engine.Put([]byte(key), []byte(value)))
+		assert.NoError(t, engine.PutKV([]byte(key), []byte(value)))
 	}
 
 	recvChan := make(chan []*v1.WALRecord)

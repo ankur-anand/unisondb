@@ -176,8 +176,8 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	for i := 0; i < 4000; i++ {
 		key := []byte(fmt.Sprintf("%s%d", keyPrefix, i))
 
-		err := engine.Put(key, value)
-		assert.NoError(t, err, "Put operation should not fail")
+		err := engine.PutKV(key, value)
+		assert.NoError(t, err, "PutKV operation should not fail")
 
 		if i%20 == 0 {
 			time.Sleep(50 * time.Millisecond)
@@ -192,7 +192,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 
 	for i := 0; i < 1; i++ {
 		key := []byte(fmt.Sprintf("%s%d", keyPrefix, i))
-		valueRec, err := engine.Get(key)
+		valueRec, err := engine.GetKV(key)
 		assert.NoError(t, err, "GetKV operation should not fail")
 		assert.Equal(t, valueRec, value, "failed here as well")
 
@@ -247,7 +247,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 
 	for i := 0; i < 4000; i++ {
 		key := []byte(fmt.Sprintf("%s%d", keyPrefix, i))
-		retrievedValue, err := engine.Get(key)
+		retrievedValue, err := engine.GetKV(key)
 
 		assert.NoError(t, err, "GetKV operation should succeed")
 		assert.NotNil(t, retrievedValue, "Retrieved value should not be nil")
@@ -262,7 +262,7 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	// 4000 ops, for keys, > As Batch is not Commited, (1 batch start + (not 1 batch commit.) not included)
 	assert.Equal(t, uint64(4000), engine.OpsReceivedCount())
 
-	value, err = engine.Get(batchKey)
+	value, err = engine.GetKV(batchKey)
 	assert.ErrorIs(t, err, ErrKeyNotFound, "GetKV operation should not succeed")
 	assert.Nil(t, value, "GetKV value should not be nil")
 }
@@ -610,8 +610,8 @@ func TestRecoveryAndCheckPoint(t *testing.T) {
 		key := gofakeit.UUID()
 		value := gofakeit.LetterN(100)
 		kv[key] = value
-		err := engine.Put([]byte(key), []byte(value))
-		assert.NoError(t, err, "Put operation should succeed")
+		err := engine.PutKV([]byte(key), []byte(value))
+		assert.NoError(t, err, "PutKV operation should succeed")
 	}
 
 	// rotate and flush memTable.
@@ -641,8 +641,8 @@ func TestRecoveryAndCheckPoint(t *testing.T) {
 			key := gofakeit.UUID()
 			value := gofakeit.LetterN(100)
 			kv[key] = value
-			err := engine.Put([]byte(key), []byte(value))
-			assert.NoError(t, err, "Put operation should succeed")
+			err := engine.PutKV([]byte(key), []byte(value))
+			assert.NoError(t, err, "PutKV operation should succeed")
 		}
 
 		assert.Equal(t, entryCount, int(engine.OpsFlushedCount()), "expected ops flushed count")
@@ -651,7 +651,7 @@ func TestRecoveryAndCheckPoint(t *testing.T) {
 	}
 
 	for k, v := range kv {
-		value, err := engine.Get([]byte(k))
+		value, err := engine.GetKV([]byte(k))
 		assert.NoError(t, err, "GetKV operation should succeed")
 		assert.Equal(t, v, string(value), "unexpected value for key")
 	}
@@ -949,8 +949,8 @@ func TestBtreeSyncInterval_Engine(t *testing.T) {
 		key := gofakeit.UUID()
 		value := gofakeit.LetterN(100)
 		kv[key] = value
-		err := engine.Put([]byte(key), []byte(value))
-		assert.NoError(t, err, "Put operation should succeed")
+		err := engine.PutKV([]byte(key), []byte(value))
+		assert.NoError(t, err, "PutKV operation should succeed")
 	}
 	engine.rotateMemTable()
 
@@ -1031,4 +1031,69 @@ func TestNotificationCoalesce(t *testing.T) {
 	case <-time.After(10 * time.Millisecond):
 		t.Errorf("Immediate notification did not occur when coalescing was disabled")
 	}
+}
+
+func TestGetLOB_WALAndPersisted(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_lob"
+
+	engine, err := NewStorageEngine(baseDir, namespace, NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		_ = engine.Close(context.Background())
+	})
+
+	key := []byte("lob-key")
+	chunks := [][]byte{
+		[]byte("hello "),
+		[]byte("big "),
+		[]byte("world"),
+	}
+	want := append(append(append([]byte{}, chunks[0]...), chunks[1]...), chunks[2]...)
+
+	txn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
+	assert.NoError(t, err)
+
+	for _, c := range chunks {
+		assert.NoError(t, txn.AppendKVTxn(key, c))
+	}
+	assert.NoError(t, txn.Commit())
+
+	got, err := engine.GetLOB(key)
+	assert.NoError(t, err)
+	assert.Equal(t, want, got, "WAL reconstruction should join chunks in order")
+
+	done := make(chan struct{}, 1)
+	engine.callback = func() {
+		select {
+		case done <- struct{}{}:
+		default:
+		}
+	}
+
+	engine.rotateMemTable()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timeout waiting for memtable flush/fsync")
+	}
+
+	got, err = engine.GetLOB(key)
+	assert.NoError(t, err)
+	assert.Equal(t, want, got, "Persisted LOB should match joined chunks")
+}
+
+func TestGetLOB_NotFound(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_lob_nf"
+
+	engine, err := NewStorageEngine(baseDir, namespace, NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		_ = engine.Close(context.Background())
+	})
+	
+	_, err = engine.GetLOB([]byte("missing-key"))
+	assert.Error(t, err)
 }
