@@ -1093,7 +1093,7 @@ func TestGetLOB_NotFound(t *testing.T) {
 	t.Cleanup(func() {
 		_ = engine.Close(context.Background())
 	})
-	
+
 	_, err = engine.GetLOB([]byte("missing-key"))
 	assert.Error(t, err)
 }
