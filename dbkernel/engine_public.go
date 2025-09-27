@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"sync"
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
@@ -229,35 +228,6 @@ func (e *Engine) BatchDeleteKV(keys [][]byte) error {
 	defer timer.Stop()
 
 	return e.persistKeyValue(keys, nil, logrecord.LogOperationTypeDelete)
-}
-
-var timerPool = sync.Pool{
-	New: func() any {
-		t := time.NewTimer(time.Hour)
-		if !t.Stop() {
-			select {
-			case <-t.C:
-			default:
-			}
-		}
-		return t
-	},
-}
-
-func getTimer(d time.Duration) *time.Timer {
-	t := timerPool.Get().(*time.Timer)
-	t.Reset(d)
-	return t
-}
-
-func putTimer(t *time.Timer) {
-	if !t.Stop() {
-		select {
-		case <-t.C:
-		default:
-		}
-	}
-	timerPool.Put(t)
 }
 
 // WaitForAppendOrDone blocks until a put/delete operation occurs or context cancelled is done.
