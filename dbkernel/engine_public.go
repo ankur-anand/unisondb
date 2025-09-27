@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
@@ -230,8 +231,37 @@ func (e *Engine) BatchDeleteKV(keys [][]byte) error {
 	return e.persistKeyValue(keys, nil, logrecord.LogOperationTypeDelete)
 }
 
-// WaitForAppendOrDone blocks until a put/delete operation occurs or timeout happens or context cancelled is done.
-func (e *Engine) WaitForAppendOrDone(callerDone chan struct{}, timeout time.Duration, lastSeen *Offset) error {
+var timerPool = sync.Pool{
+	New: func() any {
+		t := time.NewTimer(time.Hour)
+		if !t.Stop() {
+			select {
+			case <-t.C:
+			default:
+			}
+		}
+		return t
+	},
+}
+
+func getTimer(d time.Duration) *time.Timer {
+	t := timerPool.Get().(*time.Timer)
+	t.Reset(d)
+	return t
+}
+
+func putTimer(t *time.Timer) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	timerPool.Put(t)
+}
+
+// WaitForAppendOrDone blocks until a put/delete operation occurs or context cancelled is done.
+func (e *Engine) WaitForAppendOrDone(callerDone chan struct{}, lastSeen *Offset) error {
 	currentPos := e.currentOffset.Load()
 	if currentPos != nil && hasNewWriteSince(currentPos, lastSeen) {
 		return nil
@@ -252,8 +282,6 @@ func (e *Engine) WaitForAppendOrDone(callerDone chan struct{}, timeout time.Dura
 		return context.Canceled
 	case <-done:
 		return nil
-	case <-time.After(timeout):
-		return ErrWaitTimeoutExceeded
 	}
 }
 

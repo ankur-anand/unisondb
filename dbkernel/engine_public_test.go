@@ -177,12 +177,8 @@ func TestEngine_WaitForAppend(t *testing.T) {
 	key := []byte("test-key")
 	value := []byte("test-value")
 
-	timeout := 100 * time.Millisecond
-
 	callerDone := make(chan struct{})
-	err = engine.WaitForAppendOrDone(callerDone, timeout, nil)
-	assert.ErrorIs(t, err, dbkernel.ErrWaitTimeoutExceeded, "no put op has been called should timeout")
-
+	
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -192,10 +188,10 @@ func TestEngine_WaitForAppend(t *testing.T) {
 		assert.NoError(t, err, "PutKV operation should succeed")
 	}()
 
-	err = engine.WaitForAppendOrDone(callerDone, 3*time.Second, nil)
+	err = engine.WaitForAppendOrDone(callerDone, nil)
 	assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after PutKV")
 
-	err = engine.WaitForAppendOrDone(callerDone, timeout, nil)
+	err = engine.WaitForAppendOrDone(callerDone, nil)
 	assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after PutKV and when last seen is nil")
 
 	cancelErr := make(chan error)
@@ -208,7 +204,7 @@ func TestEngine_WaitForAppend(t *testing.T) {
 			close(callerDone)
 		}()
 		defer cancel()
-		err := engine.WaitForAppendOrDone(callerDone, timeout, engine.CurrentOffset())
+		err := engine.WaitForAppendOrDone(callerDone, engine.CurrentOffset())
 		cancelErr <- err
 		close(cancelErr)
 	}()
@@ -220,7 +216,7 @@ func TestEngine_WaitForAppend(t *testing.T) {
 	err = engine.PutKV(key, value)
 	assert.NoError(t, err, "PutKV operation should succeed")
 
-	err = engine.WaitForAppendOrDone(callerDone, timeout, lastOffset)
+	err = engine.WaitForAppendOrDone(callerDone, lastOffset)
 	assert.NoError(t, err, "WaitForAppendOrDone should return without error after PutKV")
 	wg.Wait()
 }
@@ -253,7 +249,7 @@ func TestEngine_WaitForAppend_NGoroutine(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			readyWg.Done()
-			err := engine.WaitForAppendOrDone(callerDone, 10*time.Second, nil)
+			err := engine.WaitForAppendOrDone(callerDone, nil)
 			assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after PutKV")
 		}()
 	}
@@ -288,7 +284,7 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 	callerDone := make(chan struct{})
 	defer close(callerDone)
 	read := func(reader *dbkernel.Reader) {
-		err := engine.WaitForAppendOrDone(callerDone, 1*time.Minute, nil)
+		err := engine.WaitForAppendOrDone(callerDone, nil)
 		assert.NoError(t, err, "WaitForAppendOrDone should return without timeout after PutKV")
 		for {
 			value, _, err := reader.Next()
