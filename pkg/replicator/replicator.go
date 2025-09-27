@@ -13,10 +13,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
-const (
-	waitForAppendDefaultTimeout = 30 * time.Second
-)
-
 var (
 	mKeyActiveReplicator = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "unisondb",
@@ -102,7 +98,7 @@ func (r *Replicator) Replicate(ctx context.Context, recordsChan chan<- []*v1.WAL
 			return ctx.Err()
 		}
 
-		err := r.engine.WaitForAppendOrDone(r.ctxDone, waitForAppendDefaultTimeout, &r.lastOffset)
+		err := r.engine.WaitForAppendOrDone(r.ctxDone, &r.lastOffset)
 
 		if err != nil && !errors.Is(err, dbkernel.ErrWaitTimeoutExceeded) {
 			if r.reader != nil {
