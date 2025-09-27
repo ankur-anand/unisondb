@@ -20,6 +20,19 @@ var (
 	ErrInvalidOffset = errors.New("appendLog: offset does not match record")
 )
 
+var (
+	replicaInsertKV    = map[string]string{"surface": "replica", "op": "insert", "entry": "kv"}
+	replicaInsertRow   = map[string]string{"surface": "replica", "op": "insert", "entry": "row"}
+	replicaInsertChunk = map[string]string{"surface": "replica", "op": "insert", "entry": "chunked"}
+
+	replicaDeleteKV     = map[string]string{"surface": "replica", "op": "delete", "entry": "kv"}
+	replicaDeleteRow    = map[string]string{"surface": "replica", "op": "delete", "entry": "row"}
+	replicaDeleteRowKey = map[string]string{"surface": "replica", "op": "delete_row", "entry": "row"}
+
+	replicaCommitKV  = map[string]string{"surface": "replica", "op": "commit", "entry": "kv"}
+	replicaCommitRow = map[string]string{"surface": "replica", "op": "commit", "entry": "row"}
+)
+
 const mReplicationLatencySeconds = "replication_latency_physical_seconds"
 
 var replicationLatencyBuckets = tally.DurationBuckets{
@@ -157,6 +170,7 @@ func (wh *ReplicaWALHandler) handleInsert(record *logrecord.LogRecord, offset *O
 	logEntry := logcodec.DeserializeFBRootLogRecord(record)
 	switch record.EntryType() {
 	case logrecord.LogEntryTypeKV:
+		wh.engine.taggedScope.Tagged(replicaInsertKV).Counter(mRequestsTotal).Inc(1)
 		for _, entry := range logEntry.Entries {
 			kvEntry := logcodec.DeserializeKVEntry(entry)
 			memValue := getValueStruct(internal.LogOperationInsert, internal.EntryTypeKV, kvEntry.Value)
@@ -167,6 +181,7 @@ func (wh *ReplicaWALHandler) handleInsert(record *logrecord.LogRecord, offset *O
 		}
 		wh.engine.writeOffset(offset)
 	case logrecord.LogEntryTypeRow:
+		wh.engine.taggedScope.Tagged(replicaInsertRow).Counter(mRequestsTotal).Inc(1)
 		for _, entry := range logEntry.Entries {
 			rowEntry := logrecord.GetRootAsRowUpdateEntry(entry, 0)
 			rowKey := rowEntry.KeyBytes()
@@ -185,6 +200,7 @@ func (wh *ReplicaWALHandler) handleDelete(record *logrecord.LogRecord, offset *O
 	logEntry := logcodec.DeserializeFBRootLogRecord(record)
 	switch record.EntryType() {
 	case logrecord.LogEntryTypeKV:
+		wh.engine.taggedScope.Tagged(replicaDeleteKV).Counter(mRequestsTotal).Inc(1)
 		for _, entry := range logEntry.Entries {
 			kvEntry := logcodec.DeserializeKVEntry(entry)
 			memValue := getValueStruct(internal.LogOperationDelete, internal.EntryTypeKV, kvEntry.Value)
@@ -195,6 +211,7 @@ func (wh *ReplicaWALHandler) handleDelete(record *logrecord.LogRecord, offset *O
 		}
 		wh.engine.writeOffset(offset)
 	case logrecord.LogEntryTypeRow:
+		wh.engine.taggedScope.Tagged(replicaDeleteRow).Counter(mRequestsTotal).Inc(1)
 		for _, entry := range logEntry.Entries {
 			rowEntry := logrecord.GetRootAsRowUpdateEntry(entry, 0)
 			rowKey := rowEntry.KeyBytes()
@@ -212,6 +229,7 @@ func (wh *ReplicaWALHandler) handleDelete(record *logrecord.LogRecord, offset *O
 
 func (wh *ReplicaWALHandler) handleDeleteRowByKey(record *logrecord.LogRecord, offset *Offset) error {
 	logEntry := logcodec.DeserializeFBRootLogRecord(record)
+	wh.engine.taggedScope.Tagged(replicaDeleteRowKey).Counter(mRequestsTotal).Inc(1)
 	for _, entry := range logEntry.Entries {
 		rowEntry := logrecord.GetRootAsRowUpdateEntry(entry, 0)
 		rowKey := rowEntry.KeyBytes()
@@ -255,6 +273,7 @@ func (wh *ReplicaWALHandler) handleKVValuesTxn(record *logrecord.LogRecord, offs
 	// newer offset is present.
 	wh.engine.writeNilOffset()
 
+	var applied int64
 	for _, pRecord := range preparedRecords {
 		logEntry := logcodec.DeserializeFBRootLogRecord(pRecord)
 		for _, entry := range logEntry.Entries {
@@ -264,12 +283,15 @@ func (wh *ReplicaWALHandler) handleKVValuesTxn(record *logrecord.LogRecord, offs
 			if err != nil {
 				return err
 			}
+
+			applied++
 			// empty offset just to increment the offset count that will be flushed.
 			// new offset should or shouldn't be present.
 			wh.engine.writeNilOffset()
 		}
 	}
 
+	wh.engine.taggedScope.Tagged(replicaCommitKV).Counter(mRequestsTotal).Inc(applied)
 	// finally write the current offset.
 	wh.engine.writeOffset(offset)
 	return nil
@@ -289,6 +311,8 @@ func (wh *ReplicaWALHandler) handleRowColumnTxn(record *logrecord.LogRecord, off
 	// newer offset is present.
 	wh.engine.writeOffset(nil)
 
+	var applied int64
+
 	for _, pRecord := range preparedRecords {
 		logEntry := logcodec.DeserializeFBRootLogRecord(pRecord)
 		for _, entry := range logEntry.Entries {
@@ -298,10 +322,13 @@ func (wh *ReplicaWALHandler) handleRowColumnTxn(record *logrecord.LogRecord, off
 			if err != nil {
 				return err
 			}
+
+			applied++
 			wh.engine.writeNilOffset()
 		}
 	}
 
+	wh.engine.taggedScope.Tagged(replicaCommitRow).Counter(mRequestsTotal).Inc(applied)
 	wh.engine.writeOffset(offset)
 	return nil
 }
@@ -309,6 +336,7 @@ func (wh *ReplicaWALHandler) handleRowColumnTxn(record *logrecord.LogRecord, off
 // handleChunkedValuesTxn saves all the chunked value that is part of the current commit txn.
 // to the provided btree based store.
 func (wh *ReplicaWALHandler) handleChunkedValuesTxn(record *logrecord.LogRecord, offset *Offset) error {
+	wh.engine.taggedScope.Tagged(replicaInsertChunk).Counter(mRequestsTotal).Inc(1)
 	logEntry := logcodec.DeserializeFBRootLogRecord(record)
 	kvEntry := logcodec.DeserializeKVEntry(logEntry.Entries[0])
 	chunkedKey := kvEntry.Key
