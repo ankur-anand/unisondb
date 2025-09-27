@@ -178,7 +178,7 @@ func TestEngine_WaitForAppend(t *testing.T) {
 	value := []byte("test-value")
 
 	callerDone := make(chan struct{})
-	
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
