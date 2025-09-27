@@ -1,6 +1,7 @@
 package dbkernel
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -112,13 +113,16 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 	latency := time.Duration(physicalLatencyMs) * time.Millisecond
 	wh.engine.taggedScope.Histogram(mReplicationLatencySeconds, replicationLatencyBuckets).RecordDuration(latency)
 
-	slog.Debug("[dbkernel]",
-		slog.String("message", "Measured replication apply latency"),
-		slog.Group("replication",
-			slog.Uint64("remote_hlc", remoteHLC),
-			slog.Uint64("physical_latency_ms", physicalLatencyMs),
-		),
-	)
+	// just a small optimization to skip debug log if not enabled upfront.
+	if slog.Default().Enabled(context.Background(), slog.LevelDebug) {
+		slog.Debug("[dbkernel]",
+			slog.String("message", "Measured replication apply latency"),
+			slog.Group("replication",
+				slog.Uint64("remote_hlc", remoteHLC),
+				slog.Uint64("physical_latency_ms", physicalLatencyMs),
+			),
+		)
+	}
 
 	return wh.handleRecord(decoded, offset)
 }
