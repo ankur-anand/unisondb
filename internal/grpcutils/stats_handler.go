@@ -43,17 +43,12 @@ type GRPCStatsHandler struct {
 	activeConn     *prometheus.GaugeVec
 	connTotalCount *prometheus.CounterVec
 
-	rpcHandled      *prometheus.CounterVec
-	rpcDuration     *prometheus.HistogramVec
-	rpcInFlight     *prometheus.GaugeVec
-	rpcErrorCounter *prometheus.CounterVec
-
-	messageSize *prometheus.HistogramVec
-	sentMessage *prometheus.CounterVec
-	recvMessage *prometheus.CounterVec
-
-	// these need to have a large vector or summary ?
-	connDuration *prometheus.HistogramVec
+	rpcHandled       *prometheus.CounterVec
+	rpcHandledByCode *prometheus.CounterVec
+	rpcDuration      *prometheus.HistogramVec
+	rpcInFlight      *prometheus.GaugeVec
+	rpcErrorCounter  *prometheus.CounterVec
+	connDuration     *prometheus.HistogramVec
 }
 
 type streamInfo struct {
@@ -88,9 +83,12 @@ func NewGRPCStatsHandler(methodInfo map[string]string) *GRPCStatsHandler {
 			Name:      "connection_duration_seconds",
 			Help:      "Duration of grpc connections in seconds",
 			Buckets: []float64{
-				1, 5, 10, 30, 60, // short duration connections.
-				300, 600, 900, 1800, // minutes long connections.
-				3600, 7200, 14400, 28800, 43200, 86400}, // hour long connections.
+				// short duration connections
+				1, 5, 10, 30, 60,
+				// minutes
+				300, 600, 900, 1800,
+				// hours
+				3600, 7200, 14400, 28800, 43200, 86400},
 		}, nil),
 
 		rpcHandled: promauto.NewCounterVec(prometheus.CounterOpts{
@@ -105,7 +103,7 @@ func NewGRPCStatsHandler(methodInfo map[string]string) *GRPCStatsHandler {
 			Subsystem: promSubSystem,
 			Name:      "rpc_duration_seconds",
 			Help:      "Duration of completed rpc in seconds",
-		}, []string{"grpc_service", "grpc_method", "grpc_type", "status_code"}),
+		}, []string{"grpc_service", "grpc_method", "grpc_type"}),
 
 		rpcInFlight: promauto.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: promNamespace,
@@ -121,28 +119,12 @@ func NewGRPCStatsHandler(methodInfo map[string]string) *GRPCStatsHandler {
 			Help:      "Total number of RPC Errors",
 		}, []string{"grpc_service", "grpc_method", "grpc_type", "status_code"}),
 
-		recvMessage: promauto.NewCounterVec(prometheus.CounterOpts{
+		rpcHandledByCode: promauto.NewCounterVec(prometheus.CounterOpts{
 			Namespace: promNamespace,
 			Subsystem: promSubSystem,
-			Name:      "recv_message_total",
-			Help:      "Total number of received message",
-		}, []string{"grpc_service", "grpc_method", "grpc_type"}),
-
-		sentMessage: promauto.NewCounterVec(prometheus.CounterOpts{
-			Namespace: promNamespace,
-			Subsystem: promSubSystem,
-			Name:      "sent_message_total",
-			Help:      "Total number of sent message",
-		}, []string{"grpc_service", "grpc_method", "grpc_type"}),
-
-		messageSize: promauto.NewHistogramVec(prometheus.HistogramOpts{
-			Namespace: promNamespace,
-			Subsystem: promSubSystem,
-			Name:      "rpc_message_size_bytes",
-			Help:      "Size of gRPC message in bytes (direction)",
-			// 1KB to 2MB
-			Buckets: prometheus.ExponentialBuckets(1024, 2, 12),
-		}, []string{"grpc_service", "grpc_method", "grpc_type", "direction"}),
+			Name:      "rpc_handled_total_by_code",
+			Help:      "Total number of RPCs handled, partitioned by status code",
+		}, []string{"grpc_service", "grpc_method", "grpc_type", "status_code"}),
 
 		activeStreamCount: promauto.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: promNamespace,
@@ -198,22 +180,25 @@ func (h *GRPCStatsHandler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 
 	case *stats.End:
 		statusCode := getStatusCode(rpcStats.Error)
+
+		h.rpcHandledByCode.
+			WithLabelValues(service, method, methodType, statusCode).
+			Inc()
+
 		if rpcStats.Error != nil && !isGracefulShutdown(rpcStats.Error) {
 			h.rpcErrorCounter.WithLabelValues(service, method, methodType, statusCode).Inc()
 		}
+
 		h.rpcInFlight.WithLabelValues(service, method, methodType).Dec()
-		h.rpcDuration.WithLabelValues(service, method, methodType, statusCode).Observe(rpcStats.EndTime.Sub(rpcStats.BeginTime).Seconds())
+
+		h.rpcDuration.
+			WithLabelValues(service, method, methodType).
+			Observe(rpcStats.EndTime.Sub(rpcStats.BeginTime).Seconds())
+
 		if methodType != unary {
 			h.activeStreamsMap.Delete(rpcID)
 			h.activeStreamCount.WithLabelValues(service, method, methodType).Dec()
 		}
-
-	case *stats.InPayload:
-		h.recvMessage.WithLabelValues(service, method, methodType).Inc()
-		h.messageSize.WithLabelValues(service, method, methodType, "received").Observe(float64(rpcStats.WireLength))
-	case *stats.OutPayload:
-		h.sentMessage.WithLabelValues(service, method, methodType).Inc()
-		h.messageSize.WithLabelValues(service, method, methodType, "sent").Observe(float64(rpcStats.WireLength))
 	}
 }
 
