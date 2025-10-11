@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 )
 
 func mustBenchEngine(tb testing.TB, ns string) *dbkernel.Engine {
@@ -111,7 +112,7 @@ func BenchmarkReplica_ApplyRecord_KV_Isolated(b *testing.B) {
 
 	type item struct {
 		enc []byte
-		off []byte
+		off dbkernel.Offset
 	}
 	items := make([]item, b.N)
 
@@ -134,14 +135,17 @@ func BenchmarkReplica_ApplyRecord_KV_Isolated(b *testing.B) {
 		if err != nil {
 			b.Fatalf("source.Next: %v", err)
 		}
-		items[i] = item{enc: append([]byte(nil), enc...), off: off.Encode()}
+		items[i] = item{enc: append([]byte(nil), enc...), off: off}
 	}
 
 	b.ReportAllocs()
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		if err := replicator.ApplyRecord(items[i].enc, items[i].off); err != nil {
+		if err := replicator.ApplyRecord(items[i].enc, wal.Offset{
+			SegmentID: items[i].off.SegmentID,
+			Offset:    items[i].off.Offset,
+		}); err != nil {
 			b.Fatal(err)
 		}
 	}

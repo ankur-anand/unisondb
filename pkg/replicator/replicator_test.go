@@ -82,7 +82,10 @@ outer:
 
 	wg.Wait()
 	lastRecord := recvRecords[len(recvRecords)-1]
-	lastOffset := dbkernel.DecodeOffset(lastRecord.Offset)
+	lastOffset := &dbkernel.Offset{
+		SegmentID: lastRecord.Offset.SegmentId,
+		Offset:    int64(lastRecord.Offset.Offset),
+	}
 	r, err := engine.NewReaderWithStart(lastOffset)
 	assert.NoError(t, err)
 	pendingReadCount := 0
@@ -147,7 +150,10 @@ collect:
 	assert.Len(t, all, 5, "should receive only records after start offset")
 
 	for i, record := range all {
-		offset := dbkernel.DecodeOffset(record.Offset)
+		offset := &dbkernel.Offset{
+			SegmentID: record.Offset.SegmentId,
+			Offset:    int64(record.Offset.Offset),
+		}
 		assert.True(t, isOffsetGreater(offset, startOffset),
 			"record %d offset %v should be > %v", i, offset, startOffset)
 	}

@@ -156,7 +156,7 @@ func (r *Replicator) replicateFromReader(ctx context.Context, recordsChan chan<-
 		}
 
 		walRecord := &v1.WALRecord{
-			Offset: pos.Encode(),
+			Offset: &v1.RecordPosition{Offset: uint64(pos.Offset), SegmentId: pos.SegmentID},
 			Record: value,
 			// TODO: Get From the WAL Reader itself. Don't calculate here.
 			//Crc32Checksum: crc32.Checksum(value, crcTable),

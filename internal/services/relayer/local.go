@@ -91,7 +91,11 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 				n.lsn++
 			}
 			n.replicatedCount += len(records)
-			n.lastOffset = dbkernel.DecodeOffset(records[len(records)-1].Offset)
+			n.lastOffset = &dbkernel.Offset{
+				Offset:    int64(records[len(records)-1].Offset.Offset),
+				SegmentID: records[len(records)-1].Offset.SegmentId,
+			}
+
 		case err := <-replicatorErrors:
 			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {
 				return nil

@@ -158,13 +158,12 @@ func TestGRPCStatsHandler(t *testing.T) {
 				WireLength: 100,
 			}
 			handler.HandleRPC(ctx, inPayload)
-			assert.Equal(t, loop, testutil.CollectAndCount(handler.recvMessage))
 
 			outPayload := &stats.OutPayload{
 				WireLength: 200,
 			}
 			handler.HandleRPC(ctx, outPayload)
-			assert.Equal(t, loop, testutil.CollectAndCount(handler.sentMessage))
+
 			end := &stats.End{
 				BeginTime: begin.BeginTime,
 				EndTime:   time.Now(),

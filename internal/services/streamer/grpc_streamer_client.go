@@ -35,7 +35,7 @@ type GrpcStreamerClient struct {
 	namespace string
 	wIO       WalIO
 	// offset of the record that was last received.
-	offset []byte
+	offset *dbkernel.Offset
 }
 
 func NewGrpcStreamerClient(gcc *grpc.ClientConn, namespace string, wIO WalIO, offset []byte) *GrpcStreamerClient {
@@ -43,7 +43,7 @@ func NewGrpcStreamerClient(gcc *grpc.ClientConn, namespace string, wIO WalIO, of
 		gcc:       gcc,
 		namespace: namespace,
 		wIO:       wIO,
-		offset:    offset,
+		offset:    dbkernel.DecodeOffset(offset),
 	}
 }
 
@@ -86,7 +86,7 @@ func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 		}
 
 		client, err := v1.NewWalStreamerServiceClient(c.gcc).StreamWalRecords(ctx, &v1.StreamWalRecordsRequest{
-			Offset: c.offset,
+			Offset: c.offset.Encode(),
 		})
 
 		if err != nil {
@@ -143,7 +143,10 @@ func (c *GrpcStreamerClient) receiveWALRecords(client v1.WalStreamerService_Stre
 		clientWalRecvTotal.WithLabelValues(c.namespace, "grpc").Add(float64(len(res.Records)))
 
 		for _, record := range res.Records {
-			c.offset = record.Offset
+			c.offset = &dbkernel.Offset{
+				SegmentID: record.Offset.SegmentId,
+				Offset:    int64(record.Offset.Offset),
+			}
 			if err := c.wIO.Write(record); err != nil {
 				return err
 			}

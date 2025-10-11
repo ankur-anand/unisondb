@@ -94,7 +94,10 @@ func (m *mockStreamer) StreamWAL(ctx context.Context) error {
 			return err
 		}
 
-		err = m.walIOHandler.Write(&v1.WALRecord{Record: value, Offset: offset.Encode()})
+		err = m.walIOHandler.Write(&v1.WALRecord{Record: value, Offset: &v1.RecordPosition{
+			SegmentId: offset.SegmentID,
+			Offset:    uint64(offset.Offset),
+		}})
 		if err != nil {
 			return err
 		}
@@ -205,7 +208,10 @@ func TestRateLimitedWalIO_ContextCancellation(t *testing.T) {
 	limiter := rate.NewLimiter(rate.Limit(1), 1)
 	rlWalIO := NewRateLimitedWalIO(ctx, mock, limiter)
 
-	record := &v1.WALRecord{Offset: []byte("test-offset"), Record: []byte("test-record")}
+	record := &v1.WALRecord{Offset: &v1.RecordPosition{
+		SegmentId: 0,
+		Offset:    0,
+	}, Record: []byte("test-record")}
 
 	err := rlWalIO.Write(record)
 	assert.NoError(t, err)
