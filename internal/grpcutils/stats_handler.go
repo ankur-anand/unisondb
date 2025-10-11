@@ -43,12 +43,11 @@ type GRPCStatsHandler struct {
 	activeConn     *prometheus.GaugeVec
 	connTotalCount *prometheus.CounterVec
 
-	rpcHandled       *prometheus.CounterVec
-	rpcHandledByCode *prometheus.CounterVec
-	rpcDuration      *prometheus.HistogramVec
-	rpcInFlight      *prometheus.GaugeVec
-	rpcErrorCounter  *prometheus.CounterVec
-	connDuration     *prometheus.HistogramVec
+	rpcHandled      *prometheus.CounterVec
+	rpcDuration     *prometheus.HistogramVec
+	rpcInFlight     *prometheus.GaugeVec
+	rpcErrorCounter *prometheus.CounterVec
+	connDuration    *prometheus.HistogramVec
 }
 
 type streamInfo struct {
@@ -119,13 +118,6 @@ func NewGRPCStatsHandler(methodInfo map[string]string) *GRPCStatsHandler {
 			Help:      "Total number of RPC Errors",
 		}, []string{"grpc_service", "grpc_method", "grpc_type", "status_code"}),
 
-		rpcHandledByCode: promauto.NewCounterVec(prometheus.CounterOpts{
-			Namespace: promNamespace,
-			Subsystem: promSubSystem,
-			Name:      "rpc_handled_total_by_code",
-			Help:      "Total number of RPCs handled, partitioned by status code",
-		}, []string{"grpc_service", "grpc_method", "grpc_type", "status_code"}),
-
 		activeStreamCount: promauto.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: promNamespace,
 			Subsystem: promSubSystem,
@@ -180,10 +172,6 @@ func (h *GRPCStatsHandler) HandleRPC(ctx context.Context, rs stats.RPCStats) {
 
 	case *stats.End:
 		statusCode := getStatusCode(rpcStats.Error)
-
-		h.rpcHandledByCode.
-			WithLabelValues(service, method, methodType, statusCode).
-			Inc()
 
 		if rpcStats.Error != nil && !isGracefulShutdown(rpcStats.Error) {
 			h.rpcErrorCounter.WithLabelValues(service, method, methodType, statusCode).Inc()
