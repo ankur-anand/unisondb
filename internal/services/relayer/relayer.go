@@ -75,7 +75,10 @@ type walIOHandler struct {
 }
 
 func (w walIOHandler) Write(data *v1.WALRecord) error {
-	return w.replica.ApplyRecord(data.Record, data.Offset)
+	return w.replica.ApplyRecord(data.Record, dbkernel.Offset{
+		SegmentID: data.Offset.SegmentId,
+		Offset:    int64(data.Offset.Offset),
+	})
 }
 
 // RateLimitedWalIO wraps WalIO with a token bucket rate limiter.

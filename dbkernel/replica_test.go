@@ -66,7 +66,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err, "error reading from reader")
-			err = replicator.ApplyRecord(walEncoded, offset.Encode())
+			err = replicator.ApplyRecord(walEncoded, offset)
 			assert.NoError(t, err, "error applying record to replicator")
 		}
 	})
@@ -110,7 +110,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err, "error reading from reader")
-			err = replicator.ApplyRecord(walEncoded, offset.Encode())
+			err = replicator.ApplyRecord(walEncoded, offset)
 			assert.NoError(t, err, "error applying record to replicator")
 		}
 	})
@@ -141,7 +141,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err, "error reading from reader")
-			err = replicator.ApplyRecord(walEncoded, offset.Encode())
+			err = replicator.ApplyRecord(walEncoded, offset)
 			assert.NoError(t, err, "error applying record to replicator")
 		}
 	})
@@ -183,7 +183,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err, "error reading from reader")
-			err = replicator.ApplyRecord(walEncoded, offset.Encode())
+			err = replicator.ApplyRecord(walEncoded, offset)
 			assert.NoError(t, err, "error applying record to replicator")
 		}
 
@@ -213,7 +213,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err, "error reading from reader")
-			err = replicator.ApplyRecord(walEncoded, offset.Encode())
+			err = replicator.ApplyRecord(walEncoded, offset)
 			assert.NoError(t, err, "error applying record to replicator")
 		}
 
@@ -247,7 +247,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err, "error reading from reader")
-			err = replicator.ApplyRecord(walEncoded, offset.Encode())
+			err = replicator.ApplyRecord(walEncoded, offset)
 			assert.NoError(t, err, "error applying record to replicator")
 		}
 
@@ -289,7 +289,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err, "error reading from reader")
-			err = replicator.ApplyRecord(walEncoded, offset.Encode())
+			err = replicator.ApplyRecord(walEncoded, offset)
 			assert.NoError(t, err, "error applying record to replicator")
 		}
 
@@ -387,7 +387,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 				break
 			}
 			assert.NoError(t, err, "error reading from reader")
-			err = replicator.ApplyRecord(walEncoded, offset.Encode())
+			err = replicator.ApplyRecord(walEncoded, offset)
 			assert.NoError(t, err, "error applying record to replicator")
 		}
 
@@ -441,10 +441,10 @@ func TestReplicaWALHandler_ApplyRecord_Invalid(t *testing.T) {
 	}
 
 	encoded := record.FBEncode(1024)
-	err = replicator.ApplyRecord(encoded, []byte{123})
+	err = replicator.ApplyRecord(encoded, dbkernel.Offset{Offset: 123})
 	assert.ErrorIs(t, err, dbkernel.ErrInvalidLSN, "expected LSN Error")
 	assert.Equal(t, uint64(0), replicaEngine.OpsReceivedCount(), "ops received should be equal")
-	err = replicator.ApplyRecord(encoded, nil)
+	err = replicator.ApplyRecord(encoded, dbkernel.Offset{Offset: 0})
 	assert.ErrorIs(t, err, dbkernel.ErrInvalidOffset, "expected Invalid Offset Error")
 	assert.Equal(t, uint64(0), replicaEngine.OpsReceivedCount(), "ops received should be equal")
 
@@ -461,7 +461,7 @@ func TestReplicaWALHandler_ApplyRecord_Invalid(t *testing.T) {
 	}
 
 	encoded = record.FBEncode(1024)
-	err = replicator.ApplyRecord(encoded, []byte{123})
+	err = replicator.ApplyRecord(encoded, dbkernel.Offset{Offset: 123})
 	assert.ErrorIs(t, err, dbkernel.ErrInvalidOffset, "expected Invalid Offset Error")
 	assert.Equal(t, uint64(1), replicaEngine.OpsReceivedCount(), "ops received should be equal")
 }

@@ -64,8 +64,8 @@ func NewReplicaWALHandler(engine *Engine) *ReplicaWALHandler {
 }
 
 // ApplyRecord validates and applies a WAL record to the mem table which later get flushed to Btree Store.
-func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byte) error {
-	if receivedOffset == nil {
+func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset Offset) error {
+	if receivedOffset.Offset == 0 {
 		slog.Error("[dbkernel]",
 			slog.String("message", "Failed to apply record: nil offset received"),
 			slog.Group("engine",
@@ -94,7 +94,7 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 		return err
 	}
 
-	if !isEqualOffset(offset, DecodeOffset(receivedOffset)) {
+	if !isEqualOffset(offset, receivedOffset) {
 		slog.Error("[dbkernel]",
 			slog.String("message", "Failed to apply record: WAL offset mismatch"),
 			slog.Group("engine",
@@ -105,7 +105,7 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 				slog.Uint64("flushed", wh.engine.opsFlushedCounter.Load()),
 			),
 			slog.Group("offset",
-				slog.Any("received", wal.DecodeOffset(receivedOffset)),
+				slog.Any("received", receivedOffset),
 				slog.Any("expected", offset),
 				slog.Int("entry_size", len(encodedWal)),
 			),
@@ -140,7 +140,7 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset []byt
 	return wh.handleRecord(decoded, offset)
 }
 
-func isEqualOffset(local, remote *Offset) bool {
+func isEqualOffset(local *Offset, remote Offset) bool {
 	if local.SegmentID == remote.SegmentID && local.Offset == remote.Offset {
 		return true
 	}
