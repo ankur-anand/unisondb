@@ -202,10 +202,160 @@ UnisonDB uses **FlatBuffers** for zero-copy serialization of WAL records. This p
 <img src="./docs/schema_time.jpg" width="300"> <img src="./docs/schema_mem.jpg" width="300">
 
 ### Transaction Support
+UnisonDB provides **atomic multi-key transactions**:
+
+```
+┌─────────────────────────────────────────────────┐
+│ Transaction: Put(k1), Put(k2), Put(k3)      │
+└─────────────────────────────────────────────────┘
+                       │
+                       ▼
+          ┌────────────────────────┐
+          │  WAL Record 1          │ ← Begin (txn_id=T1)
+          │  op=Insert, key=k1     │   prev_txn_wal_index=nil
+          └────────────────────────┘
+                       │
+                       ▼
+          ┌────────────────────────┐
+          │  WAL Record 2          │ ← Continue (txn_id=T1)
+          │  op=Insert, key=k2     │   prev_txn_wal_index→Record1
+          └────────────────────────┘
+                       │
+                       ▼
+          ┌────────────────────────┐
+          │  WAL Record 3          │ ← Continue (txn_id=T1)
+          │  op=Insert, key=k3     │   prev_txn_wal_index→Record2
+          └────────────────────────┘
+                       │
+                       ▼
+          ┌────────────────────────┐
+          │  WAL Record 4          │ ← Commit (txn_id=T1)
+          │  txn_state=Commit      │   prev_txn_wal_index→Record3
+          └────────────────────────┘
+```
+
+**Transaction Properties:**
+- **Atomicity** - All writes become visible on commit, or none on abort
+- **Isolation** - Uncommitted writes are hidden from readers
+
 ### LOB (Large Object) Support
+
+Large values are chunked and streamed:
+
+```
+┌─────────────────────────────────────────────────┐
+│ PutLOB(key="video", value=100MB)               │
+└─────────────────────────────────────────────────┘
+                       │
+                       ▼ (Chunk into 1MB pieces)
+          ┌────────────────────────┐
+          │  WAL Record 1          │ ← entry_type=Chunked
+          │  chunk_id=0            │   txn_state=Begin
+          │  data=1MB              │
+          └────────────────────────┘
+                       │
+                       ▼
+          ┌────────────────────────┐
+          │  WAL Record 2-100      │ ← Intermediate chunks
+          │  chunk_id=1..99        │
+          └────────────────────────┘
+                       │
+                       ▼
+          ┌────────────────────────┐
+          │  WAL Record 101        │ ← Final chunk + commit
+          │  chunk_id=100          │   txn_state=Commit
+          └────────────────────────┘
+```
+
+**LOB Properties:**
+- **Transactional** - All chunks committed atomically
+- **Streaming** - Can write/read chunks incrementally
+- **Efficient replication** - Replicas get chunks as they arrive
+
 ### Wide-Column Support
 
-UnisonDB provides **atomic multi-key transactions**:
+UnisonDB supports partial updates to column families:
+
+```
+Row key: user:1001
+Columns: {name: "Alice", email: "alice@example.com", age: 30}
+
+Update only 'age' column:
+┌────────────────────────┐
+│  WAL Record            │
+│  op=Insert             │
+│  entry_type=Row        │
+│  key=user:1001         │
+│  columns=[             │
+│    {name="age",        │
+│     value="31"}        │
+│  ]                     │
+└────────────────────────┘
+```
+
+**Benefits:**
+- **Efficient updates** - Only modified columns are written/replicated
+- **Flexible schema** - Columns can be added dynamically
+- **Merge semantics** - New columns merged with existing row
+
+## 3. Replication Architecture
+
+### Overview
+
+Replication in UnisonDB is **WAL-based streaming** - designed around the WALFS reader capabilities. Followers continuously stream WAL records from the primary's WALFS and apply them locally.
+
+### Design Principles
+
+1. **Offset-based positioning** - Followers track their replication offset `(SegmentID, Offset)`
+2. **Catch-up from any offset** - Can resume replication from any position
+3. **Real-time streaming** - Active tail following for low-latency replication
+4. **Self-describing records** - FlatBuffer LogRecords are self-contained
+5. **Batched streaming** - Records sent in batches for efficiency
+
+### Replication Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                          Primary                                │
+│                                                                 │
+│  ┌──────────┐      ┌──────────┐      ┌──────────┐             │
+│  │  Client  │─────▶│  Engine  │─────▶│  WALFS   │             │
+│  │  Writes  │      │          │      │ Segments │             │
+│  └──────────┘      └──────────┘      └────┬─────┘             │
+│                                            │                   │
+│                                            │                   │
+│                                            ▼                   │
+│                                    ┌──────────────┐            │
+│                                    │ Replicator   │            │
+│                                    │  (Batching)  │            │
+│                                    └───────┬──────┘            │
+└────────────────────────────────────────────┼───────────────────┘
+                                             │
+                                             │ WAL Records
+                                             │ (Batched)
+                                             │
+         ┌───────────────────────────────────┼───────────────────────┐
+         │                                   │                       │
+         ▼                                   ▼                       ▼
+┌─────────────────┐              ┌─────────────────┐     ┌─────────────────┐
+│   Follower 1    │              │   Follower 2    │     │   Follower N    │
+│                 │              │                 │     │                 │
+│  ┌──────────┐   │              │  ┌──────────┐   │     │  ┌──────────┐   │
+│  │ Receiver │   │              │  │ Receiver │   │     │  │ Receiver │   │
+│  └─────┬────┘   │              │  └─────┬────┘   │     │  └─────┬────┘   │
+│        │        │              │        │        │     │        │        │
+│        ▼        │              │        ▼        │     │        ▼        │
+│  ┌──────────┐   │              │  ┌──────────┐   │     │  ┌──────────┐   │
+│  │  Engine  │   │              │  │  Engine  │   │     │  │  Engine  │   │
+│  │  (Apply) │   │              │  │  (Apply) │   │     │  │  (Apply) │   │
+│  └─────┬────┘   │              │  └─────┬────┘   │     │  └─────┬────┘   │
+│        │        │              │        │        │     │        │        │
+│        ▼        │              │        ▼        │     │        ▼        │
+│  ┌──────────┐   │              │  ┌──────────┐   │     │  ┌──────────┐   │
+│  │  WALFS   │   │              │  │  WALFS   │   │     │  │  WALFS   │   │
+│  └──────────┘   │              │  └──────────┘   │     │  └──────────┘   │
+└─────────────────┘              └─────────────────┘     └─────────────────┘
+```
 
 
 ## Why is Traditional KV Replication Insufficient?
