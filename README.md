@@ -39,7 +39,7 @@ UnisonDB is built on three foundational layers:
 WALFS is a memory-mapped, segmented write-ahead log implementation designed for **both writing AND reading at scale**. 
 Unlike traditional WALs that optimize only for sequential writes, WALFS provides efficient random access for replication, and real-time tailing.
 
-<img src="./docs/walnreader.png">
+<img src="./docs/walnreader.png" width="500">
 
 ### Segment Structure
 
