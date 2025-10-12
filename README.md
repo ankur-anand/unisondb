@@ -232,7 +232,7 @@ Replication in UnisonDB is **WAL-based streaming** - designed around the WALFS r
 * Catch-up from any offset - Resume from any position
 * Real-time streaming - Active tail following for low latency
 
-<img src="./docs/replication_flow.png">
+<img src="./docs/replication_flow.png" width="800" height="600">
 
 ## Performance Testing: Local Replication
 
