@@ -257,18 +257,13 @@ Physical Latency Tracking: Measures p50, p90, p99, and max latencies using times
 
 <img src="./docs/replication_test.png">
 
-### Replication Latency Under Pressure
+### Replication and Fuzzer(write path) Latency Under Pressure
 
-<img src="./docs/latency.jpg" width="600">
+<img src="./docs/latency.jpg" width="400"> <img src="./docs/fuzzing_latency.jpg" width="400">
 
 ### Replication Throughput
 
 <img src="./docs/replication_throughput.jpg" width="600">
-
-### Fuzzing Latency (write path)
-
-<img src="./docs/fuzzing_latency.jpg" width="600">
-
 
 ### Throughput Holds — Until It Doesn’t
 
