@@ -1,36 +1,31 @@
-## UnisonDB 🚀
+## UnisonDB
 
 <img src="docs/logo.svg" width="300" alt="UnisonDB" />
 
-> A Hybrid KV Store for Fast Writes, Efficient Reads, and Seamless Replication — with Explicit Transactions, 
-> LOB and Wide Column Support, Powered by Logs and Trees.
+> A multi-modal database combining WAL-based writes, B-Tree reads, and seamless replication — supporting KV, wide-column, and LOB data models with explicit transactions.
 
 [![ci-tests](https://github.com/ankur-anand/unisondb/actions/workflows/go.yml/badge.svg)](https://github.com/ankur-anand/unisondb/actions/workflows/go.yml)
 [![Coverage Status](https://coveralls.io/repos/github/ankur-anand/unisondb/badge.svg?branch=main)](https://coveralls.io/github/ankur-anand/unisondb?branch=main)
 
-## Overview
+## What UnisonDB Offers
 
-UnisonDB is a high-performance, replicated key-value store that blends the best of WALs, Memtables, and B-Trees to achieve:
+UnisonDB is a multi-modal replicated database that blends WALs, Memtables, and B-Trees to deliver:
 
-* Blazing-fast writes without LSM compaction overhead.
+* Fast writes - Write data quickly without background cleanup slowing you down
+* Fast reads - Find your data efficiently, even across large ranges
+* Built-in replication - Automatically sync data to multiple edge nodes
+* Handle large files - Store videos, images, and documents as easily as simple values
+* Flexible data structure - Update just one field without rewriting entire records
 
-* Optimized range queries with minimal disk I/O using B-Trees
-
-* Efficient replication via gRPC WAL streaming & B-Tree snapshots
-
-* Seamless multi-region scaling with rapid fail over.
-
-* LOB support via chunked, transactional writes for large object handling.
-
-* Flexible wide-column data modeling for dynamic, nested records
+![storage architecture](docs/arch.svg)
 
 ## Core Architecture 
 
 UnisonDB is built on three foundational layers:
 
-1. **WALFS** - Write-Ahead Log File System (mmap-based, designed for reading at scale)
+1. **WALFS** - Write-Ahead Log File System (mmap-based, optimized for reading at scale).
 2. **Engine** - Hybrid storage combining WAL, MemTable, and B-Tree
-3. **Replication** - WAL-based streaming replication.
+3. **Replication** - WAL-based streaming with offset tracking
 
 ## 1. WALFS (Write-Ahead Log)
 
@@ -79,7 +74,7 @@ Each record is written in its own aligned frame:
 | 8 + N   | 8 bytes  | Trailer | Canary marker (`0xDEADBEEFFEEEDFACE`)            |
 | ...     | ≥0 bytes | Padding | Zero padding to align to 8-byte boundary         |
 
-## WALFS Reader Capabilities
+### WALFS Reader Capabilities
 
 WALFS provides powerful reading capabilities essential for replication and recovery:
 
@@ -110,9 +105,11 @@ offset := Offset{SegmentID: 5, Offset: 1024}
 reader, err := walLog.NewReaderWithStart(&offset)
 ```
 
-- **Efficient seek** - jump directly to any offset without scanning
-- **Replication-friendly** - followers can resume from their last synced position
-- **Recovery-friendly** - start recovery from last checkpoint
+#### Use cases:
+
+* Efficient seek without scanning
+* Follower catch-up from last synced position
+* Recovery from checkpoint
 
 #### 3. **Active Tail Following**
 
@@ -128,72 +125,42 @@ for {
     }
 }
 ```
-- **Returns `ErrNoNewData`** instead of `io.EOF` when caught up
+#### Behavior:
 
-Unlike traditional WALs that are "write-once, read-on-crash", WALFS is optimized for:
+* Returns ErrNoNewData when caught up (not io.EOF)
+* Enables low-latency streaming
+* Supports multiple parallel readers
 
-1. **Continuous replication** - followers constantly read from primary's WAL
-2. **Real-time tailing** - low-latency streaming of new writes
-3. **Parallel readers** - multiple replicas can read concurrently without contention
+### Why WALFS is Different
+Unlike traditional "write-once, read-on-crash" WALs, WALFS optimizes for:
+
+* Continuous replication - Followers constantly read from primary's WAL
+* Real-time tailing - Low-latency streaming of new writes
+* Parallel readers - Multiple replicas read concurrently without contention
+
+---
 
 ## 2. Engine (dbkernel)
 
 ### Overview
 
-The Engine is the core storage layer that orchestrates writes, reads, and persistence. It combines:
+The Engine orchestrates writes, reads, and persistence using three components:
 
-- **WAL (WALFS)** - Durability and replication source
-- **MemTable (SkipList)** - In-memory write buffer for fast writes
-- **B-Tree Store** - Persistent index for efficient reads
+* WAL (WALFS) - Durability and replication source
+* MemTable (SkipList) - In-memory write buffer
+* B-Tree Store - Persistent index for efficient reads
 
-### Architecture Diagram
+### Flow Diagram
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Client Writes                        │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-                       ▼
-          ┌────────────────────────┐
-          │  Append to WAL (WALFS) │ ◄── Durability
-          └────────┬───────────────┘
-                   │
-                   ▼
-          ┌────────────────────────┐
-          │  Write to MemTable     │ ◄── Fast writes
-          │    (SkipList)          │
-          └────────┬───────────────┘
-                   │
-                   │ (Async flush on rotation)
-                   ▼
-          ┌────────────────────────┐
-          │   Flush to B-Tree      │ ◄── Persistent index
-          │   + Checkpoint offset  │
-          └────────────────────────┘
-
-┌─────────────────────────────────────────────────────────┐
-│                    Client Reads                         │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-                       ▼
-          ┌────────────────────────┐
-          │  1. Check MemTable     │ ◄── Active writes
-          └────────┬───────────────┘
-                   │ (if miss)
-                   ▼
-          ┌────────────────────────┐
-          │  2. Check Sealed Mems  │ ◄── Pending flush
-          └────────┬───────────────┘
-                   │ (if miss)
-                   ▼
-          ┌────────────────────────┐
-          │  3. Read from B-Tree   │ ◄── Durable data
-          └────────────────────────┘
-```
+<img src="./docs/engine_flow.png">
 
 ### FlatBuffer Schema
 
-UnisonDB uses **FlatBuffers** for zero-copy serialization of WAL records. This provides:
+UnisonDB uses FlatBuffers for zero-copy serialization of WAL records:
+#### Benefits:
+
+* No deserialization on replicas
+* Fast replication
 
 #### Why FlatBuffers?
 
@@ -204,35 +171,16 @@ UnisonDB uses **FlatBuffers** for zero-copy serialization of WAL records. This p
 ### Transaction Support
 UnisonDB provides **atomic multi-key transactions**:
 
+```go
+txn := engine.BeginTxn()
+txn.Put("k1", value1)
+txn.Put("k2", value2)
+txn.Put("k3", value3)
+txn.Commit() // All or nothing
 ```
-┌─────────────────────────────────────────────────┐
-│ Transaction: Put(k1), Put(k2), Put(k3)      │
-└─────────────────────────────────────────────────┘
-                       │
-                       ▼
-          ┌────────────────────────┐
-          │  WAL Record 1          │ ← Begin (txn_id=T1)
-          │  op=Insert, key=k1     │   prev_txn_wal_index=nil
-          └────────────────────────┘
-                       │
-                       ▼
-          ┌────────────────────────┐
-          │  WAL Record 2          │ ← Continue (txn_id=T1)
-          │  op=Insert, key=k2     │   prev_txn_wal_index→Record1
-          └────────────────────────┘
-                       │
-                       ▼
-          ┌────────────────────────┐
-          │  WAL Record 3          │ ← Continue (txn_id=T1)
-          │  op=Insert, key=k3     │   prev_txn_wal_index→Record2
-          └────────────────────────┘
-                       │
-                       ▼
-          ┌────────────────────────┐
-          │  WAL Record 4          │ ← Commit (txn_id=T1)
-          │  txn_state=Commit      │   prev_txn_wal_index→Record3
-          └────────────────────────┘
-```
+#### Flow
+
+<img src="./docs/txn_flow.png">
 
 **Transaction Properties:**
 - **Atomicity** - All writes become visible on commit, or none on abort
@@ -240,32 +188,11 @@ UnisonDB provides **atomic multi-key transactions**:
 
 ### LOB (Large Object) Support
 
-Large values are chunked and streamed:
+Large values can be chunked and streamed using TXN.
 
-```
-┌─────────────────────────────────────────────────┐
-│ PutLOB(key="video", value=100MB)               │
-└─────────────────────────────────────────────────┘
-                       │
-                       ▼ (Chunk into 1MB pieces)
-          ┌────────────────────────┐
-          │  WAL Record 1          │ ← entry_type=Chunked
-          │  chunk_id=0            │   txn_state=Begin
-          │  data=1MB              │
-          └────────────────────────┘
-                       │
-                       ▼
-          ┌────────────────────────┐
-          │  WAL Record 2-100      │ ← Intermediate chunks
-          │  chunk_id=1..99        │
-          └────────────────────────┘
-                       │
-                       ▼
-          ┌────────────────────────┐
-          │  WAL Record 101        │ ← Final chunk + commit
-          │  chunk_id=100          │   txn_state=Commit
-          └────────────────────────┘
-```
+#### Flow
+
+<img src="./docs/lob_txn.png">
 
 **LOB Properties:**
 - **Transactional** - All chunks committed atomically
@@ -276,27 +203,14 @@ Large values are chunked and streamed:
 
 UnisonDB supports partial updates to column families:
 
-```
-Row key: user:1001
-Columns: {name: "Alice", email: "alice@example.com", age: 30}
-
-Update only 'age' column:
-┌────────────────────────┐
-│  WAL Record            │
-│  op=Insert             │
-│  entry_type=Row        │
-│  key=user:1001         │
-│  columns=[             │
-│    {name="age",        │
-│     value="31"}        │
-│  ]                     │
-└────────────────────────┘
-```
+<img src="./docs/row_cloumn.png">
 
 **Benefits:**
 - **Efficient updates** - Only modified columns are written/replicated
 - **Flexible schema** - Columns can be added dynamically
 - **Merge semantics** - New columns merged with existing row
+
+---
 
 ## 3. Replication Architecture
 
@@ -314,48 +228,54 @@ Replication in UnisonDB is **WAL-based streaming** - designed around the WALFS r
 
 ### Replication Flow
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                          Primary                                │
-│                                                                 │
-│  ┌──────────┐      ┌──────────┐      ┌──────────┐             │
-│  │  Client  │─────▶│  Engine  │─────▶│  WALFS   │             │
-│  │  Writes  │      │          │      │ Segments │             │
-│  └──────────┘      └──────────┘      └────┬─────┘             │
-│                                            │                   │
-│                                            │                   │
-│                                            ▼                   │
-│                                    ┌──────────────┐            │
-│                                    │ Replicator   │            │
-│                                    │  (Batching)  │            │
-│                                    └───────┬──────┘            │
-└────────────────────────────────────────────┼───────────────────┘
-                                             │
-                                             │ WAL Records
-                                             │ (Batched)
-                                             │
-         ┌───────────────────────────────────┼───────────────────────┐
-         │                                   │                       │
-         ▼                                   ▼                       ▼
-┌─────────────────┐              ┌─────────────────┐     ┌─────────────────┐
-│   Follower 1    │              │   Follower 2    │     │   Follower N    │
-│                 │              │                 │     │                 │
-│  ┌──────────┐   │              │  ┌──────────┐   │     │  ┌──────────┐   │
-│  │ Receiver │   │              │  │ Receiver │   │     │  │ Receiver │   │
-│  └─────┬────┘   │              │  └─────┬────┘   │     │  └─────┬────┘   │
-│        │        │              │        │        │     │        │        │
-│        ▼        │              │        ▼        │     │        ▼        │
-│  ┌──────────┐   │              │  ┌──────────┐   │     │  ┌──────────┐   │
-│  │  Engine  │   │              │  │  Engine  │   │     │  │  Engine  │   │
-│  │  (Apply) │   │              │  │  (Apply) │   │     │  │  (Apply) │   │
-│  └─────┬────┘   │              │  └─────┬────┘   │     │  └─────┬────┘   │
-│        │        │              │        │        │     │        │        │
-│        ▼        │              │        ▼        │     │        ▼        │
-│  ┌──────────┐   │              │  ┌──────────┐   │     │  ┌──────────┐   │
-│  │  WALFS   │   │              │  │  WALFS   │   │     │  │  WALFS   │   │
-│  └──────────┘   │              │  └──────────┘   │     │  └──────────┘   │
-└─────────────────┘              └─────────────────┘     └─────────────────┘
-```
+* Offset-based positioning - Followers track (SegmentID, Offset) Independently.
+* Catch-up from any offset - Resume from any position
+* Real-time streaming - Active tail following for low latency
+
+<img src="./docs/replication_flow.png">
+
+## Performance Testing: Local Replication
+
+### Test Setup
+
+We validated the WAL-based replication architecture using the `pkg/replicator` component in a local test environment. 
+We Fuzzed the Write Path with all supported operations including Put, BatchPut, Delete, and row-column mutations.
+This tests the core replication mechanics without network overhead.
+
+> Server Running on Digitalocean s-8vcpu-16gb-480gb-intel
+
+### Test Parameters
+
+* 1000 Concurrent Readers: Simulates heavy read load alongside writes
+* 1000 Operations per Second: Sustained write throughput
+* Mixed Workload: Combines small metadata updates (100B) with larger payloads (100KB)
+* Isolation Testing: Validates transaction isolation under concurrent access patterns
+
+Each replication stream operates as an independent WAL reader, capturing critical performance metrics:
+
+Physical Latency Tracking: Measures p50, p90, p99, and max latencies using timestamps
+
+<img src="./docs/replication_test.png">
+
+### Replication Latency Under Pressure
+
+<img src="./docs/latency.jpg">
+
+### Replication Throughput
+
+<img src="./docs/replication_throughput.jpg">
+
+### Fuzzing Latency (write path)
+
+<img src="./docs/fuzzing_latency.jpg">
+
+
+### Throughput Holds — Until It Doesn’t
+
+<img src="./docs/fuzzer_throughput_hold.jpg"> <img src="./docs/replicator_throughput_hold.jpg">
+
+
+---
 
 
 ## Why is Traditional KV Replication Insufficient?
@@ -408,10 +328,6 @@ UnisonDB combines append-only logs for high-throughput ingest with B-Trees for f
 * Isolation by default — once a network-aware transaction is started, all intermediate writes are fully isolated and not visible to readers until a successful txn.Commit().
 * Built-in replication via gRPC WAL streaming + B-Tree snapshots.
 * Zero-compaction overhead, high write throughput, and optimized reads.
-
-## Architecture Overview
-
-![storage architecture](docs/arch.svg)
 
 ## Development
 ```sh
