@@ -166,7 +166,7 @@ UnisonDB uses FlatBuffers for zero-copy serialization of WAL records:
 
 **Replication efficiency** - No deserialization needed on replicas
 
-<img src="./docs/schema_time.jpg" width="300"> <img src="./docs/schema_mem.jpg" width="300">
+<img src="./docs/schema_time.jpg" width="400"> <img src="./docs/schema_mem.jpg" width="400">
 
 ### Transaction Support
 UnisonDB provides **atomic multi-key transactions**:
