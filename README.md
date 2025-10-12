@@ -7,17 +7,47 @@
 [![ci-tests](https://github.com/ankur-anand/unisondb/actions/workflows/go.yml/badge.svg)](https://github.com/ankur-anand/unisondb/actions/workflows/go.yml)
 [![Coverage Status](https://coveralls.io/repos/github/ankur-anand/unisondb/badge.svg?branch=main)](https://coveralls.io/github/ankur-anand/unisondb?branch=main)
 
-## What UnisonDB Offers
+## What UnisonDB Is
 
-UnisonDB is a multi-modal replicated database that blends WALs, Memtables, and B-Trees to deliver:
+**The embedded B+Tree database that replicates.**
 
-* Fast writes - Write data quickly without background cleanup slowing you down
-* Fast reads - Find your data efficiently, even across large ranges
-* Built-in replication - Automatically sync data to multiple edge nodes
-* Handle large files - Store videos, images, and documents as easily as simple values
-* Flexible data structure - Update just one field without rewriting entire records
+We took LMDB and BoltDB's proven architecture—fast B+Tree reads, memory-mapped storage, embedded simplicity—and made it **distributed-first**:
+
+1. **Predictable Performance** - B+Tree reads, no LSM compaction storms  
+2. **Built-In Replication** - WAL-based streaming to 1000+ nodes  
+3. **Hub-and-Spoke** - Hierarchical trees (Primary → Hubs → Edge)  
+4. **Namespace Isolation** - Multi-tenant with selective replication  
+5. **Multi-Modal** - KV + Wide-Column + LOB in one transaction  
+6. **Same Simplicity** - Embedded, single file, no clusters  
 
 ![storage architecture](docs/arch.svg)
+
+## Why UnisonDB?
+
+### The Problem
+
+**LMDB and BoltDB are perfect for embedded storage.** Fast, simple, battle-tested.
+
+But they have **zero replication**. Need data on 100 edge nodes? You're building sync yourself.
+
+### The Gap
+
+**etcd and Consul solve distributed consensus.** They're perfect for service discovery, config management, and distributed locking in small clusters (3-7 nodes).
+
+But they're **not designed for local-first, edge computing, or massive fanout:**
+
+1. **Every read requires a network call** (no local embedded replica)  
+2. **Watch-based, not full replication** (can't query locally)   
+3. **Can't scale to 100+ nodes** (Raft consensus based)  
+4. **No hub-and-spoke architecture** (flat cluster only)  
+5. **Value size limits** (1.5MB in etcd, 512KB in Consul)  
+
+### The Solution
+
+**UnisonDB = LMDB/BoltDB + Distributed Replication + Multi-Modal Storage**
+
+Stop building sync infrastructure. Use a database designed for distribution.
+
 
 ## Core Architecture 
 
@@ -26,6 +56,30 @@ UnisonDB is built on three foundational layers:
 1. **WALFS** - Write-Ahead Log File System (mmap-based, optimized for reading at scale).
 2. **Engine** - Hybrid storage combining WAL, MemTable, and B-Tree
 3. **Replication** - WAL-based streaming with offset tracking
+
+## The Layered View
+
+UnisonDB stacks a multi-model engine on top of WALFS — a log-native core that unifies storage, replication, and streaming into one continuous data flow.
+
+```
++------------------------------------------------------+
+|                Multi-Model API Layer                 |
+|  (KV, Wide-Column, LOB, Txn Engine, Query Layer)     |
++------------------------------------------------------+
+|                   Engine Layer                       |
+|   WALFS-backed MemTable + B-Tree Store               |
+|   (writes → WALFS, reads → B-Tree + MemTable)        |
++------------------------------------------------------+
+|          WALFS (Core Log)          |  Replication Layer  |
+|  Append-only, mmap-based           |  WAL-based streaming |
+|  segmented log                     |  (followers tail WAL)|
+|  Commit-ordered, replication-safe  |  Offset tracking,    |
+|                                    |  catch-up, tailing   |
++------------------------------------------------------+
+|                       Disk                           |
++------------------------------------------------------+
+```
+
 
 ## 1. WALFS (Write-Ahead Log)
 
@@ -265,10 +319,26 @@ Physical Latency Tracking: Measures p50, p90, p99, and max latencies using times
 
 <img src="./docs/replication_throughput.jpg" width="600">
 
-### Throughput Holds — Until It Doesn’t
+### SET Throughput: Design Tradeoffs
 
-<img src="./docs/fuzzer_throughput_hold.jpg" width="400"> <img src="./docs/replicator_throughput_hold.jpg" width="400">
+* UnisonDB shows lower SET throughput than pure LSM databases — by design.
+* Writes are globally ordered under a lock to ensure replication-safe WAL entries.
+* This favors consistency and durability over raw speed.
+* Still, UnisonDB is nearly 2x faster than BoltDB, a pure B+Tree store.
+* Even with ordered writes, it outperforms BoltDB while offering stronger replication guarantees.
 
+<img src="./docs/tradeoff.jpg" width="400">
+
+#### When UnisonDB Wins:
+
+* Read-heavy workloads (edge nodes, replicas)
+* Predictable latency requirements (no background compaction)
+* Replication is critical (built-in, transactional)
+
+#### When to Choose LSM Instead:
+
+* Pure write throughput is #1 priority.
+* Read amplification is acceptable
 
 ---
 
