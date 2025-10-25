@@ -28,6 +28,7 @@ const (
 // WalIO provide.
 type WalIO interface {
 	Write(data *v1.WALRecord) error
+	WriteBatch(records []*v1.WALRecord) error
 }
 
 type GrpcStreamerClient struct {
@@ -126,28 +127,68 @@ func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 	}
 }
 
+type batchJob struct {
+	records []*v1.WALRecord
+	offset  *dbkernel.Offset
+}
+
 func (c *GrpcStreamerClient) receiveWALRecords(client v1.WalStreamerService_StreamWalRecordsClient, startTime time.Time) error {
+	batchChan := make(chan batchJob, 4)
+	errChan := make(chan error, 1)
+
+	go func() {
+		for job := range batchChan {
+			if err := c.wIO.WriteBatch(job.records); err != nil {
+				errChan <- err
+				return
+			}
+			c.offset = job.offset
+		}
+		errChan <- nil
+	}()
+
 	for {
+		select {
+		case err := <-errChan:
+			return err
+		default:
+		}
+
 		res, err := client.Recv()
 		if err != nil {
+			close(batchChan)
+			writerErr := <-errChan
+
 			if errors.Is(err, io.EOF) || errors.Is(err, context.Canceled) {
+				if writerErr != nil {
+					return writerErr
+				}
 				slog.Info("[unisondb.streamer.grpc.client] stream closed",
 					"namespace", c.namespace,
 					"stream_duration", humanizeDuration(time.Since(startTime)),
 				)
 				return nil
 			}
+
+			if writerErr != nil {
+				return writerErr
+			}
 			return err
 		}
 
 		clientWalRecvTotal.WithLabelValues(c.namespace, "grpc").Add(float64(len(res.Records)))
 
-		for _, record := range res.Records {
-			c.offset = &dbkernel.Offset{
-				SegmentID: record.Offset.SegmentId,
-				Offset:    int64(record.Offset.Offset),
+		if len(res.Records) > 0 {
+			lastRecord := res.Records[len(res.Records)-1]
+			offset := &dbkernel.Offset{
+				SegmentID: lastRecord.Offset.SegmentId,
+				Offset:    int64(lastRecord.Offset.Offset),
 			}
-			if err := c.wIO.Write(record); err != nil {
+
+			select {
+			case batchChan <- batchJob{records: res.Records, offset: offset}:
+			case err := <-errChan:
+				close(batchChan)
 				return err
 			}
 		}
