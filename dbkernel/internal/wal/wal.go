@@ -169,6 +169,46 @@ func (w *WalIO) Append(data []byte) (*Offset, error) {
 	return &off, err
 }
 
+// BatchAppend writes multiple records to the active WAL segment in a single batch operation.
+// This is more efficient than calling Append multiple times as it reduces lock contention
+// and can optimize disk I/O operations.
+func (w *WalIO) BatchAppend(records [][]byte) ([]*Offset, error) {
+	if len(records) == 0 {
+		return nil, nil
+	}
+
+	w.taggedScope.Counter(metricWalWriteTotal).Inc(int64(len(records)))
+	startTime := time.Now()
+	defer func() {
+		duration := time.Since(startTime)
+		w.taggedScope.Histogram(metricWalWriteDuration, writeLatencyBuckets).RecordDuration(duration)
+	}()
+
+	var totalBytes int64
+	for _, data := range records {
+		totalBytes += int64(len(data))
+	}
+	w.taggedScope.Counter(metricWalBytesWrittenTotal).Inc(totalBytes)
+
+	offsets, err := w.appendLog.WriteBatch(records)
+	if errors.Is(err, walfs.ErrFsync) {
+		log.Fatalf("[wal] batch write to log file failed: %v", err)
+	}
+	if err != nil {
+		w.taggedScope.Counter(metricWalWriteError).Inc(1)
+		return nil, err
+	}
+
+	w.entriesInSegment.Add(int64(len(offsets)))
+
+	result := make([]*Offset, len(offsets))
+	for i := range offsets {
+		result[i] = &offsets[i]
+	}
+
+	return result, nil
+}
+
 // ReaderOption defines a functional option for configuring a Reader instance.
 type ReaderOption func(*Reader)
 
