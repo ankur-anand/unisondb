@@ -37,6 +37,7 @@ var (
 		Name:      "wal_segment_lag_threshold",
 		Help:      "Configured segment lag threshold for the WAL relayer per namespace",
 	}, []string{"namespace"})
+
 	rateLimiterWaitDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: promNamespace,
 		Subsystem: promSubsystem,
@@ -131,6 +132,26 @@ func (r *RateLimitedWalIO) Write(data *v1.WALRecord) error {
 	rateLimiterSuccess.WithLabelValues(defaultStreamerLabel).Inc()
 
 	return r.underlying.Write(data)
+}
+
+// WriteBatch applies rate limiting before delegating to the underlying WalIO batch write.
+func (r *RateLimitedWalIO) WriteBatch(records []*v1.WALRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	start := time.Now()
+	// Reserve N tokens for N records
+	err := r.limiter.WaitN(r.ctx, len(records))
+	duration := time.Since(start)
+	rateLimiterWaitDuration.WithLabelValues(defaultStreamerLabel).Observe(duration.Seconds())
+	if err != nil {
+		rateLimiterErrors.WithLabelValues(defaultStreamerLabel).Inc()
+		return fmt.Errorf("rate limit exceeded: %w", err)
+	}
+	rateLimiterSuccess.WithLabelValues(defaultStreamerLabel).Inc()
+
+	return r.underlying.WriteBatch(records)
 }
 
 // Relayer relays WAL record from the upstream over the provided grpc connection for the given namespace.

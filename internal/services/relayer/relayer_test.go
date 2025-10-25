@@ -200,6 +200,11 @@ func (m *mockWalIO) Write(data *v1.WALRecord) error {
 	return nil
 }
 
+func (m *mockWalIO) WriteBatch(records []*v1.WALRecord) error {
+	m.writeCount.Add(int64(len(records)))
+	return nil
+}
+
 func TestRateLimitedWalIO_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -239,6 +244,182 @@ func TestRateLimitedWalIO_ContextCancellation(t *testing.T) {
 	}
 
 	assert.LessOrEqual(t, mock.writeCount.Load(), int64(3), "should have blocked excessive writes")
+}
+
+func TestRateLimitedWalIO_WriteBatch(t *testing.T) {
+	t.Run("basic_batch_write", func(t *testing.T) {
+		ctx := context.Background()
+		mock := &mockWalIO{}
+		limiter := rate.NewLimiter(rate.Limit(100), 100)
+		rlWalIO := NewRateLimitedWalIO(ctx, mock, limiter)
+
+		records := []*v1.WALRecord{
+			{Offset: &v1.RecordPosition{SegmentId: 0, Offset: 0}, Record: []byte("record1")},
+			{Offset: &v1.RecordPosition{SegmentId: 0, Offset: 1}, Record: []byte("record2")},
+			{Offset: &v1.RecordPosition{SegmentId: 0, Offset: 2}, Record: []byte("record3")},
+		}
+
+		err := rlWalIO.WriteBatch(records)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(3), mock.writeCount.Load(), "should have written 3 records")
+	})
+
+	t.Run("empty_batch", func(t *testing.T) {
+		ctx := context.Background()
+		mock := &mockWalIO{}
+		limiter := rate.NewLimiter(rate.Limit(100), 100)
+		rlWalIO := NewRateLimitedWalIO(ctx, mock, limiter)
+
+		err := rlWalIO.WriteBatch([]*v1.WALRecord{})
+		assert.NoError(t, err)
+		assert.Equal(t, int64(0), mock.writeCount.Load(), "should not have written any records")
+	})
+
+	t.Run("rate_limiting_batch", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		mock := &mockWalIO{}
+
+		limiter := rate.NewLimiter(rate.Limit(10), 10)
+		rlWalIO := NewRateLimitedWalIO(ctx, mock, limiter)
+
+		records := make([]*v1.WALRecord, 10)
+		for i := 0; i < 10; i++ {
+			records[i] = &v1.WALRecord{
+				Offset: &v1.RecordPosition{SegmentId: 0, Offset: uint64(i)},
+				Record: []byte(fmt.Sprintf("record%d", i)),
+			}
+		}
+
+		start := time.Now()
+		err := rlWalIO.WriteBatch(records)
+		duration := time.Since(start)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(10), mock.writeCount.Load())
+		assert.Less(t, duration, 100*time.Millisecond, "first batch should be fast (burst)")
+
+		records2 := make([]*v1.WALRecord, 5)
+		for i := 0; i < 5; i++ {
+			records2[i] = &v1.WALRecord{
+				Offset: &v1.RecordPosition{SegmentId: 0, Offset: uint64(10 + i)},
+				Record: []byte(fmt.Sprintf("record%d", 10+i)),
+			}
+		}
+
+		start = time.Now()
+		err = rlWalIO.WriteBatch(records2)
+		duration = time.Since(start)
+		assert.NoError(t, err)
+		assert.Equal(t, int64(15), mock.writeCount.Load())
+		// Should wait ~400-500ms for 5 tokens at 10/sec rate
+		assert.Greater(t, duration, 400*time.Millisecond, "second batch should be rate limited")
+	})
+
+	t.Run("context_cancellation_batch", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		mock := &mockWalIO{}
+
+		limiter := rate.NewLimiter(rate.Limit(1), 1)
+		rlWalIO := NewRateLimitedWalIO(ctx, mock, limiter)
+
+		firstRecord := []*v1.WALRecord{
+			{Offset: &v1.RecordPosition{SegmentId: 0, Offset: 0}, Record: []byte("record0")},
+		}
+		err := rlWalIO.WriteBatch(firstRecord)
+		assert.NoError(t, err)
+
+		largeRecords := make([]*v1.WALRecord, 10)
+		for i := 0; i < 10; i++ {
+			largeRecords[i] = &v1.WALRecord{
+				Offset: &v1.RecordPosition{SegmentId: 0, Offset: uint64(i + 1)},
+				Record: []byte(fmt.Sprintf("record%d", i+1)),
+			}
+		}
+
+		go func() {
+			time.Sleep(100 * time.Millisecond)
+			cancel()
+		}()
+
+		err = rlWalIO.WriteBatch(largeRecords)
+		assert.Error(t, err, "should fail due to context cancellation")
+		assert.Contains(t, err.Error(), "rate limit exceeded")
+		assert.Less(t, mock.writeCount.Load(), int64(11))
+	})
+
+	t.Run("concurrent_batch_writes", func(t *testing.T) {
+		ctx := context.Background()
+		mock := &mockWalIO{}
+		limiter := rate.NewLimiter(rate.Limit(100), 100)
+		rlWalIO := NewRateLimitedWalIO(ctx, mock, limiter)
+
+		var wg sync.WaitGroup
+		numWorkers := 5
+		recordsPerBatch := 10
+
+		for worker := 0; worker < numWorkers; worker++ {
+			wg.Add(1)
+			go func(workerID int) {
+				defer wg.Done()
+				records := make([]*v1.WALRecord, recordsPerBatch)
+				for i := 0; i < recordsPerBatch; i++ {
+					records[i] = &v1.WALRecord{
+						Offset: &v1.RecordPosition{
+							SegmentId: uint32(workerID),
+							Offset:    uint64(i),
+						},
+						Record: []byte(fmt.Sprintf("worker%d-record%d", workerID, i)),
+					}
+				}
+				err := rlWalIO.WriteBatch(records)
+				assert.NoError(t, err)
+			}(worker)
+		}
+
+		wg.Wait()
+		expectedTotal := int64(numWorkers * recordsPerBatch)
+		assert.Equal(t, expectedTotal, mock.writeCount.Load(), "should have written all records from all workers")
+	})
+}
+
+func TestWalIOHandler_WriteBatch(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_wal_handler_batch"
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	defer engine.Close(context.Background())
+
+	handler := dbkernel.NewReplicaWALHandler(engine)
+	walHandler := walIOHandler{replica: handler}
+
+	t.Run("batch_write_success", func(t *testing.T) {
+		records := make([]*v1.WALRecord, 5)
+		for i := 0; i < 5; i++ {
+			kv := fmt.Sprintf("key%d", i)
+			value := fmt.Sprintf("value%d", i)
+
+			encodedKV := []byte(kv + ":" + value)
+
+			record := &v1.WALRecord{
+				Offset: &v1.RecordPosition{
+					SegmentId: 0,
+					Offset:    uint64(i),
+				},
+				Record: encodedKV,
+			}
+			records[i] = record
+		}
+
+		err := walHandler.WriteBatch(records)
+		assert.Error(t, err, "should error with improperly encoded records")
+	})
+
+	t.Run("empty_batch", func(t *testing.T) {
+		err := walHandler.WriteBatch([]*v1.WALRecord{})
+		assert.NoError(t, err, "empty batch should succeed")
+	})
 }
 
 func TestRelayer_WithRateLimiterWalWriter(t *testing.T) {
