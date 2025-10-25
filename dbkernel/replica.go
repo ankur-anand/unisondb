@@ -181,7 +181,7 @@ func (wh *ReplicaWALHandler) ApplyRecords(encodedWals [][]byte, receivedOffsets 
 	if err != nil {
 		return err
 	}
-	
+
 	for i, offset := range offsets {
 		if !isEqualOffset(offset, receivedOffsets[i]) {
 			slog.Error("[dbkernel]",

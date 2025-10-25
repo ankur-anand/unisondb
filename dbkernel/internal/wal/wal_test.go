@@ -377,7 +377,7 @@ func TestWalIO_BatchAppend(t *testing.T) {
 
 		offsets2, err := walInstance.BatchAppend(batch2)
 		assert.NoError(t, err)
-		
+
 		allOffsets := append(offsets1, offsets2...)
 		for i := 1; i < len(allOffsets); i++ {
 			prev := allOffsets[i-1]
