@@ -150,3 +150,69 @@ func BenchmarkReplica_ApplyRecord_KV_Isolated(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkReplica_ApplyRecords_KV_Batch(b *testing.B) {
+	batchSizes := []int{1, 5, 10, 20, 50, 100}
+
+	for _, batchSize := range batchSizes {
+		b.Run("BatchSize"+strconv.Itoa(batchSize), func(b *testing.B) {
+			src := mustBenchEngine(b, "bench_src_batch_"+strconv.Itoa(batchSize))
+			rep := mustBenchEngine(b, "bench_rep_batch_"+strconv.Itoa(batchSize))
+			replicator := dbkernel.NewReplicaWALHandler(rep)
+
+			type item struct {
+				enc []byte
+				off dbkernel.Offset
+			}
+
+			totalRecords := b.N
+			items := make([]item, totalRecords)
+
+			for i := 0; i < totalRecords; i++ {
+				k := []byte("k-" + strconv.Itoa(i))
+				v := bytes.Repeat([]byte{'x'}, 256)
+
+				if err := src.PutKV(k, v); err != nil {
+					b.Fatal(err)
+				}
+			}
+
+			r, err := src.NewReader()
+			if err != nil {
+				b.Fatal(err)
+			}
+			for i := 0; i < totalRecords; i++ {
+				enc, off, err := r.Next()
+				if err != nil {
+					b.Fatalf("source.Next: %v", err)
+				}
+				items[i] = item{enc: append([]byte(nil), enc...), off: off}
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+
+			for i := 0; i < totalRecords; i += batchSize {
+				end := i + batchSize
+				if end > totalRecords {
+					end = totalRecords
+				}
+
+				batchEnc := make([][]byte, end-i)
+				batchOff := make([]dbkernel.Offset, end-i)
+
+				for j := i; j < end; j++ {
+					batchEnc[j-i] = items[j].enc
+					batchOff[j-i] = dbkernel.Offset{
+						SegmentID: items[j].off.SegmentID,
+						Offset:    items[j].off.Offset,
+					}
+				}
+
+				if err := replicator.ApplyRecords(batchEnc, batchOff); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

@@ -68,6 +68,7 @@ type Streamer interface {
 // WalIO defines the interface for writing Write-Ahead Log (WAL) records.
 type WalIO interface {
 	Write(data *v1.WALRecord) error
+	WriteBatch(records []*v1.WALRecord) error
 }
 
 type walIOHandler struct {
@@ -79,6 +80,25 @@ func (w walIOHandler) Write(data *v1.WALRecord) error {
 		SegmentID: data.Offset.SegmentId,
 		Offset:    int64(data.Offset.Offset),
 	})
+}
+
+func (w walIOHandler) WriteBatch(records []*v1.WALRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	encodedWals := make([][]byte, len(records))
+	offsets := make([]dbkernel.Offset, len(records))
+
+	for i, record := range records {
+		encodedWals[i] = record.Record
+		offsets[i] = dbkernel.Offset{
+			SegmentID: record.Offset.SegmentId,
+			Offset:    int64(record.Offset.Offset),
+		}
+	}
+
+	return w.replica.ApplyRecords(encodedWals, offsets)
 }
 
 // RateLimitedWalIO wraps WalIO with a token bucket rate limiter.

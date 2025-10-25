@@ -140,6 +140,88 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset Offse
 	return wh.handleRecord(decoded, offset)
 }
 
+// ApplyRecords validates and applies multiple WAL records in batch to the mem table.
+// This is more efficient than calling ApplyRecord multiple times as it reduces lock contention
+// and leverages batch WAL writes.
+func (wh *ReplicaWALHandler) ApplyRecords(encodedWals [][]byte, receivedOffsets []Offset) error {
+	if len(encodedWals) == 0 {
+		return nil
+	}
+
+	if len(encodedWals) != len(receivedOffsets) {
+		return fmt.Errorf("mismatch: %d records but %d offsets", len(encodedWals), len(receivedOffsets))
+	}
+
+	wh.mu.Lock()
+	defer wh.mu.Unlock()
+
+	expectedLSN := wh.engine.writeSeenCounter.Load() + 1
+	decodedRecords := make([]*logrecord.LogRecord, len(encodedWals))
+
+	for i, encodedWal := range encodedWals {
+		if receivedOffsets[i].Offset == 0 {
+			slog.Error("[dbkernel]",
+				slog.String("message", "Failed to apply record: nil offset received"),
+				slog.Group("engine",
+					slog.String("namespace", wh.engine.namespace),
+				),
+				slog.Int("record_index", i),
+			)
+			return ErrInvalidOffset
+		}
+
+		decoded := logrecord.GetRootAsLogRecord(encodedWal, 0)
+		if expectedLSN+uint64(i) != decoded.Lsn() {
+			return fmt.Errorf("%w at index %d: got %d, expected %d", ErrInvalidLSN, i, decoded.Lsn(), expectedLSN+uint64(i))
+		}
+		decodedRecords[i] = decoded
+	}
+
+	offsets, err := wh.engine.walIO.BatchAppend(encodedWals)
+	if err != nil {
+		return err
+	}
+	
+	for i, offset := range offsets {
+		if !isEqualOffset(offset, receivedOffsets[i]) {
+			slog.Error("[dbkernel]",
+				slog.String("message", "Failed to apply record: WAL offset mismatch in batch"),
+				slog.Group("engine",
+					slog.String("namespace", wh.engine.namespace),
+				),
+				slog.Int("record_index", i),
+				slog.Group("offset",
+					slog.Any("received", receivedOffsets[i]),
+					slog.Any("expected", offset),
+				),
+			)
+			return ErrInvalidOffset
+		}
+	}
+
+	wh.engine.writeSeenCounter.Add(uint64(len(encodedWals)))
+
+	for i, decoded := range decodedRecords {
+		remoteHLC := decoded.Hlc()
+		nowMs := HLCNow()
+		var physicalLatencyMs uint64
+		if nowMs >= remoteHLC {
+			physicalLatencyMs = nowMs - remoteHLC
+		} else {
+			physicalLatencyMs = 0
+		}
+
+		latency := time.Duration(physicalLatencyMs) * time.Millisecond
+		wh.engine.taggedScope.Histogram(mReplicationLatencySeconds, replicationLatencyBuckets).RecordDuration(latency)
+
+		if err := wh.handleRecord(decoded, offsets[i]); err != nil {
+			return fmt.Errorf("failed to handle record at index %d: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
 func isEqualOffset(local *Offset, remote Offset) bool {
 	if local.SegmentID == remote.SegmentID && local.Offset == remote.Offset {
 		return true

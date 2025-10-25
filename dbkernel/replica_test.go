@@ -482,3 +482,96 @@ func getReader(en *dbkernel.Engine, lastOffset *dbkernel.Offset) (*dbkernel.Read
 
 	return reader, err
 }
+
+func TestReplicaWALHandler_ApplyRecords(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_batch_replication"
+	replicatorNameSpace := "test_batch_replicator"
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.Close(context.Background())
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+
+	replicaDir := filepath.Join(baseDir, "replica")
+
+	replicaEngine, err := dbkernel.NewStorageEngine(replicaDir, replicatorNameSpace, dbkernel.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		err := replicaEngine.Close(context.Background())
+		if err != nil {
+			t.Errorf("Failed to close replica: %v", err)
+		}
+	})
+
+	replicator := dbkernel.NewReplicaWALHandler(replicaEngine)
+
+	kvInserted := make(map[string][]byte)
+
+	t.Run("insert_kv_records", func(t *testing.T) {
+		for i := 0; i < 100; i++ {
+			key := fmt.Sprintf("batch_key_%d", i)
+			value := gofakeit.Sentence(i + 1)
+			kvInserted[key] = []byte(value)
+			err := engine.PutKV([]byte(key), []byte(value))
+			assert.NoError(t, err)
+		}
+	})
+
+	t.Run("batch_replicate_kv", func(t *testing.T) {
+		reader, err := engine.NewReader()
+		assert.NoError(t, err, "error creating reader")
+
+		batchSize := 10
+		var encodedBatch [][]byte
+		var offsetBatch []dbkernel.Offset
+
+		for {
+			walEncoded, offset, err := reader.Next()
+			if err == io.EOF {
+				if len(encodedBatch) > 0 {
+					err = replicator.ApplyRecords(encodedBatch, offsetBatch)
+					assert.NoError(t, err, "error applying batch to replicator")
+				}
+				break
+			}
+			assert.NoError(t, err, "error reading from reader")
+
+			encodedBatch = append(encodedBatch, walEncoded)
+			offsetBatch = append(offsetBatch, offset)
+
+			if len(encodedBatch) >= batchSize {
+				err = replicator.ApplyRecords(encodedBatch, offsetBatch)
+				assert.NoError(t, err, "error applying batch to replicator")
+				encodedBatch = nil
+				offsetBatch = nil
+			}
+		}
+	})
+
+	t.Run("validate_batch_replicated_kv", func(t *testing.T) {
+		for k, v := range kvInserted {
+			got, err := replicaEngine.GetKV([]byte(k))
+			assert.NoError(t, err, "error reading from replicator")
+			assert.Equal(t, v, got, "invalid replicator value for key %s", k)
+		}
+	})
+
+	t.Run("error_mismatched_lengths", func(t *testing.T) {
+		encodedBatch := [][]byte{[]byte("test1"), []byte("test2")}
+		offsetBatch := []dbkernel.Offset{{SegmentID: 1, Offset: 100}}
+
+		err := replicator.ApplyRecords(encodedBatch, offsetBatch)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "mismatch")
+	})
+
+	t.Run("error_empty_batch", func(t *testing.T) {
+		err := replicator.ApplyRecords(nil, nil)
+		assert.NoError(t, err, "empty batch should not error")
+	})
+}
