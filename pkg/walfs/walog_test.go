@@ -991,3 +991,494 @@ func recordOverhead(dataLen int64) int64 {
 func alignUp(n int64) int64 {
 	return (n + 8) & ^7
 }
+
+func TestWALog_WriteBatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(1<<20))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	records := [][]byte{
+		[]byte("record1"),
+		[]byte("record2-longer"),
+		[]byte("record3-even-longer"),
+		[]byte("r4"),
+		[]byte("record5-medium-size"),
+	}
+
+	positions, err := wal.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), len(positions))
+
+	// Verify all records can be read back
+	for i, pos := range positions {
+		data, readErr := wal.Read(pos)
+		assert.NoError(t, readErr)
+		assert.Equal(t, records[i], data)
+	}
+}
+
+func TestWALog_WriteBatch_WithRotation(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Create a small segment that will force rotation
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(512))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	// Create records that won't all fit in one segment
+	records := make([][]byte, 20)
+	for i := range records {
+		records[i] = bytes.Repeat([]byte("x"), 50)
+	}
+
+	positions, err := wal.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), len(positions), "all records should be written across multiple segments")
+
+	// Verify segment rotation occurred
+	assert.Greater(t, wal.SegmentRotatedCount(), int64(0), "should have rotated at least once")
+
+	// Verify all records can be read back from different segments
+	for i, pos := range positions {
+		data, readErr := wal.Read(pos)
+		assert.NoError(t, readErr)
+		assert.Equal(t, records[i], data)
+	}
+}
+
+func TestWALog_WriteBatch_Empty(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal")
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	positions, err := wal.WriteBatch([][]byte{})
+	assert.NoError(t, err)
+	assert.Nil(t, positions)
+}
+
+func TestWALog_WriteBatch_RecordExceedsSegmentCapacity(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Create a small WALog with 1KB segment size
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(1024))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	// Try to write a record that's too large to ever fit in any segment
+	oversizedRecord := make([]byte, 2048)
+	for i := range oversizedRecord {
+		oversizedRecord[i] = byte(i % 256)
+	}
+
+	records := [][]byte{
+		[]byte("small record that fits"),
+		oversizedRecord, // This one is too large
+	}
+
+	positions, err := wal.WriteBatch(records)
+	assert.ErrorIs(t, err, walfs.ErrRecordTooLarge)
+	assert.Nil(t, positions, "no records should be written when one exceeds capacity")
+}
+
+func TestWALog_WriteBatch_EachRecordValidated(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Create a small WALog
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(2048))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	// Create multiple records where one in the middle is too large
+	records := [][]byte{
+		bytes.Repeat([]byte("a"), 50),
+		bytes.Repeat([]byte("b"), 50),
+		bytes.Repeat([]byte("c"), 5000), // Too large for the segment
+		bytes.Repeat([]byte("d"), 50),
+	}
+
+	positions, err := wal.WriteBatch(records)
+	assert.ErrorIs(t, err, walfs.ErrRecordTooLarge)
+	assert.Nil(t, positions, "should fail early before writing anything")
+}
+
+func TestWALog_WriteBatch_WithBytesPerSync(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal",
+		walfs.WithMaxSegmentSize(1<<20),
+		walfs.WithBytesPerSync(1024))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	// Create a batch that will trigger sync
+	records := make([][]byte, 10)
+	for i := range records {
+		records[i] = bytes.Repeat([]byte("x"), 200)
+	}
+
+	_, err = wal.WriteBatch(records)
+	assert.NoError(t, err)
+
+	// Verify sync was called
+	assert.Greater(t, wal.BytesPerSyncCallCount(), int64(0))
+}
+
+func TestWALog_WriteBatch_SequentialReading(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(512))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	// Write multiple batches that will span segments
+	batch1 := [][]byte{
+		[]byte("batch1-record1"),
+		[]byte("batch1-record2"),
+		[]byte("batch1-record3"),
+	}
+
+	batch2 := [][]byte{
+		[]byte("batch2-record1"),
+		[]byte("batch2-record2"),
+	}
+
+	_, err = wal.WriteBatch(batch1)
+	assert.NoError(t, err)
+
+	_, err = wal.WriteBatch(batch2)
+	assert.NoError(t, err)
+
+	// Read all records sequentially
+	reader := wal.NewReader()
+	defer reader.Close()
+
+	var allRecords [][]byte
+	allRecords = append(allRecords, batch1...)
+	allRecords = append(allRecords, batch2...)
+
+	for i := 0; i < len(allRecords); i++ {
+		data, _, err := reader.Next()
+		assert.NoError(t, err)
+		assert.Equal(t, allRecords[i], data)
+	}
+
+	// Verify no more records
+	_, _, err = reader.Next()
+	assert.True(t, errors.Is(err, io.EOF) || errors.Is(err, walfs.ErrNoNewData))
+}
+
+func TestWALog_WriteBatch_ReadbackAcrossRotation(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(1024))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	records := make([][]byte, 30)
+	for i := range records {
+		records[i] = bytes.Repeat([]byte{byte(i)}, 60)
+	}
+
+	positions, err := wal.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), len(positions), "all records should be written")
+
+	assert.Greater(t, wal.SegmentRotatedCount(), int64(0), "should have rotated at least once")
+
+	for i, pos := range positions {
+		data, readErr := wal.Read(pos)
+		assert.NoError(t, readErr, "record %d should be readable after rotation", i)
+		assert.Equal(t, records[i], data, "record %d data should match after rotation", i)
+	}
+
+	segmentIDs := make(map[walfs.SegmentID]bool)
+	for _, pos := range positions {
+		segmentIDs[pos.SegmentID] = true
+	}
+	assert.Greater(t, len(segmentIDs), 1, "records should span multiple segments")
+}
+
+func TestWALog_WriteBatch_HeaderConsistencyAcrossSegments(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(800))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	records := make([][]byte, 25)
+	for i := range records {
+		records[i] = []byte(fmt.Sprintf("record-%03d", i))
+	}
+
+	positions, err := wal.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), len(positions))
+
+	segmentRecords := make(map[walfs.SegmentID][]walfs.RecordPosition)
+	for _, pos := range positions {
+		segmentRecords[pos.SegmentID] = append(segmentRecords[pos.SegmentID], pos)
+	}
+
+	segments := wal.Segments()
+	for segID, segPositions := range segmentRecords {
+		seg := segments[segID]
+		assert.NotNil(t, seg, "segment %d should exist", segID)
+
+		entryCount := seg.GetEntryCount()
+		assert.Equal(t, int64(len(segPositions)), entryCount,
+			"segment %d entry count should match records written to it", segID)
+
+		writeOffset := seg.WriteOffset()
+		assert.Greater(t, writeOffset, int64(64), "segment %d write offset should be past header", segID)
+
+		lastModified := seg.GetLastModifiedAt()
+		assert.Greater(t, lastModified, int64(0), "segment %d should have valid timestamp", segID)
+
+		for _, pos := range segPositions {
+			_, _, err := seg.Read(pos.Offset)
+			assert.NoError(t, err, "record at segment %d offset %d should be readable", segID, pos.Offset)
+		}
+
+		if segID != wal.Current().ID() {
+			assert.True(t, walfs.IsSealed(seg.GetFlags()),
+				"segment %d should be sealed since it's not current", segID)
+		}
+	}
+}
+
+func TestWALog_WriteBatch_SequentialReadAcrossRotation(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(512))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	records := make([][]byte, 20)
+	for i := range records {
+		records[i] = []byte(fmt.Sprintf("seq-record-%03d", i))
+	}
+
+	positions, err := wal.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), len(positions))
+
+	reader := wal.NewReader()
+	defer reader.Close()
+
+	for i := 0; i < len(records); i++ {
+		data, pos, err := reader.Next()
+		assert.NoError(t, err, "sequential read %d should succeed", i)
+		assert.Equal(t, records[i], data, "sequential read %d data should match", i)
+		assert.Equal(t, positions[i], pos, "sequential read %d position should match", i)
+	}
+
+	_, _, err = reader.Next()
+	assert.True(t, errors.Is(err, io.EOF) || errors.Is(err, walfs.ErrNoNewData),
+		"should get EOF/ErrNoNewData after all records")
+}
+
+func TestWALog_WriteBatch_ReadbackAfterMultipleBatches(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(1024))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	var allRecords [][]byte
+	var allPositions []walfs.RecordPosition
+
+	for batchNum := 0; batchNum < 5; batchNum++ {
+		batch := make([][]byte, 8)
+		for i := range batch {
+			batch[i] = []byte(fmt.Sprintf("batch%d-rec%d", batchNum, i))
+		}
+		allRecords = append(allRecords, batch...)
+
+		positions, err := wal.WriteBatch(batch)
+		assert.NoError(t, err, "batch %d should write successfully", batchNum)
+		assert.Equal(t, len(batch), len(positions), "batch %d should write all records", batchNum)
+		allPositions = append(allPositions, positions...)
+	}
+
+	for i, pos := range allPositions {
+		data, err := wal.Read(pos)
+		assert.NoError(t, err, "record %d from all batches should be readable", i)
+		assert.Equal(t, allRecords[i], data, "record %d data should match original", i)
+	}
+
+	reader := wal.NewReader()
+	defer reader.Close()
+
+	count := 0
+	for {
+		_, _, err := reader.Next()
+		if errors.Is(err, io.EOF) || errors.Is(err, walfs.ErrNoNewData) {
+			break
+		}
+		assert.NoError(t, err)
+		count++
+	}
+	assert.Equal(t, len(allRecords), count, "reader should see all records")
+}
+
+func TestWALog_WriteBatch_ReadbackAtSegmentRotationBoundary(t *testing.T) {
+	tmpDir := t.TempDir()
+	segmentSize := int64(600)
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(segmentSize))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	records := make([][]byte, 15)
+	for i := range records {
+		records[i] = bytes.Repeat([]byte{byte(i)}, 70)
+	}
+
+	initialSegID := wal.Current().ID()
+	positions, err := wal.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), len(positions))
+
+	finalSegID := wal.Current().ID()
+	assert.Greater(t, finalSegID, initialSegID, "should have rotated to new segment")
+
+	var boundaryIdx int = -1
+	for i := 1; i < len(positions); i++ {
+		if positions[i].SegmentID != positions[i-1].SegmentID {
+			boundaryIdx = i
+			break
+		}
+	}
+	assert.NotEqual(t, -1, boundaryIdx, "should have found rotation boundary")
+
+	beforeData, err := wal.Read(positions[boundaryIdx-1])
+	assert.NoError(t, err, "record before boundary should be readable")
+	assert.Equal(t, records[boundaryIdx-1], beforeData, "record before boundary should match")
+
+	afterData, err := wal.Read(positions[boundaryIdx])
+	assert.NoError(t, err, "record after boundary should be readable")
+	assert.Equal(t, records[boundaryIdx], afterData, "record after boundary should match")
+
+	oldSegID := positions[boundaryIdx-1].SegmentID
+	oldSeg := wal.Segments()[oldSegID]
+	assert.True(t, walfs.IsSealed(oldSeg.GetFlags()), "old segment should be sealed")
+
+	oldSegRecordCount := 0
+	for _, pos := range positions {
+		if pos.SegmentID == oldSegID {
+			oldSegRecordCount++
+		}
+	}
+	assert.Equal(t, int64(oldSegRecordCount), oldSeg.GetEntryCount(),
+		"sealed segment entry count should match actual records")
+}
+
+func TestWALog_WriteBatch_ReadbackWithBytesPerSync(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal",
+		walfs.WithMaxSegmentSize(2048),
+		walfs.WithBytesPerSync(512))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	records := make([][]byte, 15)
+	for i := range records {
+		records[i] = bytes.Repeat([]byte{byte(i)}, 100)
+	}
+
+	positions, err := wal.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), len(positions))
+
+	assert.Greater(t, wal.BytesPerSyncCallCount(), int64(0), "bytesPerSync should have triggered")
+
+	for i, pos := range positions {
+		data, err := wal.Read(pos)
+		assert.NoError(t, err, "record %d should be readable after sync", i)
+		assert.Equal(t, records[i], data, "record %d data should match", i)
+	}
+}
+
+func TestWALog_WriteBatch_ReadbackEmptyBatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal")
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	initialRecords := [][]byte{[]byte("initial")}
+	initialPos, err := wal.WriteBatch(initialRecords)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(initialPos))
+
+	initialSegID := wal.Current().ID()
+
+	emptyPos, err := wal.WriteBatch([][]byte{})
+	assert.NoError(t, err)
+	assert.Nil(t, emptyPos)
+
+	assert.Equal(t, initialSegID, wal.Current().ID(), "segment should not change for empty batch")
+
+	data, err := wal.Read(initialPos[0])
+	assert.NoError(t, err)
+	assert.Equal(t, initialRecords[0], data)
+}
+
+func TestWALog_WriteBatch_ReadbackLargeRecords(t *testing.T) {
+	tmpDir := t.TempDir()
+	wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(1<<20))
+	assert.NoError(t, err)
+	defer wal.Close()
+
+	records := [][]byte{
+		bytes.Repeat([]byte("A"), 10000),
+		bytes.Repeat([]byte("B"), 20000),
+		bytes.Repeat([]byte("C"), 30000),
+		bytes.Repeat([]byte("D"), 40000),
+	}
+
+	positions, err := wal.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), len(positions))
+
+	for i, pos := range positions {
+		data, err := wal.Read(pos)
+		assert.NoError(t, err, "large record %d should be readable", i)
+		assert.Equal(t, len(records[i]), len(data), "large record %d size should match", i)
+		assert.Equal(t, records[i], data, "large record %d data should match", i)
+	}
+}
+
+func TestWALog_WriteBatch_ReadbackAfterReopen(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	records := [][]byte{
+		[]byte("persistent-1"),
+		[]byte("persistent-2"),
+		[]byte("persistent-3"),
+	}
+
+	var positions []walfs.RecordPosition
+	{
+		wal, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(512))
+		assert.NoError(t, err)
+
+		positions, err = wal.WriteBatch(records)
+		assert.NoError(t, err)
+		assert.Equal(t, len(records), len(positions))
+
+		assert.NoError(t, wal.Close())
+	}
+
+	{
+		wal2, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(512))
+		assert.NoError(t, err)
+		defer wal2.Close()
+
+		for i, pos := range positions {
+			data, err := wal2.Read(pos)
+			assert.NoError(t, err, "record %d should be readable after reopen", i)
+			assert.Equal(t, records[i], data, "record %d should persist after reopen", i)
+		}
+
+		reader := wal2.NewReader()
+		defer reader.Close()
+
+		for i := 0; i < len(records); i++ {
+			data, _, err := reader.Next()
+			assert.NoError(t, err, "sequential read %d should work after reopen", i)
+			assert.Equal(t, records[i], data, "sequential read %d data should match", i)
+		}
+	}
+}

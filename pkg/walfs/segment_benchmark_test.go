@@ -385,3 +385,154 @@ func BenchmarkEncodeRecordPosition(b *testing.B) {
 		sink1 = pos.Encode()
 	}
 }
+
+func BenchmarkWriteBatch(b *testing.B) {
+	batchSizes := []int{10, 50, 100, 500}
+	recordSize := 1024
+
+	syncOptions := []struct {
+		name string
+		opt  MsyncOption
+	}{
+		{"NoSync", MsyncNone},
+		{"SyncAfterWrite", MsyncOnWrite},
+	}
+
+	for _, syncOpt := range syncOptions {
+		for _, batchSize := range batchSizes {
+			b.Run(fmt.Sprintf("%s/BatchSize_%d", syncOpt.name, batchSize), func(b *testing.B) {
+				dir := b.TempDir()
+				seg, err := OpenSegmentFile(dir, ".wal", 1, WithSyncOption(syncOpt.opt))
+				if err != nil {
+					b.Fatal(err)
+				}
+				defer seg.Close()
+
+				// Prepare batch
+				records := make([][]byte, batchSize)
+				for i := range records {
+					records[i] = make([]byte, recordSize)
+					for j := range records[i] {
+						records[i][j] = byte(j % 256)
+					}
+				}
+
+				totalBytes := int64(recordSize * batchSize)
+				maxBatches := calculateMaxEntries(recordSize*batchSize) / batchSize
+
+				b.ResetTimer()
+				b.SetBytes(totalBytes)
+
+				for i := 0; i < b.N; i++ {
+					if (i%maxBatches) == 0 && i > 0 {
+						b.StopTimer()
+						seg.Close()
+						seg, err = OpenSegmentFile(dir, ".wal", uint32(i/maxBatches+1), WithSyncOption(syncOpt.opt))
+						if err != nil {
+							b.Fatal(err)
+						}
+						b.StartTimer()
+					}
+
+					if _, _, err := seg.WriteBatch(records); err != nil && err != ErrSegmentFull {
+						b.Fatal(err)
+					}
+				}
+			})
+		}
+	}
+}
+
+// BenchmarkWriteVsWriteBatch compares individual writes vs batch writes
+func BenchmarkWriteVsWriteBatch(b *testing.B) {
+	testCases := []struct {
+		recordSize int
+		batchSizes []int
+	}{
+		{1024, []int{5, 10, 20, 50}},
+		{16 * 1024, []int{5, 10, 20}},
+		{100 * 1024, []int{5, 10, 20}},
+		{512 * 1024, []int{2, 5, 10}},
+	}
+
+	for _, tc := range testCases {
+		recordSize := tc.recordSize
+
+		b.Run(fmt.Sprintf("IndividualWrites_%dKB", recordSize/1024), func(b *testing.B) {
+			dir := b.TempDir()
+			seg, err := OpenSegmentFile(dir, ".wal", 1)
+			if err != nil {
+				b.Fatal(err)
+			}
+			defer seg.Close()
+
+			data := make([]byte, recordSize)
+			maxWrites := calculateMaxEntries(recordSize)
+
+			b.ResetTimer()
+			b.SetBytes(int64(recordSize))
+
+			for i := 0; i < b.N; i++ {
+				if (i%maxWrites) == 0 && i > 0 {
+					b.StopTimer()
+					seg.Close()
+					seg, err = OpenSegmentFile(dir, ".wal", uint32(i/maxWrites+1))
+					if err != nil {
+						b.Fatal(err)
+					}
+					b.StartTimer()
+				}
+
+				if _, err := seg.Write(data); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+
+		for _, batchSize := range tc.batchSizes {
+			b.Run(fmt.Sprintf("BatchWrites_%dKB_Batch%d", recordSize/1024, batchSize), func(b *testing.B) {
+				dir := b.TempDir()
+				seg, err := OpenSegmentFile(dir, ".wal", 1)
+				if err != nil {
+					b.Fatal(err)
+				}
+				defer seg.Close()
+
+				records := make([][]byte, batchSize)
+				for i := range records {
+					records[i] = make([]byte, recordSize)
+				}
+
+				totalBytes := int64(recordSize * batchSize)
+				maxWrites := calculateMaxEntries(recordSize)
+				if maxWrites < batchSize {
+					maxWrites = batchSize
+				}
+
+				b.ResetTimer()
+				b.SetBytes(totalBytes)
+
+				writtenCount := 0
+				for i := 0; i < b.N; i++ {
+					if writtenCount >= maxWrites-batchSize && writtenCount > 0 {
+						b.StopTimer()
+						seg.Close()
+						seg, err = OpenSegmentFile(dir, ".wal", uint32(writtenCount/maxWrites+2))
+						if err != nil {
+							b.Fatal(err)
+						}
+						writtenCount = 0
+						b.StartTimer()
+					}
+
+					positions, written, err := seg.WriteBatch(records)
+					if err != nil && err != ErrSegmentFull {
+						b.Fatal(err)
+					}
+					writtenCount += written
+					_ = positions
+				}
+			})
+		}
+	}
+}
