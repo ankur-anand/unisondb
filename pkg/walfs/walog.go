@@ -211,10 +211,10 @@ func (wl *WALog) recoverSegments() error {
 			}
 		}
 		wl.segments[id] = seg
-		wl.snapshotSegments()
 		wl.currentSegment = seg
 	}
 
+	wl.snapshotSegments()
 	return nil
 }
 
@@ -273,7 +273,7 @@ func (wl *WALog) Write(data []byte) (RecordPosition, error) {
 	}
 
 	estimatedSize := recordOverhead(int64(len(data)))
-	if estimatedSize > wl.maxSegmentSize {
+	if estimatedSize > (wl.maxSegmentSize - int64(segmentHeaderSize)) {
 		return RecordPosition{}, ErrRecordTooLarge
 	}
 
@@ -300,6 +300,79 @@ func (wl *WALog) Write(data []byte) (RecordPosition, error) {
 	}
 
 	return pos, nil
+}
+
+// WriteBatch appends multiple records to the active segment in a single batched operation.
+// If the batch cannot fit entirely in the current segment, it handles automatic rotation:
+// Returns a slice of RecordPositions for all successfully written records.
+func (wl *WALog) WriteBatch(records [][]byte) ([]RecordPosition, error) {
+	if len(records) == 0 {
+		return nil, nil
+	}
+
+	wl.writeMu.Lock()
+	defer wl.writeMu.Unlock()
+
+	if wl.currentSegment == nil {
+		return nil, errors.New("no active segment")
+	}
+
+	// Pre-check each record to ensure it can fit in a segment
+	usable := wl.maxSegmentSize - int64(segmentHeaderSize)
+	for _, data := range records {
+		estimatedSize := recordOverhead(int64(len(data)))
+		if estimatedSize > usable {
+			return nil, ErrRecordTooLarge
+		}
+	}
+
+	var allPositions []RecordPosition
+	remaining := records
+
+	for len(remaining) > 0 {
+		positions, written, batchErr := wl.currentSegment.WriteBatch(remaining)
+
+		if batchErr != nil && !errors.Is(batchErr, ErrSegmentFull) {
+			return allPositions, batchErr
+		}
+
+		// successfully written positions
+		allPositions = append(allPositions, positions...)
+
+		// unsynced bytes counter
+		for i := 0; i < written; i++ {
+			wl.unSynced += recordOverhead(int64(len(remaining[i])))
+		}
+
+		if wl.bytesPerSync > 0 && wl.unSynced >= wl.bytesPerSync {
+			if syncErr := wl.currentSegment.MSync(); syncErr != nil {
+				return allPositions, syncErr
+			}
+			wl.unSynced = 0
+			wl.bytesPerSyncCalled.Add(1)
+		}
+
+		if written == len(remaining) {
+			return allPositions, nil
+		}
+
+		// 1. Writes as many records as possible to the current segment
+		// 2. Rotates to a new segment
+		// 3. Writes remaining records to the new segment
+		//
+		// segment is full - rotate and continue with remaining records
+		if errors.Is(batchErr, ErrSegmentFull) && written < len(remaining) {
+			remaining = remaining[written:]
+			if rotateErr := wl.rotateSegment(); rotateErr != nil {
+				return allPositions, fmt.Errorf("failed to rotate segment during batch write: %w", rotateErr)
+			}
+		} else {
+			// don't know what to do, but handle it gracefully
+			return allPositions, fmt.Errorf("unexpected state: written=%d, remaining=%d, err=%v", written, len(remaining), batchErr)
+		}
+	}
+
+	return allPositions, nil
 }
 
 func recordOverhead(dataLen int64) int64 {

@@ -26,6 +26,7 @@ var (
 	ErrSegmentSealed       = errors.New("cannot write to sealed segment")
 	ErrSegmentReaderClosed = errors.New("segment reader is closed")
 	ErrNoNewData           = errors.New("no new data yet")
+	ErrSegmentFull         = errors.New("segment is full, cannot write more records")
 )
 
 var (
@@ -112,6 +113,16 @@ type SegmentHeader struct {
 	// at 60 - padding to align to 64B
 	_ uint32
 }
+
+/* Record Layout:
+┌──────────────────────────────────────────────────────────────┐
+│ 0..3   CRC32C(header[4:8] || data)                           │
+│ 4..7   u32 length                                            │
+│ 8..(8+len-1)   data                                          │
+│ (8+len)..(16+len-1)  trailer 0xDEADBEEFFEEDFACE              │
+│ ... zero padding to next 8-byte boundary                     │
+└──────────────────────────────────────────────────────────────┘
+*/
 
 func decodeSegmentHeader(buf []byte) (*SegmentHeader, error) {
 	if len(buf) < 64 {
@@ -487,6 +498,123 @@ func (seg *Segment) Write(data []byte) (RecordPosition, error) {
 		SegmentID: seg.id,
 		Offset:    offset,
 	}, nil
+}
+
+// WriteBatch writes multiple records to the segment in a single operation.
+// Returns a slice of RecordPositions for successfully written records and the number written.
+// If the segment fills up mid-batch, it returns positions for records that fit,
+// the count of records written, and ErrSegmentFull.
+// Callers should retry remaining records in a new segment.
+// nolint: funlen
+func (seg *Segment) WriteBatch(records [][]byte) ([]RecordPosition, int, error) {
+	if len(records) == 0 {
+		return nil, 0, nil
+	}
+
+	if seg.closed.Load() || seg.state.Load() != StateOpen {
+		return nil, 0, ErrClosed
+	}
+
+	seg.writeMu.Lock()
+	defer seg.writeMu.Unlock()
+
+	flags := binary.LittleEndian.Uint32(seg.mmapData[40:44])
+	if IsSealed(flags) {
+		return nil, 0, ErrSegmentSealed
+	}
+
+	startOffset := seg.writeOffset.Load()
+	currentOffset := startOffset
+	positions := make([]RecordPosition, 0, len(records))
+
+	headerSize := int64(recordHeaderSize)
+	trailerSize := int64(recordTrailerMarkerSize)
+
+	// determine how many records we can fit
+	var recordsToWrite int
+	for i, data := range records {
+		dataSize := int64(len(data))
+		rawSize := headerSize + dataSize + trailerSize
+		entrySize := alignUp(rawSize)
+
+		if entrySize > seg.mmapSize-segmentHeaderSize {
+			return nil, 0, fmt.Errorf("record at index %d (size %d bytes) exceeds maximum segment capacity", i, len(data))
+		}
+
+		if currentOffset+entrySize > seg.mmapSize {
+			// can't fit from this record - stop here
+			recordsToWrite = i
+			break
+		}
+
+		positions = append(positions, RecordPosition{
+			SegmentID: seg.id,
+			Offset:    currentOffset,
+		})
+		currentOffset += entrySize
+		recordsToWrite = i + 1
+	}
+
+	if recordsToWrite == 0 {
+		return nil, 0, ErrSegmentFull
+	}
+
+	currentOffset = startOffset
+	for i := 0; i < recordsToWrite; i++ {
+		data := records[i]
+		dataSize := int64(len(data))
+		rawSize := headerSize + dataSize + trailerSize
+		entrySize := alignUp(rawSize)
+
+		// header
+		binary.LittleEndian.PutUint32(seg.header[4:8], uint32(len(data)))
+		sum := crc32Checksum(seg.header[4:], data)
+		binary.LittleEndian.PutUint32(seg.header[:4], sum)
+		copy(seg.mmapData[currentOffset:], seg.header[:])
+
+		// data
+		copy(seg.mmapData[currentOffset+recordHeaderSize:], data)
+
+		// trailer
+		canaryOffset := currentOffset + headerSize + dataSize
+		copy(seg.mmapData[canaryOffset:], trailerMarker)
+
+		// padding
+		paddingStart := currentOffset + rawSize
+		paddingEnd := currentOffset + entrySize
+		for i := paddingStart; i < paddingEnd; i++ {
+			seg.mmapData[i] = 0
+		}
+
+		currentOffset += entrySize
+	}
+
+	// metadata once at the end
+	newOffset := currentOffset
+	seg.writeOffset.Store(newOffset)
+
+	binary.LittleEndian.PutUint32(seg.mmapData[24:32], uint32(newOffset))
+	prevCount := binary.LittleEndian.Uint64(seg.mmapData[32:40])
+	binary.LittleEndian.PutUint64(seg.mmapData[32:40], prevCount+uint64(recordsToWrite))
+	binary.LittleEndian.PutUint64(seg.mmapData[16:24], uint64(time.Now().UnixNano()))
+
+	crc := crc32.Checksum(seg.mmapData[0:56], crcTable)
+	binary.LittleEndian.PutUint32(seg.mmapData[56:60], crc)
+
+	// MSync if option is set
+	if seg.syncOption == MsyncOnWrite {
+		if err := seg.mmapData.Flush(); err != nil {
+			return positions, recordsToWrite, fmt.Errorf("mmap flush error after batch write: %w", err)
+		}
+	}
+
+	// Return partial success if we couldn't write all records
+	var err error
+	if recordsToWrite < len(records) {
+		err = ErrSegmentFull
+	}
+
+	return positions, recordsToWrite, err
 }
 
 // Read reads the record data at the specified offset within the segment.

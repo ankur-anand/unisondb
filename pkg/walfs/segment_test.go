@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -944,7 +945,7 @@ func TestSegmentReader_CleanupFallback(t *testing.T) {
 	assert.True(t, seg.markedForDeletion.Load())
 
 	// dropping reader reference, with-out close
-	reader = nil
+	runtime.KeepAlive(reader)
 	// forcing two gc cycle.
 	// https://go.dev/blog/cleanups-and-weak
 	// runtime.Finalizer takes at a minimum two full garbage collection cycles to reclaim the memory
@@ -1085,7 +1086,7 @@ func TestSegmentReader_GCDecrementsRefOnlyOnce(t *testing.T) {
 
 		assert.Equal(t, initialRef+1, seg.refCount.Load())
 
-		reader = nil
+		runtime.KeepAlive(reader)
 	}()
 
 	runtime.GC()
@@ -1269,4 +1270,865 @@ func TestEncodeRecordPositionTo(t *testing.T) {
 func calculateAlignedFrameSize(dataLen int) int64 {
 	raw := int64(recordHeaderSize + dataLen + recordTrailerMarkerSize)
 	return alignUp(raw)
+}
+
+func TestSegment_WriteBatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := [][]byte{
+		[]byte("record1"),
+		[]byte("record2-longer"),
+		[]byte("record3-even-longer"),
+		[]byte("r4"),
+		[]byte("record5-medium-size"),
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), written)
+	assert.Equal(t, len(records), len(positions))
+
+	for i, pos := range positions {
+		data, _, readErr := seg.Read(pos.Offset)
+		assert.NoError(t, readErr)
+		assert.Equal(t, records[i], data)
+	}
+
+	assert.Equal(t, int64(len(records)), seg.GetEntryCount())
+}
+
+func TestSegment_WriteBatch_Overflow(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(1024))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := make([][]byte, 20)
+	for i := range records {
+		records[i] = bytes.Repeat([]byte("x"), 100)
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.Error(t, err)
+	assert.Greater(t, written, 0)
+	assert.Less(t, written, len(records))
+	assert.Equal(t, written, len(positions))
+
+	for i := 0; i < written; i++ {
+		data, _, readErr := seg.Read(positions[i].Offset)
+		assert.NoError(t, readErr)
+		assert.Equal(t, records[i], data)
+	}
+}
+
+func TestSegment_WriteBatch_Empty(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	positions, written, err := seg.WriteBatch([][]byte{})
+	assert.NoError(t, err)
+	assert.Equal(t, 0, written)
+	assert.Nil(t, positions)
+}
+
+func TestSegment_WriteBatch_AfterSealed(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	err = seg.SealSegment()
+	assert.NoError(t, err)
+
+	records := [][]byte{[]byte("test")}
+	_, _, err = seg.WriteBatch(records)
+	assert.ErrorIs(t, err, ErrSegmentSealed)
+}
+
+func TestSegment_WriteBatch_RecordExceedsSegmentCapacity(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(1024))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	oversizedRecord := make([]byte, 2048)
+	for i := range oversizedRecord {
+		oversizedRecord[i] = byte(i % 256)
+	}
+
+	records := [][]byte{
+		[]byte("small record that fits"),
+		oversizedRecord,
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum segment capacity")
+	assert.Equal(t, 0, written, "no records should be written when one exceeds capacity")
+	assert.Nil(t, positions)
+}
+
+func TestSegment_WriteBatch_EachRecordValidated(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(2048))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := [][]byte{
+		bytes.Repeat([]byte("a"), 50),
+		bytes.Repeat([]byte("b"), 50),
+		bytes.Repeat([]byte("c"), 5000),
+		bytes.Repeat([]byte("d"), 50),
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "record at index 2")
+	assert.Contains(t, err.Error(), "exceeds maximum segment capacity")
+	assert.Equal(t, 0, written, "should fail early before writing anything")
+	assert.Nil(t, positions)
+}
+
+func TestSegment_WriteBatch_ReadbackAllRecords(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := [][]byte{
+		[]byte("a"),
+		[]byte("ab"),
+		[]byte("abc"),
+		[]byte("abcd"),
+		[]byte("abcdefg"),
+		[]byte("abcdefgh"),
+		[]byte("abcdefghi"),
+		bytes.Repeat([]byte("x"), 15),
+		bytes.Repeat([]byte("y"), 16),
+		bytes.Repeat([]byte("z"), 17),
+		bytes.Repeat([]byte("m"), 63),
+		bytes.Repeat([]byte("n"), 64),
+		bytes.Repeat([]byte("o"), 65),
+		bytes.Repeat([]byte("p"), 127),
+		bytes.Repeat([]byte("q"), 128),
+		bytes.Repeat([]byte("r"), 255),
+		bytes.Repeat([]byte("s"), 256),
+		bytes.Repeat([]byte("t"), 1023),
+		bytes.Repeat([]byte("u"), 1024),
+		bytes.Repeat([]byte("v"), 4095),
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), written)
+	assert.Equal(t, len(records), len(positions))
+
+	for i, pos := range positions {
+		data, next, readErr := seg.Read(pos.Offset)
+		assert.NoError(t, readErr, "record %d at offset %d should be readable", i, pos.Offset)
+		assert.Equal(t, records[i], data)
+
+		if i < len(positions)-1 {
+			assert.Equal(t, positions[i+1].Offset, next.Offset,
+				"next pointer for record %d should point to record %d", i, i+1)
+		}
+	}
+
+	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
+	assert.NoError(t, err)
+	assert.Equal(t, int64(len(records)), meta.EntryCount)
+	assert.Equal(t, seg.WriteOffset(), meta.WriteOffset)
+}
+
+func TestSegment_WriteBatch_ReadbackAtSegmentBoundary(t *testing.T) {
+	tmpDir := t.TempDir()
+	segmentSize := int64(2048)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(segmentSize))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := make([][]byte, 30)
+	for i := range records {
+		records[i] = bytes.Repeat([]byte{byte(i)}, 50)
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	if err != nil {
+		assert.ErrorIs(t, err, ErrSegmentFull)
+	}
+	assert.Greater(t, written, 0)
+	assert.Equal(t, written, len(positions))
+
+	for i := 0; i < written; i++ {
+		pos := positions[i]
+		data, _, readErr := seg.Read(pos.Offset)
+		assert.NoError(t, readErr, "record %d at offset %d (near boundary) should be readable", i, pos.Offset)
+		assert.Equal(t, records[i], data)
+	}
+
+	if written > 0 {
+		lastIdx := written - 1
+		lastPos := positions[lastIdx]
+		lastData, _, err := seg.Read(lastPos.Offset)
+		assert.NoError(t, err)
+		assert.Equal(t, records[lastIdx], lastData)
+
+		finalOffset := seg.WriteOffset()
+		assert.Greater(t, finalOffset, segmentSize-200)
+	}
+
+	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
+	assert.NoError(t, err)
+	assert.Equal(t, int64(written), meta.EntryCount)
+}
+
+func TestSegment_WriteBatch_HeaderUpdateAfterPartialWrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(1024))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	initialMeta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
+	assert.NoError(t, err)
+	initialOffset := initialMeta.WriteOffset
+	initialCount := initialMeta.EntryCount
+
+	records := make([][]byte, 20)
+	for i := range records {
+		records[i] = bytes.Repeat([]byte("x"), 80)
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.Error(t, err)
+	assert.Greater(t, written, 0)
+	assert.Less(t, written, len(records))
+
+	updatedMeta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
+	assert.NoError(t, err)
+	assert.Equal(t, initialCount+int64(written), updatedMeta.EntryCount)
+	assert.Greater(t, updatedMeta.WriteOffset, initialOffset)
+	assert.Equal(t, seg.WriteOffset(), updatedMeta.WriteOffset)
+	assert.Greater(t, updatedMeta.LastModifiedAt, initialMeta.LastModifiedAt)
+
+	for i := 0; i < written; i++ {
+		data, _, readErr := seg.Read(positions[i].Offset)
+		assert.NoError(t, readErr)
+		assert.Equal(t, records[i], data)
+	}
+
+	extraRecord := []byte("after-partial-write")
+	pos, err := seg.Write(extraRecord)
+	if err == nil {
+		data, _, readErr := seg.Read(pos.Offset)
+		assert.NoError(t, readErr)
+		assert.Equal(t, extraRecord, data)
+	} else {
+		assert.Contains(t, err.Error(), "exceeds Segment size")
+	}
+}
+
+func TestSegment_WriteBatch_HeaderCRCValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := [][]byte{
+		[]byte("record1"),
+		[]byte("record2"),
+		[]byte("record3"),
+	}
+
+	_, written, err := seg.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), written)
+
+	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(segmentMagicNumber), meta.Magic)
+	assert.Equal(t, uint32(segmentHeaderVersion), meta.Version)
+	assert.Equal(t, int64(len(records)), meta.EntryCount)
+	assert.Equal(t, seg.WriteOffset(), meta.WriteOffset)
+	assert.Greater(t, meta.LastModifiedAt, int64(0))
+	assert.True(t, IsActive(meta.Flags))
+	assert.False(t, IsSealed(meta.Flags))
+}
+
+func TestSegment_WriteBatch_MultipleConsecutiveBatches(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	var allRecords [][]byte
+	var allPositions []RecordPosition
+	totalWritten := 0
+
+	for batchNum := 0; batchNum < 3; batchNum++ {
+		batch := make([][]byte, 5)
+		for i := range batch {
+			batch[i] = []byte(fmt.Sprintf("batch%d-record%d", batchNum, i))
+		}
+		allRecords = append(allRecords, batch...)
+
+		positions, written, err := seg.WriteBatch(batch)
+		assert.NoError(t, err)
+		assert.Equal(t, len(batch), written)
+		allPositions = append(allPositions, positions...)
+		totalWritten += written
+
+		meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
+		assert.NoError(t, err)
+		assert.Equal(t, int64(totalWritten), meta.EntryCount)
+	}
+
+	for i, pos := range allPositions {
+		data, _, readErr := seg.Read(pos.Offset)
+		assert.NoError(t, readErr)
+		assert.Equal(t, allRecords[i], data)
+	}
+
+	finalMeta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
+	assert.NoError(t, err)
+	assert.Equal(t, int64(totalWritten), finalMeta.EntryCount)
+	assert.Equal(t, seg.WriteOffset(), finalMeta.WriteOffset)
+}
+
+func TestSegment_WriteBatch_ReadbackAfterCloseReopen(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+
+	records := [][]byte{
+		[]byte("persistent-record-1"),
+		[]byte("persistent-record-2"),
+		[]byte("persistent-record-3"),
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), written)
+
+	assert.NoError(t, seg.Close())
+
+	seg2, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg2.Close())
+	})
+
+	meta, err := decodeSegmentHeader(seg2.mmapData[:segmentHeaderSize])
+	assert.NoError(t, err)
+	assert.Equal(t, int64(len(records)), meta.EntryCount)
+
+	for i, pos := range positions {
+		data, _, readErr := seg2.Read(pos.Offset)
+		assert.NoError(t, readErr)
+		assert.Equal(t, records[i], data)
+	}
+}
+
+func TestSegment_WriteBatch_ReadbackWithMixedSizes(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := [][]byte{
+		[]byte("t"),
+		bytes.Repeat([]byte("s"), 10),
+		bytes.Repeat([]byte("m"), 100),
+		bytes.Repeat([]byte("l"), 1000),
+		[]byte("T"),
+		bytes.Repeat([]byte("S"), 15),
+		bytes.Repeat([]byte("M"), 200),
+		bytes.Repeat([]byte("L"), 2000),
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), written)
+
+	for i, pos := range positions {
+		data, _, readErr := seg.Read(pos.Offset)
+		assert.NoError(t, readErr, "record %d (size %d) should be readable", i, len(records[i]))
+		assert.Equal(t, len(records[i]), len(data))
+		assert.Equal(t, records[i], data)
+	}
+
+	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
+	assert.NoError(t, err)
+	assert.Equal(t, int64(len(records)), meta.EntryCount)
+}
+
+func TestSegment_WriteBatch_ZeroLengthRecords(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := [][]byte{
+		[]byte("record1"),
+		[]byte{},
+		[]byte("record2"),
+		[]byte{},
+		[]byte("record3"),
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), written)
+	assert.Equal(t, len(records), len(positions))
+
+	for i, pos := range positions {
+		data, _, readErr := seg.Read(pos.Offset)
+		assert.NoError(t, readErr)
+		assert.Equal(t, records[i], data)
+	}
+
+	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
+	assert.NoError(t, err)
+	assert.Equal(t, int64(len(records)), meta.EntryCount)
+}
+
+func TestSegment_WriteBatch_Concurrent(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(1<<20))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	const numGoroutines = 10
+	const recordsPerGoroutine = 20
+
+	var wg sync.WaitGroup
+	var totalWritten atomic.Int64
+	errors := make(chan error, numGoroutines)
+
+	for i := 0; i < numGoroutines; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+
+			records := make([][]byte, recordsPerGoroutine)
+			for j := range records {
+				records[j] = []byte{byte(id), byte(j)}
+			}
+
+			positions, written, err := seg.WriteBatch(records)
+			if err != nil && err != ErrSegmentFull {
+				errors <- err
+				return
+			}
+
+			assert.Equal(t, written, len(positions), "written count should match positions length")
+			totalWritten.Add(int64(written))
+
+			for k := 0; k < written; k++ {
+				data, _, readErr := seg.Read(positions[k].Offset)
+				if readErr != nil {
+					errors <- readErr
+					return
+				}
+				assert.Equal(t, records[k], data)
+			}
+		}(i)
+	}
+
+	wg.Wait()
+	close(errors)
+
+	for err := range errors {
+		t.Errorf("Concurrent write error: %v", err)
+	}
+
+	assert.Equal(t, totalWritten.Load(), seg.GetEntryCount())
+}
+
+func TestSegment_WriteBatch_WithMSyncOnWrite(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSyncOption(MsyncOnWrite))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := [][]byte{
+		[]byte("record1"),
+		[]byte("record2"),
+		[]byte("record3"),
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), written)
+	assert.Equal(t, len(records), len(positions))
+
+	for i, pos := range positions {
+		data, _, readErr := seg.Read(pos.Offset)
+		assert.NoError(t, readErr)
+		assert.Equal(t, records[i], data)
+	}
+}
+
+func TestSegment_WriteBatch_PartialWriteExactCount(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(512))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := make([][]byte, 50)
+	for i := range records {
+		records[i] = bytes.Repeat([]byte("x"), 50)
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.ErrorIs(t, err, ErrSegmentFull)
+	assert.Greater(t, written, 0)
+	assert.Less(t, written, len(records))
+
+	assert.Equal(t, written, len(positions), "written count MUST exactly match positions length")
+
+	for i := 0; i < written; i++ {
+		data, _, readErr := seg.Read(positions[i].Offset)
+		assert.NoError(t, readErr, "position %d should be readable", i)
+		assert.Equal(t, records[i], data, "data at position %d should match", i)
+	}
+
+	assert.Equal(t, int64(written), seg.GetEntryCount())
+}
+
+func TestSegment_WriteBatch_OversizedRecordNoStateChange(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(1024))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	initialOffset := seg.WriteOffset()
+	initialEntryCount := seg.GetEntryCount()
+	initialFlags := seg.GetFlags()
+
+	oversizedRecord := make([]byte, 2048)
+	records := [][]byte{oversizedRecord}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "exceeds maximum segment capacity")
+	assert.Equal(t, 0, written)
+	assert.Nil(t, positions)
+
+	assert.Equal(t, initialOffset, seg.WriteOffset(), "write offset should not change")
+	assert.Equal(t, initialEntryCount, seg.GetEntryCount(), "entry count should not change")
+	assert.Equal(t, initialFlags, seg.GetFlags(), "flags should not change")
+
+	validRecord := []byte("valid-record")
+	pos, err := seg.Write(validRecord)
+	assert.NoError(t, err)
+	assert.Equal(t, initialOffset, pos.Offset, "should write at original offset")
+}
+
+func TestSegment_WriteBatch_MetadataConsistency(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(800))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	initialOffset := seg.WriteOffset()
+	initialCount := seg.GetEntryCount()
+	initialModifiedAt := seg.GetLastModifiedAt()
+
+	records := make([][]byte, 20)
+	for i := range records {
+		records[i] = bytes.Repeat([]byte("y"), 60)
+	}
+
+	time.Sleep(2 * time.Millisecond)
+
+	_, written, err := seg.WriteBatch(records)
+	assert.Error(t, err)
+	assert.Greater(t, written, 0)
+
+	newOffset := seg.WriteOffset()
+	newCount := seg.GetEntryCount()
+	newModifiedAt := seg.GetLastModifiedAt()
+
+	assert.Greater(t, newOffset, initialOffset, "write offset should advance")
+	assert.Equal(t, initialCount+int64(written), newCount, "entry count should match written")
+	assert.Greater(t, newModifiedAt, initialModifiedAt, "last modified should be updated")
+
+	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
+	assert.NoError(t, err, "segment header should have valid CRC")
+	assert.Equal(t, newOffset, meta.WriteOffset)
+	assert.Equal(t, newCount, meta.EntryCount)
+}
+
+func TestSegment_WriteBatch_WithClosedSegment(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+
+	records := [][]byte{[]byte("test")}
+
+	assert.NoError(t, seg.Close())
+
+	_, written, err := seg.WriteBatch(records)
+	assert.ErrorIs(t, err, ErrClosed)
+	assert.Equal(t, 0, written)
+}
+
+func TestSegment_WriteBatch_ExactlyFullSegment(t *testing.T) {
+	tmpDir := t.TempDir()
+	segmentSize := int64(1024)
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(segmentSize))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	availableSpace := segmentSize - segmentHeaderSize
+
+	dataLen := 88
+	numRecords := int(availableSpace / alignUp(int64(recordHeaderSize+dataLen+recordTrailerMarkerSize)))
+
+	records := make([][]byte, numRecords)
+	for i := range records {
+		records[i] = bytes.Repeat([]byte("a"), dataLen)
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.NoError(t, err, "should write successfully")
+	assert.Equal(t, numRecords, written)
+	assert.Equal(t, numRecords, len(positions))
+
+	finalOffset := seg.WriteOffset()
+	assert.LessOrEqual(t, finalOffset, segmentSize, "should not exceed segment size")
+	assert.Greater(t, finalOffset, segmentSize-200, "should be nearly full")
+
+	_, written2, err := seg.WriteBatch([][]byte{[]byte("extra")})
+	if err == nil {
+		assert.Equal(t, 1, written2, "should have written 1 record")
+	} else {
+		assert.ErrorIs(t, err, ErrSegmentFull)
+	}
+}
+
+func TestSegment_WriteBatch_AlignmentVerification(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := [][]byte{
+		[]byte("a"),
+		[]byte("abc"),
+		[]byte("abcdefg"),
+		bytes.Repeat([]byte("x"), 13),
+		bytes.Repeat([]byte("y"), 29),
+		bytes.Repeat([]byte("z"), 101),
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), written)
+
+	for i, pos := range positions {
+		assert.Equal(t, int64(0), pos.Offset%8, "position %d offset %d should be 8-byte aligned", i, pos.Offset)
+
+		_, next, readErr := seg.Read(pos.Offset)
+		assert.NoError(t, readErr)
+
+		if i < len(positions)-1 {
+			assert.Equal(t, int64(0), next.Offset%8, "next offset %d should be 8-byte aligned", next.Offset)
+			assert.Equal(t, positions[i+1].Offset, next.Offset, "next offset should match next position")
+		}
+	}
+}
+
+func TestSegment_WriteBatch_CRCValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := [][]byte{
+		[]byte("record1"),
+		[]byte("record2-with-different-length"),
+		[]byte("r3"),
+		bytes.Repeat([]byte("long"), 100),
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), written)
+
+	err = seg.SealSegment()
+	assert.NoError(t, err)
+
+	for i, pos := range positions {
+		data, _, readErr := seg.Read(pos.Offset)
+		assert.NoError(t, readErr, "CRC validation should pass for record %d", i)
+		assert.Equal(t, records[i], data)
+	}
+
+	assert.NoError(t, seg.Close())
+
+	seg2, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg2.Close())
+	})
+
+	for i, pos := range positions {
+		data, _, readErr := seg2.Read(pos.Offset)
+		assert.NoError(t, readErr, "CRC validation should pass after reopen for record %d", i)
+		assert.Equal(t, records[i], data)
+	}
+}
+
+func TestSegment_WriteBatch_TrailerValidation(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := [][]byte{
+		[]byte("record1"),
+		[]byte("record2"),
+		[]byte("record3"),
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), written)
+
+	for i, pos := range positions {
+		dataLen := len(records[i])
+		trailerOffset := pos.Offset + int64(recordHeaderSize) + int64(dataLen)
+
+		trailer := seg.mmapData[trailerOffset : trailerOffset+recordTrailerMarkerSize]
+		assert.True(t, bytes.Equal(trailer, trailerMarker),
+			"record %d should have valid trailer marker at offset %d", i, trailerOffset)
+	}
+}
+
+func TestSegment_WriteBatch_StateOpenCheck(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+
+	records := [][]byte{[]byte("test")}
+
+	seg.state.Store(StateClosing)
+
+	_, written, err := seg.WriteBatch(records)
+	assert.ErrorIs(t, err, ErrClosed)
+	assert.Equal(t, 0, written)
+}
+
+func TestSegment_WriteBatch_PaddingZeroed(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	records := [][]byte{
+		[]byte("a"),
+		[]byte("abc"),
+		[]byte("abcdefg"),
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.NoError(t, err)
+	assert.Equal(t, len(records), written)
+
+	for i, pos := range positions {
+		dataLen := int64(len(records[i]))
+		headerSize := int64(recordHeaderSize)
+		trailerSize := int64(recordTrailerMarkerSize)
+		rawSize := headerSize + dataLen + trailerSize
+		entrySize := alignUp(rawSize)
+		paddingSize := entrySize - rawSize
+
+		if paddingSize > 0 {
+			paddingStart := pos.Offset + rawSize
+			paddingEnd := pos.Offset + entrySize
+
+			for offset := paddingStart; offset < paddingEnd; offset++ {
+				assert.Equal(t, byte(0), seg.mmapData[offset],
+					"padding byte at offset %d for record %d should be zero", offset, i)
+			}
+		}
+	}
+}
+
+func TestSegment_WriteBatch_SegmentFullOnFirstRecord(t *testing.T) {
+	tmpDir := t.TempDir()
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(256))
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, seg.Close())
+	})
+
+	filler := bytes.Repeat([]byte("x"), 150)
+	_, err = seg.Write(filler)
+	assert.NoError(t, err)
+
+	records := [][]byte{
+		bytes.Repeat([]byte("y"), 100),
+		bytes.Repeat([]byte("z"), 50),
+	}
+
+	positions, written, err := seg.WriteBatch(records)
+	assert.ErrorIs(t, err, ErrSegmentFull)
+	assert.Equal(t, 0, written, "no records should be written if first doesn't fit")
+	assert.Nil(t, positions)
 }
