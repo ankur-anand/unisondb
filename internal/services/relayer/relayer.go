@@ -37,6 +37,7 @@ var (
 		Name:      "wal_segment_lag_threshold",
 		Help:      "Configured segment lag threshold for the WAL relayer per namespace",
 	}, []string{"namespace"})
+
 	rateLimiterWaitDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Namespace: promNamespace,
 		Subsystem: promSubsystem,
@@ -68,6 +69,7 @@ type Streamer interface {
 // WalIO defines the interface for writing Write-Ahead Log (WAL) records.
 type WalIO interface {
 	Write(data *v1.WALRecord) error
+	WriteBatch(records []*v1.WALRecord) error
 }
 
 type walIOHandler struct {
@@ -79,6 +81,25 @@ func (w walIOHandler) Write(data *v1.WALRecord) error {
 		SegmentID: data.Offset.SegmentId,
 		Offset:    int64(data.Offset.Offset),
 	})
+}
+
+func (w walIOHandler) WriteBatch(records []*v1.WALRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	encodedWals := make([][]byte, len(records))
+	offsets := make([]dbkernel.Offset, len(records))
+
+	for i, record := range records {
+		encodedWals[i] = record.Record
+		offsets[i] = dbkernel.Offset{
+			SegmentID: record.Offset.SegmentId,
+			Offset:    int64(record.Offset.Offset),
+		}
+	}
+
+	return w.replica.ApplyRecords(encodedWals, offsets)
 }
 
 // RateLimitedWalIO wraps WalIO with a token bucket rate limiter.
@@ -111,6 +132,26 @@ func (r *RateLimitedWalIO) Write(data *v1.WALRecord) error {
 	rateLimiterSuccess.WithLabelValues(defaultStreamerLabel).Inc()
 
 	return r.underlying.Write(data)
+}
+
+// WriteBatch applies rate limiting before delegating to the underlying WalIO batch write.
+func (r *RateLimitedWalIO) WriteBatch(records []*v1.WALRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
+
+	start := time.Now()
+	// Reserve N tokens for N records
+	err := r.limiter.WaitN(r.ctx, len(records))
+	duration := time.Since(start)
+	rateLimiterWaitDuration.WithLabelValues(defaultStreamerLabel).Observe(duration.Seconds())
+	if err != nil {
+		rateLimiterErrors.WithLabelValues(defaultStreamerLabel).Inc()
+		return fmt.Errorf("rate limit exceeded: %w", err)
+	}
+	rateLimiterSuccess.WithLabelValues(defaultStreamerLabel).Inc()
+
+	return r.underlying.WriteBatch(records)
 }
 
 // Relayer relays WAL record from the upstream over the provided grpc connection for the given namespace.

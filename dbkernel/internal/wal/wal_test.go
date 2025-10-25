@@ -3,6 +3,7 @@ package wal_test
 import (
 	"io"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
@@ -294,4 +295,137 @@ func TestReader_AutoCloseOnEOF(t *testing.T) {
 
 	_, _, err = reader.Next()
 	assert.ErrorIs(t, err, io.EOF)
+}
+
+func TestWalIO_BatchAppend(t *testing.T) {
+	t.Run("batch_append_basic", func(t *testing.T) {
+		walInstance := setupWalTest(t)
+
+		records := [][]byte{
+			[]byte(gofakeit.LetterN(10)),
+			[]byte(gofakeit.LetterN(20)),
+			[]byte(gofakeit.LetterN(30)),
+		}
+
+		offsets, err := walInstance.BatchAppend(records)
+		assert.NoError(t, err)
+		assert.Len(t, offsets, 3, "should return 3 offsets")
+
+		for i, offset := range offsets {
+			data, err := walInstance.Read(offset)
+			assert.NoError(t, err)
+			assert.Equal(t, records[i], data, "record %d should match", i)
+		}
+	})
+
+	t.Run("batch_append_empty", func(t *testing.T) {
+		walInstance := setupWalTest(t)
+
+		offsets, err := walInstance.BatchAppend([][]byte{})
+		assert.NoError(t, err)
+		assert.Nil(t, offsets, "should return nil for empty batch")
+	})
+
+	t.Run("batch_append_single_record", func(t *testing.T) {
+		walInstance := setupWalTest(t)
+
+		records := [][]byte{[]byte(gofakeit.LetterN(15))}
+		offsets, err := walInstance.BatchAppend(records)
+		assert.NoError(t, err)
+		assert.Len(t, offsets, 1)
+
+		data, err := walInstance.Read(offsets[0])
+		assert.NoError(t, err)
+		assert.Equal(t, records[0], data)
+	})
+
+	t.Run("batch_append_large_batch", func(t *testing.T) {
+		walInstance := setupWalTest(t)
+
+		batchSize := 100
+		records := make([][]byte, batchSize)
+		for i := 0; i < batchSize; i++ {
+			records[i] = []byte(gofakeit.LetterN(50))
+		}
+
+		offsets, err := walInstance.BatchAppend(records)
+		assert.NoError(t, err)
+		assert.Len(t, offsets, batchSize)
+
+		testIndices := []int{0, 25, 50, 75, 99}
+		for _, i := range testIndices {
+			data, err := walInstance.Read(offsets[i])
+			assert.NoError(t, err)
+			assert.Equal(t, records[i], data, "record %d should match", i)
+		}
+	})
+
+	t.Run("batch_append_sequential_consistency", func(t *testing.T) {
+		walInstance := setupWalTest(t)
+
+		batch1 := [][]byte{
+			[]byte("record1"),
+			[]byte("record2"),
+		}
+		batch2 := [][]byte{
+			[]byte("record3"),
+			[]byte("record4"),
+		}
+
+		offsets1, err := walInstance.BatchAppend(batch1)
+		assert.NoError(t, err)
+
+		offsets2, err := walInstance.BatchAppend(batch2)
+		assert.NoError(t, err)
+
+		allOffsets := append(offsets1, offsets2...)
+		for i := 1; i < len(allOffsets); i++ {
+			prev := allOffsets[i-1]
+			curr := allOffsets[i]
+			isIncreasing := (curr.SegmentID > prev.SegmentID) ||
+				(curr.SegmentID == prev.SegmentID && curr.Offset > prev.Offset)
+			assert.True(t, isIncreasing, "offsets should be monotonically increasing")
+		}
+
+		allRecords := append(batch1, batch2...)
+		for i, offset := range allOffsets {
+			data, err := walInstance.Read(offset)
+			assert.NoError(t, err)
+			assert.Equal(t, allRecords[i], data, "record %d should match", i)
+		}
+	})
+
+	t.Run("batch_append_concurrent", func(t *testing.T) {
+		walInstance := setupWalTest(t)
+
+		var wg sync.WaitGroup
+		numWorkers := 2
+		batchesPerWorker := 3
+		recordsPerBatch := 5
+
+		var totalWritten atomic.Int32
+
+		for worker := 0; worker < numWorkers; worker++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for batch := 0; batch < batchesPerWorker; batch++ {
+					records := make([][]byte, recordsPerBatch)
+					for i := 0; i < recordsPerBatch; i++ {
+						records[i] = []byte(gofakeit.LetterN(20))
+					}
+
+					offsets, err := walInstance.BatchAppend(records)
+					assert.NoError(t, err)
+					assert.Len(t, offsets, recordsPerBatch)
+					totalWritten.Add(int32(len(offsets)))
+				}
+			}()
+		}
+
+		wg.Wait()
+
+		expectedTotal := int32(numWorkers * batchesPerWorker * recordsPerBatch)
+		assert.Equal(t, expectedTotal, totalWritten.Load(), "should have written all records")
+	})
 }
