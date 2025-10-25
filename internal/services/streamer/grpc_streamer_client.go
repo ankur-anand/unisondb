@@ -86,8 +86,12 @@ func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 			return fmt.Errorf("%w [%d]", services.ErrClientMaxRetriesExceeded, maxRetries)
 		}
 
+		var offsetBytes []byte
+		if c.offset != nil {
+			offsetBytes = c.offset.Encode()
+		}
 		client, err := v1.NewWalStreamerServiceClient(c.gcc).StreamWalRecords(ctx, &v1.StreamWalRecordsRequest{
-			Offset: c.offset.Encode(),
+			Offset: offsetBytes,
 		})
 
 		if err != nil {
