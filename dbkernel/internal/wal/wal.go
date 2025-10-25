@@ -40,7 +40,13 @@ type Offset = walfs.RecordPosition
 type SegID = walfs.SegmentID
 
 func DecodeOffset(b []byte) *Offset {
-	pos, _ := walfs.DecodeRecordPosition(b)
+	if len(b) == 0 {
+		return nil
+	}
+	pos, err := walfs.DecodeRecordPosition(b)
+	if err != nil {
+		return nil
+	}
 	return &pos
 }
 

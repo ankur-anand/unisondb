@@ -126,7 +126,9 @@ func (s *GrpcStreamer) StreamWalRecords(request *v1.StreamWalRecordsRequest, g g
 		batchWaitTime, meta, "grpc")
 
 	currentOffset := engine.CurrentOffset()
-	if meta != nil && currentOffset == nil {
+	// Reject if client requests non-zero offset but server has no data.
+	// Allow bootstrapping case where both client and server start from {0,0}.
+	if meta != nil && currentOffset == nil && !meta.IsZero() {
 		return services.ToGRPCError(namespace, reqID, method, services.ErrInvalidMetadata)
 	}
 
@@ -311,5 +313,8 @@ func decodeMetadata(data []byte) (o *dbkernel.Offset, err error) {
 		return nil, nil
 	}
 	o = dbkernel.DecodeOffset(data)
+	if o == nil {
+		return nil, fmt.Errorf("failed to decode offset: invalid or corrupt data")
+	}
 	return o, err
 }
