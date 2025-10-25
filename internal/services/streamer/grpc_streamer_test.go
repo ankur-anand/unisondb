@@ -50,6 +50,11 @@ func (n *noopWalIO) Write(data *v1.WALRecord) error {
 	return nil
 }
 
+func (n *noopWalIO) WriteBatch(records []*v1.WALRecord) error {
+	n.recordWalCount += len(records)
+	return nil
+}
+
 func bufDialer(lis *bufconn.Listener) func(ctx context.Context, s string) (net.Conn, error) {
 	return func(ctx context.Context, s string) (net.Conn, error) {
 		return lis.Dial()

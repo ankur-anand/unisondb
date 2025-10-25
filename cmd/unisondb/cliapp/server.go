@@ -404,6 +404,10 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 			// send ping frames when client is idle.
 			Time: 5 * time.Minute,
 		}),
+		grpc.InitialWindowSize(4<<20),
+		grpc.InitialConnWindowSize(8<<20),
+		grpc.WriteBufferSize(256*1024),
+		grpc.ReadBufferSize(256*1024),
 		// https://github.com/grpc/grpc-go/pull/6922
 		grpc.WaitForHandlers(true),
 	)

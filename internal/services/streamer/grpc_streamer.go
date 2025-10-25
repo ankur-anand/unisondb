@@ -165,7 +165,7 @@ func (s *GrpcStreamer) StreamWalRecords(request *v1.StreamWalRecordsRequest, g g
 //   - Unnecessary Processing: The server might fetch and stream WAL records that the client has already
 //     received or is no longer interested in.
 //
-//nolint:gocognit
+//nolint:gocognit,funlen
 func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 	g grpc.ServerStreamingServer[v1.StreamWalRecordsResponse],
 	walReceiver chan []*v1.WALRecord,
@@ -173,16 +173,19 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 	namespace, reqID, method := grpcutils.GetRequestInfo(g.Context())
 
 	var (
-		batch                  []*v1.WALRecord
+		batch                  = make([]*v1.WALRecord, 0, batchSize*2)
 		totalBatchSize         int
 		lastReceivedRecordTime = time.Now()
 	)
 
 	flusher := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
 		if err := s.flushBatch(batch, g); err != nil {
 			return err
 		}
-		batch = []*v1.WALRecord{}
+		batch = make([]*v1.WALRecord, 0, batchSize*2)
 		totalBatchSize = 0
 		return nil
 	}
@@ -190,17 +193,30 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 	dynamicTimeoutTicker := time.NewTicker(s.dynamicTimeout)
 	defer dynamicTimeoutTicker.Stop()
 
+	batchFlushTicker := time.NewTicker(batchWaitTime)
+	defer batchFlushTicker.Stop()
+
 	for {
 		select {
 		case <-dynamicTimeoutTicker.C:
 			if time.Since(lastReceivedRecordTime) > s.dynamicTimeout {
+				if err := flusher(); err != nil {
+					return services.ToGRPCError(namespace, reqID, method, err)
+				}
 				return services.ToGRPCError(namespace, reqID, method, services.ErrStreamTimeout)
 			}
+		case <-batchFlushTicker.C:
+			if err := flusher(); err != nil {
+				return services.ToGRPCError(namespace, reqID, method, err)
+			}
+
 		case <-s.shutdown:
+			_ = flusher()
 			return status.Error(codes.Unavailable, internal.GracefulShutdownMsg)
 
 		case <-ctx.Done():
 			err := ctx.Err()
+			_ = flusher()
 			if errors.Is(err, services.ErrStreamTimeout) {
 				return services.ToGRPCError(namespace, reqID, method, services.ErrStreamTimeout)
 			}
@@ -208,22 +224,28 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 				return nil
 			}
 			return ctx.Err()
-		case walRecords := <-walReceiver:
+
+		case walRecords, ok := <-walReceiver:
+			if !ok {
+				if err := flusher(); err != nil {
+					return services.ToGRPCError(namespace, reqID, method, err)
+				}
+				return nil
+			}
+
 			for _, walRecord := range walRecords {
 				lastReceivedRecordTime = time.Now()
 				totalBatchSize += len(walRecord.Record)
 				batch = append(batch, walRecord)
 
+				// Only flush when batch exceeds size limit
 				if totalBatchSize >= grpcMaxMsgSize {
 					if err := flusher(); err != nil {
 						return services.ToGRPCError(namespace, reqID, method, err)
 					}
 				}
 			}
-			// flush remaining
-			if err := flusher(); err != nil {
-				return services.ToGRPCError(namespace, reqID, method, err)
-			}
+
 		case err := <-replicatorErr:
 			if errors.Is(err, dbkernel.ErrInvalidOffset) {
 				slog.Error("[unisondb.streamer.grpc]",
@@ -250,7 +272,11 @@ func (s *GrpcStreamer) flushBatch(batch []*v1.WALRecord, g grpc.ServerStream) er
 	}
 
 	slog.Debug("[unisondb.streamer.grpc] Batch flushing", "size", len(batch))
-	response := &v1.StreamWalRecordsResponse{Records: batch, ServerTimestamp: timestamppb.Now()}
+
+	response := &v1.StreamWalRecordsResponse{
+		Records:         batch,
+		ServerTimestamp: timestamppb.Now(),
+	}
 
 	start := time.Now()
 	defer func() {
