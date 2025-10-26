@@ -18,6 +18,7 @@ import (
 	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/etc"
 	"github.com/ankur-anand/unisondb/internal/grpcutils"
+	udbmetrics "github.com/ankur-anand/unisondb/internal/metrics"
 	"github.com/ankur-anand/unisondb/internal/services/fuzzer"
 	"github.com/ankur-anand/unisondb/internal/services/kvstore"
 	"github.com/ankur-anand/unisondb/internal/services/relayer"
@@ -157,6 +158,16 @@ func (ms *Server) InitTelemetry(ctx context.Context) error {
 	err := prometheus.Register(collectors.NewBuildInfoCollector())
 	if err != nil {
 		return err
+	}
+
+	ioCollector, err := udbmetrics.NewIOStatsCollector()
+	if err != nil {
+		slog.Warn("[unisondb.cliapp] Failed to create I/O stats collector", "error", err)
+	} else {
+		err = prometheus.Register(ioCollector)
+		if err != nil {
+			slog.Warn("[unisondb.cliapp] Failed to register I/O stats collector", "error", err)
+		}
 	}
 
 	ms.fuzzStats = fuzzer.NewFuzzStats()
@@ -367,6 +378,8 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 	for method := range grpcMethods {
 		enabledMethodsLogs[method] = true
 	}
+
+	enabledMethodsLogs["/unisondb.streamer.v1.WalStreamerService/GetLatestOffset"] = false
 
 	statsHandler := grpcutils.NewGRPCStatsHandler(grpcMethods)
 	ms.statsHandler = statsHandler
