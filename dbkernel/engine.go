@@ -258,7 +258,7 @@ func (e *Engine) initStorage(dataDir, namespace string, conf *EngineConfig) erro
 
 func (e *Engine) initKVDriver(dbFile string, conf *EngineConfig) error {
 	conf.BtreeConfig.Namespace = e.namespace
-	
+
 	var bTreeStore internal.BTreeStore
 	switch conf.DBEngine {
 	case BoltDBEngine:

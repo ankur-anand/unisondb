@@ -368,6 +368,8 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 		enabledMethodsLogs[method] = true
 	}
 
+	enabledMethodsLogs["/unisondb.streamer.v1.WalStreamerService/GetLatestOffset"] = false
+
 	statsHandler := grpcutils.NewGRPCStatsHandler(grpcMethods)
 	ms.statsHandler = statsHandler
 
