@@ -1096,3 +1096,88 @@ func TestGetLOB_NotFound(t *testing.T) {
 	_, err = engine.GetLOB([]byte("missing-key"))
 	assert.Error(t, err)
 }
+
+type change struct {
+	key       []byte
+	op        logrecord.LogOperationType
+	entryType logrecord.LogEntryType
+}
+
+type mockNotifier struct {
+	mu      sync.Mutex
+	changes []change
+}
+
+func (m *mockNotifier) Notify(ctx context.Context, key []byte, op logrecord.LogOperationType, entryType logrecord.LogEntryType) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.changes = append(m.changes, change{
+		key:       key,
+		op:        op,
+		entryType: entryType,
+	})
+}
+
+func TestEngineChangeNotifier(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_lob"
+
+	mc := &mockNotifier{}
+
+	conf := NewDefaultEngineConfig()
+	conf.ChangeNotifier = mc
+
+	engine, err := NewStorageEngine(baseDir, namespace, conf)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		_ = engine.Close(context.Background())
+	})
+
+	key := []byte("lob-key")
+	chunks := [][]byte{
+		[]byte("hello "),
+		[]byte("big "),
+		[]byte("world"),
+	}
+
+	txn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
+	assert.NoError(t, err)
+	for _, c := range chunks {
+		assert.NoError(t, txn.AppendKVTxn(key, c))
+	}
+	assert.NoError(t, txn.Commit())
+
+	rowsEntries := make(map[string]map[string][]byte)
+	t.Run("put_row_columns", func(t *testing.T) {
+		for i := uint64(0); i < 2; i++ {
+			rowKey := gofakeit.UUID()
+
+			if rowsEntries[rowKey] == nil {
+				rowsEntries[rowKey] = make(map[string][]byte)
+			}
+
+			for j := 0; j < 1; j++ {
+
+				entries := make(map[string][]byte)
+				for k := 0; k < 10; k++ {
+					key := gofakeit.Name()
+					val := gofakeit.LetterN(uint(i + 1))
+					rowsEntries[rowKey][key] = []byte(val)
+					entries[key] = []byte(val)
+				}
+
+				err := engine.PutColumnsForRow([]byte(rowKey), entries)
+				assert.NoError(t, err, "PutColumnsForRow operation should succeed")
+			}
+		}
+	})
+
+	key1 := gofakeit.UUID()
+	value := gofakeit.LetterN(100)
+	err = engine.persistKeyValue([][]byte{[]byte(key1)}, [][]byte{[]byte(value)}, logrecord.LogOperationTypeInsert)
+	assert.NoError(t, err, "persistKeyValue should not error")
+
+	mc.mu.Lock()
+	assert.Equal(t, len(mc.changes), 4, "total 4 change notifications should be inserted")
+	mc.mu.Unlock()
+}
