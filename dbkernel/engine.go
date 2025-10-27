@@ -106,6 +106,17 @@ var (
 	ErrWaitTimeoutExceeded = errors.New("wait timeout exceeded")
 )
 
+// ChangeNotifier is called on successful local writes.
+type ChangeNotifier interface {
+	Notify(ctx context.Context, key []byte, op logrecord.LogOperationType, entryType logrecord.LogEntryType)
+}
+
+// NopNotifier is a no-op implementation.
+type NopNotifier struct{}
+
+func (NopNotifier) Notify(ctx context.Context, key []byte, op logrecord.LogOperationType, entryType logrecord.LogEntryType) {
+}
+
 // Engine manages WAL, MemTable (SkipList), and BtreeStore for a given namespace.
 type Engine struct {
 	mu                sync.RWMutex
@@ -149,7 +160,8 @@ type Engine struct {
 	notifierMu       sync.RWMutex
 	appendNotify     chan struct{}
 
-	taggedScope umetrics.Scope
+	taggedScope    umetrics.Scope
+	changeNotifier ChangeNotifier
 }
 
 // NewStorageEngine initializes WAL, MemTable, and BtreeStore and returns an initialized Engine for a namespace.
@@ -161,6 +173,11 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 	taggedScope := umetrics.AutoScope().Tagged(map[string]string{
 		"namespace": namespace,
 	})
+
+	chNotifier := conf.ChangeNotifier
+	if chNotifier == nil {
+		chNotifier = NopNotifier{}
+	}
 
 	engine := &Engine{
 		namespace:                 namespace,
@@ -176,6 +193,8 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		btreeFlushIntervalEnabled: btreeFlushIntervalEnabled,
 		disableEntryTypeCheck:     conf.DisableEntryTypeCheck,
 		taggedScope:               taggedScope,
+		changeNotifier:            chNotifier,
+		coalesceDuration:          conf.WriteNotifyCoalescing.Duration,
 	}
 
 	if err := engine.initStorage(dataDir, namespace, conf); err != nil {
@@ -599,8 +618,16 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct) error {
 		//put inside the bloom filter.
 		e.bloom.Add(key)
 	}
-
+	e.changeNotifier.Notify(e.ctx, key, decodeOperation(v), decodeEntryType(v))
 	return err
+}
+
+func decodeOperation(v y.ValueStruct) logrecord.LogOperationType {
+	return logrecord.LogOperationType(v.Meta)
+}
+
+func decodeEntryType(v y.ValueStruct) logrecord.LogEntryType {
+	return logrecord.LogEntryType(v.UserMeta)
 }
 
 // used for testing purposes.

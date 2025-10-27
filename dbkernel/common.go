@@ -49,6 +49,7 @@ type EngineConfig struct {
 	BTreeFlushInterval    time.Duration               `toml:"btree_flush_interval"`
 	WriteNotifyCoalescing WriteNotifyCoalescingConfig `toml:"write_notify_coalescing"`
 	DisableEntryTypeCheck bool                        `toml:"disable_entry_type_check"`
+	ChangeNotifier        ChangeNotifier              `toml:"change_notifier"`
 }
 
 // WriteNotifyCoalescingConfig controls the coalescing of notifications
