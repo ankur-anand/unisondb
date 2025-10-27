@@ -194,6 +194,7 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		disableEntryTypeCheck:     conf.DisableEntryTypeCheck,
 		taggedScope:               taggedScope,
 		changeNotifier:            chNotifier,
+		coalesceDuration:          conf.WriteNotifyCoalescing.Duration,
 	}
 
 	if err := engine.initStorage(dataDir, namespace, conf); err != nil {
