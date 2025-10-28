@@ -2,52 +2,89 @@
 
 <img src="docs/logo.svg" width="300" alt="UnisonDB" />
 
-> A multi-modal database combining WAL-based writes, B-Tree reads, and seamless replication — supporting KV, wide-column, and LOB data models with explicit transactions.
+> UnisonDB is a **reactive, multi-modal database** built on **B+Trees** and **WAL-based streaming replication**,  
+> designed for **local-first, edge-scale** applications.
 
 [![ci-tests](https://github.com/ankur-anand/unisondb/actions/workflows/go.yml/badge.svg)](https://github.com/ankur-anand/unisondb/actions/workflows/go.yml)
 [![Coverage Status](https://coveralls.io/repos/github/ankur-anand/unisondb/badge.svg?branch=main)](https://coveralls.io/github/ankur-anand/unisondb?branch=main)
 
 ## What UnisonDB Is
 
-**The embedded B+Tree database that replicates.**
+A log-native database that replicates like a message bus.
 
-We took LMDB and BoltDB's proven architecture—fast B+Tree reads, memory-mapped storage, embedded simplicity—and made it **distributed-first**:
+UnisonDB unifies storage and streaming by building a database directly on top of a Write-Ahead Log (WAL).
+Every write becomes a first-class event — durable, ordered, and streamable to thousands of replicas in real time.
 
-1. **Predictable Performance** - B+Tree reads, no LSM compaction storms  
-2. **Built-In Replication** - WAL-based streaming to 1000+ nodes  
-3. **Hub-and-Spoke** - Hierarchical trees (Primary → Hubs → Edge)  
-4. **Namespace Isolation** - Multi-tenant with selective replication  
-5. **Multi-Modal** - KV + Wide-Column + LOB in one transaction  
-6. **Same Simplicity** - Embedded, single file, no clusters  
+It combines the predictability of B+Trees with the power of log-based replication,
+letting data flow continuously between core and edge without coordination overhead.
+
+Built for reactive architectures and local-first systems, UnisonDB turns each insert, update, or delete into a live data stream —
+ready to power AI agents, caches, and event pipelines instantly.
+
+Core Highlights
+1.	Predictable Performance — B+Tree reads, zero LSM compaction storms
+2.	Built-In Replication — WAL-based streaming to 1,000+ nodes
+3.	Hub-and-Spoke Topology — Primary → Hubs → Edge replication flow
+4.	Namespace Isolation — Multi-tenant replication boundaries
+5.	Multi-Modal Storage — Key-Value, Wide-Column, and LOB in one transaction
+6.	Reactive by Design — Every write emits a real-time stream
+
 
 ![storage architecture](docs/arch.svg)
 
-## Why UnisonDB?
+## Why UnisonDB
 
-### The Problem
+### The Problem: Storage and Streaming Live in Different Worlds
 
-**LMDB and BoltDB are perfect for embedded storage.** Fast, simple, battle-tested.
+Modern systems are reactive — every change needs to **propagate instantly** to dashboards, APIs, caches, and edge devices.  
+Yet, databases were built for persistence, not propagation.
 
-But they have **zero replication**. Need data on 100 edge nodes? You're building sync yourself.
+You write to a database, then stream through Kafka.  
+You replicate via CDC.  
+You patch syncs between cache and storage.
+
+This split between **state and stream** creates friction:
+- Two systems to maintain and monitor
+- Eventual consistency between write path and read path
+- Network latency on every read or update
+- Complex fan-out when scaling to hundreds of edges
+
+---
 
 ### The Gap
 
-**etcd and Consul solve distributed consensus.** They're perfect for service discovery, config management, and distributed locking in small clusters (3-7 nodes).
+**LMDB** and **BoltDB** excel at local speed — but stop at one node.  
+**etcd** and **Consul** replicate state — but are consensus-bound and small-cluster only.  
+**Kafka** and **NATS** stream messages — but aren’t queryable databases.
 
-But they're **not designed for local-first, edge computing, or massive fanout:**
+| System | Strength | Limitation |
+|---------|-----------|-------------|
+| LMDB / BoltDB | Fast local storage | No replication |
+| etcd / Consul | Cluster consistency | No local queries, low fan-out |
+| Kafka / NATS | Scalable streams | No storage or query model |
 
-1. **Every read requires a network call** (no local embedded replica)  
-2. **Watch-based, not full replication** (can't query locally)   
-3. **Can't scale to 100+ nodes** (Raft consensus based)  
-4. **No hub-and-spoke architecture** (flat cluster only)  
-5. **Value size limits** (1.5MB in etcd, 512KB in Consul)  
+---
 
-### The Solution
+### The Solution: Log-Native by Design
 
-**UnisonDB = LMDB/BoltDB + Distributed Replication + Multi-Modal Storage**
+UnisonDB fuses **database semantics** with **streaming mechanics** — the log *is* the database.  
+Every write is durable, ordered, and instantly available as a replication stream.
 
-Stop building sync infrastructure. Use a database designed for distribution.
+No CDC, no brokers, no external pipelines.  
+Just one unified engine that:
 
+- Stores data in **B+Trees** for predictable reads
+- Streams data via **WAL replication** to thousands of nodes
+- Reacts instantly with **sub-second fan-out**
+- Keeps local replicas fully queryable, even offline
+
+UnisonDB eliminates the divide between “database” and “message bus,”  
+enabling **reactive, distributed, and local-first** systems — without the operational sprawl.
+
+> **UnisonDB collapses two worlds — storage and streaming — into one unified log-native core.**  
+> The result: a single system that stores, replicates, and reacts — instantly.
+
+---
 
 ## Core Architecture 
 
