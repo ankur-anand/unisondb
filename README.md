@@ -1,8 +1,5 @@
 ## UnisonDB
 
-**The Log-Native Database for the Reactive Edge**  
-Store multi-modal data. Stream instantly. Query locally.
-
 <img src="docs/logo.svg" width="300" alt="UnisonDB" />
 
 > UnisonDB is a **reactive, multi-modal database** built on **B+Trees** and **WAL-based streaming replication**,  
