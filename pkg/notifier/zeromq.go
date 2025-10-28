@@ -24,8 +24,10 @@ type Notification struct {
 
 // ZeroMQNotifier implements ZeroMQ-based notification channel.
 type ZeroMQNotifier struct {
+	// ZERO MQ Sockets are not thread safe.
+	// https://stackoverflow.com/questions/5841896/0mq-how-to-use-zeromq-in-a-threadsafe-manner
 	socket    *zmq.Socket
-	mu        sync.RWMutex
+	mu        sync.Mutex
 	bindAddr  string
 	namespace string
 
@@ -141,8 +143,8 @@ func (z *ZeroMQNotifier) Notify(ctx context.Context, key []byte, op logrecord.Lo
 		return
 	}
 
-	z.mu.RLock()
-	defer z.mu.RUnlock()
+	z.mu.Lock()
+	defer z.mu.Unlock()
 
 	if z.closed.Load() {
 		return
