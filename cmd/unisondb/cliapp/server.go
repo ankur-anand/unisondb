@@ -20,6 +20,7 @@ import (
 	"github.com/ankur-anand/unisondb/internal/grpcutils"
 	udbmetrics "github.com/ankur-anand/unisondb/internal/metrics"
 	"github.com/ankur-anand/unisondb/internal/services/fuzzer"
+	"github.com/ankur-anand/unisondb/internal/services/httpapi"
 	"github.com/ankur-anand/unisondb/internal/services/kvstore"
 	"github.com/ankur-anand/unisondb/internal/services/relayer"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
@@ -28,6 +29,7 @@ import (
 	"github.com/ankur-anand/unisondb/pkg/umetrics"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
 	v1Streamer "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
+	"github.com/gorilla/mux"
 	"github.com/hashicorp/go-metrics"
 	hashiprom "github.com/hashicorp/go-metrics/prometheus"
 	"github.com/pelletier/go-toml/v2"
@@ -454,14 +456,23 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 }
 
 func (ms *Server) SetupHTTPServer(ctx context.Context) error {
-	mux := http.NewServeMux()
-	mux.Handle("GET /metrics", promhttp.Handler())
-	mux.Handle("GET /fuzzstats", ms.fuzzStats)
+	router := mux.NewRouter()
+	router.Handle("/metrics", promhttp.Handler()).Methods(http.MethodGet)
+	router.Handle("/fuzzstats", ms.fuzzStats).Methods(http.MethodGet)
+
+	httpAPIService := httpapi.NewService(ms.engines)
+	httpAPIService.RegisterRoutes(router)
+
+	slog.Info("[unisondb.cliapp]",
+		slog.String("event_type", "HTTP.API.registered"),
+		slog.Int("namespace_count", len(ms.engines)),
+	)
+
 	ms.httpServer = &http.Server{
 		WriteTimeout: time.Second * 15,
 		ReadTimeout:  time.Second * 15,
 		IdleTimeout:  time.Second * 60,
-		Handler:      mux,
+		Handler:      router,
 	}
 	ms.DeferCallback = append(ms.DeferCallback, func(ctx context.Context) {
 		slog.Info("[unisondb.cliapp]",
