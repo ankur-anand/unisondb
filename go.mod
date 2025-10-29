@@ -17,6 +17,7 @@ require (
 	github.com/gofrs/flock v0.12.1
 	github.com/google/flatbuffers v25.2.10+incompatible
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/mux v1.8.1
 	github.com/hashicorp/go-metrics v0.5.4
 	github.com/openhistogram/circonusllhist v0.4.1
 	github.com/pebbe/zmq4 v1.4.0
