@@ -314,7 +314,7 @@ func decodeMetadata(data []byte) (o *dbkernel.Offset, err error) {
 	}
 	o = dbkernel.DecodeOffset(data)
 	if o == nil {
-		return nil, fmt.Errorf("failed to decode offset: invalid or corrupt data")
+		return nil, errors.New("failed to decode offset: invalid or corrupt data")
 	}
 	return o, err
 }

@@ -25,7 +25,7 @@ type IOStatsCollector struct {
 	cpuIowaitDesc *prometheus.Desc
 }
 
-// NewIOStatsCollector creates a new I/O stats collector
+// NewIOStatsCollector creates a new I/O stats collector.
 func NewIOStatsCollector() (*IOStatsCollector, error) {
 	proc, err := process.NewProcess(int32(os.Getpid()))
 	if err != nil {
@@ -47,13 +47,13 @@ func NewIOStatsCollector() (*IOStatsCollector, error) {
 	}, nil
 }
 
-// Describe implements prometheus.Collector
+// Describe implements prometheus.Collector.
 func (c *IOStatsCollector) Describe(ch chan<- *prometheus.Desc) {
 	ch <- c.writeBytesDesc
 	ch <- c.cpuIowaitDesc
 }
 
-// Collect implements prometheus.Collector
+// Collect implements prometheus.Collector.
 func (c *IOStatsCollector) Collect(ch chan<- prometheus.Metric) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
