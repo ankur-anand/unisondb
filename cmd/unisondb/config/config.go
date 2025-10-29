@@ -18,17 +18,18 @@ import (
 
 // Config : top-level configuration.
 type Config struct {
-	HTTPPort           int                    `toml:"http_port"`
-	ListenIP           string                 `toml:"listen_ip"`
-	Grpc               GrpcConfig             `toml:"grpc_config"`
-	Storage            StorageConfig          `toml:"storage_config"`
-	PProfConfig        PProfConfig            `toml:"pprof_config"`
-	RelayConfigs       map[string]RelayConfig `toml:"relayer_config"`
-	WalIOGlobalLimiter WalIOGlobalLimiter     `toml:"wal_io_global_limiter"`
-	LogConfig          LogConfig              `toml:"log_config"`
-	Limiter            Limiter                `toml:"limiter"`
-	FuzzConfig         FuzzConfig             `toml:"fuzz_config"`
-	WriteNotifyConfig  WriteNotifyConfig      `toml:"write_notify_config"`
+	HTTPPort           int                       `toml:"http_port"`
+	ListenIP           string                    `toml:"listen_ip"`
+	Grpc               GrpcConfig                `toml:"grpc_config"`
+	Storage            StorageConfig             `toml:"storage_config"`
+	PProfConfig        PProfConfig               `toml:"pprof_config"`
+	RelayConfigs       map[string]RelayConfig    `toml:"relayer_config"`
+	WalIOGlobalLimiter WalIOGlobalLimiter        `toml:"wal_io_global_limiter"`
+	LogConfig          LogConfig                 `toml:"log_config"`
+	Limiter            Limiter                   `toml:"limiter"`
+	FuzzConfig         FuzzConfig                `toml:"fuzz_config"`
+	WriteNotifyConfig  WriteNotifyConfig         `toml:"write_notify_config"`
+	NotifierConfigs    map[string]NotifierConfig `toml:"notifier_config"`
 }
 
 type GrpcConfig struct {
@@ -63,6 +64,13 @@ type WALCleanupConfig struct {
 type WriteNotifyConfig struct {
 	Enabled  bool   `toml:"enabled"`
 	MaxDelay string `toml:"max_delay"`
+}
+
+// NotifierConfig holds per-namespace ZeroMQ notifier configuration.
+type NotifierConfig struct {
+	BindPort      int `toml:"bind_port"`
+	HighWaterMark int `toml:"high_water_mark"`
+	LingerTime    int `toml:"linger_time"`
 }
 
 // RelayConfig holds TLS and upstream gRPC config.

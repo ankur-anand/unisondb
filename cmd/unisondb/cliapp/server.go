@@ -10,6 +10,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ import (
 	"github.com/ankur-anand/unisondb/internal/services/relayer"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
 	"github.com/ankur-anand/unisondb/pkg/logutil"
+	"github.com/ankur-anand/unisondb/pkg/notifier"
 	"github.com/ankur-anand/unisondb/pkg/svcutils"
 	"github.com/ankur-anand/unisondb/pkg/umetrics"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/replicator/v1"
@@ -77,6 +79,7 @@ type Server struct {
 	relayer               []relayerWithInfo
 	fuzzStats             *fuzzer.FuzzStats
 	statsHandler          *grpcutils.GRPCStatsHandler
+	notifiers             map[string]*notifier.ZeroMQNotifier
 
 	pprofServer *http.Server
 
@@ -289,9 +292,83 @@ func (ms *Server) setupWalCleanup(ctx context.Context) error {
 	return nil
 }
 
+// isValidPort checks if a given integer is a valid port number (1-65535).
+func isValidPort(port int) bool {
+	return port >= 1 && port <= 65535
+}
+
+func (ms *Server) SetupNotifier(ctx context.Context) error {
+	if len(ms.cfg.NotifierConfigs) == 0 {
+		return nil
+	}
+
+	ms.notifiers = make(map[string]*notifier.ZeroMQNotifier)
+
+	for namespace, notifierCfg := range ms.cfg.NotifierConfigs {
+
+		if !slices.Contains(ms.cfg.Storage.Namespaces, namespace) {
+			slog.Warn("[unisondb.cliapp] Notifier configured for non-existent namespace",
+				slog.String("namespace", namespace))
+			continue
+		}
+
+		bindPort := notifierCfg.BindPort
+
+		if !isValidPort(bindPort) {
+			return fmt.Errorf("invalid value for notifier binding port: %d", bindPort)
+		}
+
+		bindAddr := fmt.Sprintf("tcp://localhost:%d", bindPort)
+
+		// notifier for this namespace
+		zmqNotifierCfg := notifier.Config{
+			BindAddress:   bindAddr,
+			Namespace:     namespace,
+			HighWaterMark: notifierCfg.HighWaterMark,
+			LingerTime:    notifierCfg.LingerTime,
+		}
+
+		zmqNotifier, err := notifier.NewZeroMQNotifier(zmqNotifierCfg)
+		if err != nil {
+			return fmt.Errorf("failed to create ZeroMQ notifier for namespace %s: %w", namespace, err)
+		}
+
+		ms.notifiers[namespace] = zmqNotifier
+
+		ns := namespace
+		ms.DeferCallback = append(ms.DeferCallback, func(ctx context.Context) {
+			err := zmqNotifier.Close()
+			if err != nil {
+				slog.Error("[unisondb.cliapp] SetupNotifier: close ZeroMQ notifier failed",
+					"namespace", ns, "error", err)
+			}
+		})
+
+		slog.Info("[unisondb.cliapp]",
+			slog.String("event_type", "zeromq.notifier.created"),
+			slog.String("namespace", namespace),
+			slog.String("bind_address", bindAddr))
+	}
+
+	slog.Info("[unisondb.cliapp]",
+		slog.String("event_type", "zeromq.notifiers.initialized"),
+		slog.Int("namespace_count", len(ms.notifiers)))
+
+	return nil
+}
+
 func (ms *Server) SetupStorage(ctx context.Context) error {
 	for _, namespace := range ms.cfg.Storage.Namespaces {
-		store, err := dbkernel.NewStorageEngine(ms.cfg.Storage.BaseDir, namespace, ms.storageConfig)
+
+		engineConfig := *ms.storageConfig
+
+		if ms.notifiers != nil {
+			if zmqNotifier, exists := ms.notifiers[namespace]; exists {
+				engineConfig.ChangeNotifier = zmqNotifier
+			}
+		}
+
+		store, err := dbkernel.NewStorageEngine(ms.cfg.Storage.BaseDir, namespace, &engineConfig)
 		if err != nil {
 			return err
 		}
@@ -819,6 +896,7 @@ func logClamped[T comparable](field string, original, clamped T) {
 }
 
 func parseLogLevel(levelStr string) (slog.Level, error) {
+	levelStr = strings.TrimSpace(levelStr)
 	switch strings.ToLower(levelStr) {
 	case "debug":
 		return slog.LevelDebug, nil
