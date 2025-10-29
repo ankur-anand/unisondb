@@ -12,7 +12,7 @@ require (
 	github.com/openhistogram/circonusllhist v0.4.1
 	github.com/prometheus/common v0.63.0
 	github.com/redis/go-redis/v9 v9.7.3
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/redcon v1.6.2
 	go.etcd.io/bbolt v1.4.0
 	google.golang.org/protobuf v1.36.6
@@ -53,7 +53,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.35.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	golang.org/x/net v0.38.0 // indirect
-	golang.org/x/sys v0.31.0 // indirect
+	golang.org/x/sys v0.35.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 

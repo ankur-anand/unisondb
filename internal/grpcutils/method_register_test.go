@@ -12,6 +12,7 @@ func TestRegisterGRPCSMethods(t *testing.T) {
 
 	expected := map[string]string{
 		"/grpc.health.v1.Health/Check": "unary",
+		"/grpc.health.v1.Health/List":  "unary",
 		"/grpc.health.v1.Health/Watch": "server_stream",
 	}
 
