@@ -87,6 +87,7 @@ func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool) erro
 		srv.InitFromCLI(configPath, env, mode, grpcEnabled),
 		srv.InitTelemetry,
 		srv.SetupStorageConfig,
+		srv.SetupNotifier,
 		srv.SetupStorage,
 		srv.SetupGrpcServer,
 		srv.SetupHTTPServer,
