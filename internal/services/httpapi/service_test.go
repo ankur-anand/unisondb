@@ -1182,3 +1182,291 @@ func TestRequestSizeLimit_ErrorMessage(t *testing.T) {
 	assert.Contains(t, errResp["error"], "invalid request body")
 	t.Logf("Error message: %s", errResp["error"])
 }
+
+func setupReadOnlyTestServer(t *testing.T) (*testServer, func()) {
+	t.Helper()
+
+	tmpDir := t.TempDir()
+	writeCfg := dbkernel.NewDefaultEngineConfig()
+	writeCfg.DBEngine = dbkernel.LMDBEngine
+
+	writeEngine, err := dbkernel.NewStorageEngine(tmpDir, "test", writeCfg)
+	require.NoError(t, err)
+
+	err = writeEngine.PutKV([]byte("existing-key"), []byte("existing-value"))
+	require.NoError(t, err)
+
+	columns := map[string][]byte{
+		"col1": []byte("value1"),
+		"col2": []byte("value2"),
+	}
+	err = writeEngine.PutColumnsForRow([]byte("existing-row"), columns)
+	require.NoError(t, err)
+
+	err = writeEngine.Close(context.Background())
+	require.NoError(t, err)
+
+	readOnlyCfg := dbkernel.NewDefaultEngineConfig()
+	readOnlyCfg.DBEngine = dbkernel.LMDBEngine
+	readOnlyCfg.ReadOnly = true
+
+	engine, err := dbkernel.NewStorageEngine(tmpDir, "test", readOnlyCfg)
+	require.NoError(t, err)
+
+	engines := map[string]*dbkernel.Engine{
+		"test": engine,
+	}
+
+	service := NewService(engines)
+	router := mux.NewRouter()
+	service.RegisterRoutes(router)
+
+	cleanup := func() {
+		engine.Close(context.Background())
+	}
+
+	return &testServer{
+		service: service,
+		router:  router,
+		engine:  engine,
+	}, cleanup
+}
+
+func TestReadOnlyMode_HTTPAPIPutKV(t *testing.T) {
+	ts, cleanup := setupReadOnlyTestServer(t)
+	defer cleanup()
+
+	reqBody := PutKVRequest{
+		Value: encodeBase64([]byte("new-value")),
+	}
+
+	rr := makeRequest(t, ts.router, http.MethodPut, "/api/v1/test/kv/new-key", reqBody)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+
+	var errResp map[string]string
+	err := json.NewDecoder(rr.Body).Decode(&errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp["error"], "read-only mode")
+}
+
+func TestReadOnlyMode_HTTPAPIBatchPutKV(t *testing.T) {
+	ts, cleanup := setupReadOnlyTestServer(t)
+	defer cleanup()
+
+	reqBody := BatchKVRequest{
+		Operation: "put",
+		Items: []BatchKVItem{
+			{Key: "key1", Value: encodeBase64([]byte("value1"))},
+			{Key: "key2", Value: encodeBase64([]byte("value2"))},
+		},
+	}
+
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/kv/batch", reqBody)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+
+	var errResp map[string]string
+	err := json.NewDecoder(rr.Body).Decode(&errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp["error"], "read-only mode")
+}
+
+func TestReadOnlyMode_HTTPAPIDeleteKV(t *testing.T) {
+	ts, cleanup := setupReadOnlyTestServer(t)
+	defer cleanup()
+
+	rr := makeRequest(t, ts.router, http.MethodDelete, "/api/v1/test/kv/existing-key", nil)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+
+	var errResp map[string]string
+	err := json.NewDecoder(rr.Body).Decode(&errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp["error"], "read-only mode")
+}
+
+func TestReadOnlyMode_HTTPAPIBatchDeleteKV(t *testing.T) {
+	ts, cleanup := setupReadOnlyTestServer(t)
+	defer cleanup()
+
+	reqBody := BatchKVRequest{
+		Operation: "delete",
+		Keys:      []string{"existing-key"},
+	}
+
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/kv/batch", reqBody)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+
+	var errResp map[string]string
+	err := json.NewDecoder(rr.Body).Decode(&errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp["error"], "read-only mode")
+}
+
+func TestReadOnlyMode_HTTPAPIPutRow(t *testing.T) {
+	ts, cleanup := setupReadOnlyTestServer(t)
+	defer cleanup()
+
+	reqBody := PutRowRequest{
+		Columns: map[string]string{
+			"col1": encodeBase64([]byte("value1")),
+		},
+	}
+
+	rr := makeRequest(t, ts.router, http.MethodPut, "/api/v1/test/row/new-row", reqBody)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+
+	var errResp map[string]string
+	err := json.NewDecoder(rr.Body).Decode(&errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp["error"], "read-only mode")
+}
+
+func TestReadOnlyMode_HTTPAPIDeleteRow(t *testing.T) {
+	ts, cleanup := setupReadOnlyTestServer(t)
+	defer cleanup()
+
+	rr := makeRequest(t, ts.router, http.MethodDelete, "/api/v1/test/row/existing-row", nil)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+
+	var errResp map[string]string
+	err := json.NewDecoder(rr.Body).Decode(&errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp["error"], "read-only mode")
+}
+
+func TestReadOnlyMode_HTTPAPIDeleteColumns(t *testing.T) {
+	ts, cleanup := setupReadOnlyTestServer(t)
+	defer cleanup()
+
+	reqBody := DeleteColumnsRequest{
+		Columns: map[string]string{
+			"col1": encodeBase64([]byte("value1")),
+		},
+	}
+
+	rr := makeRequest(t, ts.router, http.MethodDelete, "/api/v1/test/row/existing-row/columns", reqBody)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+
+	var errResp map[string]string
+	err := json.NewDecoder(rr.Body).Decode(&errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp["error"], "read-only mode")
+}
+
+func TestReadOnlyMode_HTTPAPIBatchRows(t *testing.T) {
+	ts, cleanup := setupReadOnlyTestServer(t)
+	defer cleanup()
+
+	t.Run("put_operation", func(t *testing.T) {
+		reqBody := BatchRowsRequest{
+			Operation: "put",
+			Rows: []BatchRowItem{
+				{
+					RowKey: "row1",
+					Columns: map[string]string{
+						"col1": encodeBase64([]byte("value1")),
+					},
+				},
+			},
+		}
+
+		rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/row/batch", reqBody)
+
+		assert.Equal(t, http.StatusInternalServerError, rr.Code)
+
+		var errResp map[string]string
+		err := json.NewDecoder(rr.Body).Decode(&errResp)
+		require.NoError(t, err)
+		assert.Contains(t, errResp["error"], "read-only mode")
+	})
+
+	t.Run("delete_operation", func(t *testing.T) {
+		reqBody := BatchRowsRequest{
+			Operation: "delete",
+			Rows: []BatchRowItem{
+				{RowKey: "existing-row"},
+			},
+		}
+
+		rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/row/batch", reqBody)
+
+		assert.Equal(t, http.StatusInternalServerError, rr.Code)
+
+		var errResp map[string]string
+		err := json.NewDecoder(rr.Body).Decode(&errResp)
+		require.NoError(t, err)
+		assert.Contains(t, errResp["error"], "read-only mode")
+	})
+}
+
+func TestReadOnlyMode_HTTPAPIReadsAllowed(t *testing.T) {
+	ts, cleanup := setupReadOnlyTestServer(t)
+	defer cleanup()
+
+	t.Run("get_kv", func(t *testing.T) {
+		rr := makeRequest(t, ts.router, http.MethodGet, "/api/v1/test/kv/existing-key", nil)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		var resp GetKVResponse
+		err := json.NewDecoder(rr.Body).Decode(&resp)
+		require.NoError(t, err)
+		assert.True(t, resp.Found)
+		assert.Equal(t, []byte("existing-value"), decodeBase64(t, resp.Value))
+	})
+
+	t.Run("get_row", func(t *testing.T) {
+		rr := makeRequest(t, ts.router, http.MethodGet, "/api/v1/test/row/existing-row", nil)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		var resp GetRowResponse
+		err := json.NewDecoder(rr.Body).Decode(&resp)
+		require.NoError(t, err)
+		assert.True(t, resp.Found)
+		assert.Len(t, resp.Columns, 2)
+		assert.Equal(t, []byte("value1"), decodeBase64(t, resp.Columns["col1"]))
+		assert.Equal(t, []byte("value2"), decodeBase64(t, resp.Columns["col2"]))
+	})
+
+	t.Run("get_offset", func(t *testing.T) {
+		rr := makeRequest(t, ts.router, http.MethodGet, "/api/v1/test/offset", nil)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		var resp OffsetResponse
+		err := json.NewDecoder(rr.Body).Decode(&resp)
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, resp.SegmentID, uint32(0))
+		assert.GreaterOrEqual(t, resp.Offset, int64(0))
+	})
+
+	t.Run("get_stats", func(t *testing.T) {
+		rr := makeRequest(t, ts.router, http.MethodGet, "/api/v1/test/stats", nil)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		var resp StatsResponse
+		err := json.NewDecoder(rr.Body).Decode(&resp)
+		require.NoError(t, err)
+		assert.Equal(t, "test", resp.Namespace)
+		assert.GreaterOrEqual(t, resp.OpsReceived, uint64(0))
+	})
+
+	t.Run("get_checkpoint", func(t *testing.T) {
+		rr := makeRequest(t, ts.router, http.MethodGet, "/api/v1/test/checkpoint", nil)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		var resp CheckpointResponse
+		err := json.NewDecoder(rr.Body).Decode(&resp)
+		require.NoError(t, err)
+		assert.GreaterOrEqual(t, resp.SegmentID, uint32(0))
+	})
+}
