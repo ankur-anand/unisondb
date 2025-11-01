@@ -24,17 +24,17 @@ var (
 	mRequestLatencySeconds = "request_latency_seconds"
 	mSnapshotBytes         = "snapshot_bytes"
 
-	kvPutSurface = map[string]string{"surface": "kv", "op": "put"}
-	kvGetSurface = map[string]string{"surface": "kv", "op": "get"}
-	kvDelSurface = map[string]string{"surface": "kv", "op": "delete"}
+	kvPutSurface = map[string]string{"surface": "client", "op": "put", "entry": "kv"}
+	kvGetSurface = map[string]string{"surface": "client", "op": "get", "entry": "kv"}
+	kvDelSurface = map[string]string{"surface": "client", "op": "delete", "entry": "kv"}
 
-	wideColumnPutSurface = map[string]string{"surface": "widecolumn", "op": "put"}
-	wideColumnGetSurface = map[string]string{"surface": "widecolumn", "op": "get"}
-	wideColumnDelSurface = map[string]string{"surface": "widecolumn", "op": "delete"}
+	wideColumnPutSurface = map[string]string{"surface": "client", "op": "put", "entry": "row"}
+	wideColumnGetSurface = map[string]string{"surface": "client", "op": "get", "entry": "row"}
+	wideColumnDelSurface = map[string]string{"surface": "client", "op": "delete", "entry": "row"}
 
-	lobSurface = map[string]string{"surface": "lob", "op": "get"}
+	lobSurface = map[string]string{"surface": "client", "op": "get", "entry": "lob"}
 
-	snapshotSurface = map[string]string{"surface": "snapshot", "op": "create"}
+	snapshotSurface = map[string]string{"surface": "client", "op": "create", "entry": "snapshot"}
 )
 
 var (
