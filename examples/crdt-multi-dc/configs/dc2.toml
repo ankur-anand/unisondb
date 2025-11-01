@@ -1,0 +1,34 @@
+## Port of the http server
+http_port = 8002
+
+[grpc_config]
+port = 4002
+allow_insecure = true
+
+[storage_config]
+base_dir = "/tmp/unisondb/examples/dc2"
+namespaces = ["ad-campaign-dc2"]
+bytes_per_sync = "1MB"
+segment_size = "16MB"
+arena_size = "4MB"
+
+[write_notify_config]
+enabled = true
+max_delay = "20ms"
+
+[storage_config.wal_cleanup_config]
+interval = "5m"
+enabled = true
+max_age = "5h"
+min_segments = 50
+max_segments = 100
+
+[log_config]
+log_level = "info"
+disable_timestamp = true
+
+[log_config.min_level_percents]
+debug = 100.0
+info  = 10.0
+warn  = 100.0
+error = 100.0
