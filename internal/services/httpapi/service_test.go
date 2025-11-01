@@ -42,6 +42,7 @@ func setupTestServer(t *testing.T) (*testServer, func()) {
 
 	service := NewService(engines)
 	router := mux.NewRouter()
+	router.HandleFunc("/health", service.HandleHealth).Methods(http.MethodGet)
 	service.RegisterRoutes(router)
 
 	cleanup := func() {
@@ -1468,5 +1469,23 @@ func TestReadOnlyMode_HTTPAPIReadsAllowed(t *testing.T) {
 		err := json.NewDecoder(rr.Body).Decode(&resp)
 		require.NoError(t, err)
 		assert.GreaterOrEqual(t, resp.SegmentID, uint32(0))
+	})
+}
+
+func TestHealthEndpoint(t *testing.T) {
+	ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	t.Run("health_check", func(t *testing.T) {
+		rr := makeRequest(t, ts.router, http.MethodGet, "/health", nil)
+
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		var resp HealthResponse
+		err := json.NewDecoder(rr.Body).Decode(&resp)
+		require.NoError(t, err)
+		assert.Equal(t, "ok", resp.Status)
+		assert.Contains(t, resp.Namespaces, "test")
+		assert.Len(t, resp.Namespaces, 1)
 	})
 }

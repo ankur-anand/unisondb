@@ -540,6 +540,7 @@ func (ms *Server) SetupHTTPServer(ctx context.Context) error {
 	router.Handle("/fuzzstats", ms.fuzzStats).Methods(http.MethodGet)
 
 	httpAPIService := httpapi.NewService(ms.engines)
+	router.HandleFunc("/health", httpAPIService.HandleHealth).Methods(http.MethodGet)
 	httpAPIService.RegisterRoutes(router)
 
 	slog.Info("[unisondb.cliapp]",
