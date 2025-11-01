@@ -26,6 +26,7 @@ var (
 	ErrInternalError    = errors.New("internal error")
 	ErrMisMatchKeyType  = errors.New("mismatch key type with existing value")
 	ErrNoNewData        = wal.ErrNoNewData
+	ErrEngineReadOnly   = errors.New("engine is in read-only mode (relayer): write operations are not allowed")
 )
 
 var (
@@ -50,6 +51,7 @@ type EngineConfig struct {
 	WriteNotifyCoalescing WriteNotifyCoalescingConfig `toml:"write_notify_coalescing"`
 	DisableEntryTypeCheck bool                        `toml:"disable_entry_type_check"`
 	ChangeNotifier        ChangeNotifier              `toml:"change_notifier"`
+	ReadOnly              bool                        `toml:"read_only"`
 }
 
 // WriteNotifyCoalescingConfig controls the coalescing of notifications

@@ -138,6 +138,7 @@ type Engine struct {
 	pendingMetadata       *pendingMetadata
 	fsyncReqSignal        chan struct{}
 	disableEntryTypeCheck bool
+	readOnly              bool // Prevents write operations when true (relayer mode)
 
 	recoveredEntriesCount int
 	startMetadata         internal.Metadata
@@ -192,6 +193,7 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		btreeFlushInterval:        btreeFlushInterval,
 		btreeFlushIntervalEnabled: btreeFlushIntervalEnabled,
 		disableEntryTypeCheck:     conf.DisableEntryTypeCheck,
+		readOnly:                  conf.ReadOnly,
 		taggedScope:               taggedScope,
 		changeNotifier:            chNotifier,
 		coalesceDuration:          conf.WriteNotifyCoalescing.Duration,
@@ -436,6 +438,10 @@ func (e *Engine) recoverWAL() error {
 //
 // 5. Store the current Chunk Position in the variable.
 func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.LogOperationType) error {
+	if e.readOnly {
+		return ErrEngineReadOnly
+	}
+
 	kvEntries := make([][]byte, 0, len(keys))
 
 	hintSize := 512
@@ -496,6 +502,10 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 
 // persistRowColumnAction writes the columnEntries for the given rowKey in the wal and mem-table.
 func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [][]byte, columnsEntries []map[string][]byte) error {
+	if e.readOnly {
+		return ErrEngineReadOnly
+	}
+
 	rowEntries := make([][]byte, 0, len(rowKeys))
 
 	hintSize := 512

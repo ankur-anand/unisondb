@@ -305,7 +305,6 @@ func (ms *Server) SetupNotifier(ctx context.Context) error {
 	ms.notifiers = make(map[string]*notifier.ZeroMQNotifier)
 
 	for namespace, notifierCfg := range ms.cfg.NotifierConfigs {
-
 		if !slices.Contains(ms.cfg.Storage.Namespaces, namespace) {
 			slog.Warn("[unisondb.cliapp] Notifier configured for non-existent namespace",
 				slog.String("namespace", namespace))
@@ -359,8 +358,11 @@ func (ms *Server) SetupNotifier(ctx context.Context) error {
 
 func (ms *Server) SetupStorage(ctx context.Context) error {
 	for _, namespace := range ms.cfg.Storage.Namespaces {
-
 		engineConfig := *ms.storageConfig
+
+		if ms.mode == modeRelayer {
+			engineConfig.ReadOnly = true
+		}
 
 		if ms.notifiers != nil {
 			if zmqNotifier, exists := ms.notifiers[namespace]; exists {

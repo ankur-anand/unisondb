@@ -52,6 +52,10 @@ type Txn struct {
 
 // NewTxn returns a new initialized batch Txn.
 func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.LogEntryType) (*Txn, error) {
+	if e.readOnly {
+		return nil, ErrEngineReadOnly
+	}
+
 	if txnType == logrecord.LogOperationTypeNoOperation {
 		return nil, ErrUnsupportedTxnType
 	}

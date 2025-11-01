@@ -734,3 +734,112 @@ func TestEngine_NewReaderWithStart(t *testing.T) {
 	_, err = engine.NewReaderWithStart(offset)
 	assert.ErrorIs(t, err, walfs.ErrSegmentNotFound)
 }
+
+func TestReadWriteEngine_Works(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_readwrite"
+
+	conf := dbkernel.NewDefaultEngineConfig()
+	conf.ReadOnly = false
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, conf)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.Close(context.Background())
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+
+	key := []byte("test_key")
+	value := []byte("test_value")
+
+	err = engine.PutKV(key, value)
+	assert.NoError(t, err, "PutKV should succeed in read-write mode")
+
+	retrievedValue, err := engine.GetKV(key)
+	assert.NoError(t, err, "GetKV should succeed")
+	assert.Equal(t, value, retrievedValue, "Retrieved value should match")
+
+	txn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+	assert.NoError(t, err, "NewTxn should succeed in read-write mode")
+	assert.NotNil(t, txn, "Transaction should not be nil")
+}
+
+func TestReadOnlyEngine_WritesBlocked(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_readonly"
+
+	conf := dbkernel.NewDefaultEngineConfig()
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, conf)
+	require.NoError(t, err)
+
+	key := []byte("test_key")
+	value := []byte("test_value")
+
+	err = engine.PutKV(key, value)
+	require.NoError(t, err)
+
+	rowKey := []byte("row1")
+	columns := map[string][]byte{
+		"col1": []byte("value1"),
+		"col2": []byte("value2"),
+	}
+	err = engine.PutColumnsForRow(rowKey, columns)
+	require.NoError(t, err)
+
+	err = engine.Close(context.Background())
+	require.NoError(t, err)
+
+	readOnlyConf := dbkernel.NewDefaultEngineConfig()
+	readOnlyConf.ReadOnly = true
+
+	readOnlyEngine, err := dbkernel.NewStorageEngine(baseDir, namespace, readOnlyConf)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err := readOnlyEngine.Close(context.Background())
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+
+	t.Run("writes_blocked", func(t *testing.T) {
+		err = readOnlyEngine.PutKV([]byte("new_key"), []byte("new_value"))
+		assert.ErrorIs(t, err, dbkernel.ErrEngineReadOnly, "PutKV should fail in read-only mode")
+
+		err = readOnlyEngine.DeleteKV(key)
+		assert.ErrorIs(t, err, dbkernel.ErrEngineReadOnly, "DeleteKV should fail in read-only mode")
+
+		err = readOnlyEngine.BatchPutKV([][]byte{[]byte("k1")}, [][]byte{[]byte("v1")})
+		assert.ErrorIs(t, err, dbkernel.ErrEngineReadOnly, "BatchPutKV should fail in read-only mode")
+
+		err = readOnlyEngine.BatchDeleteKV([][]byte{[]byte("k1")})
+		assert.ErrorIs(t, err, dbkernel.ErrEngineReadOnly, "BatchDeleteKV should fail in read-only mode")
+
+		err = readOnlyEngine.PutColumnsForRow([]byte("row2"), map[string][]byte{"col": []byte("val")})
+		assert.ErrorIs(t, err, dbkernel.ErrEngineReadOnly, "PutColumnsForRow should fail in read-only mode")
+
+		err = readOnlyEngine.DeleteRow([]byte("row1"))
+		assert.ErrorIs(t, err, dbkernel.ErrEngineReadOnly, "DeleteRow should fail in read-only mode")
+
+		txn, err := readOnlyEngine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+		assert.ErrorIs(t, err, dbkernel.ErrEngineReadOnly, "NewTxn should fail in read-only mode")
+		assert.Nil(t, txn, "Transaction should be nil")
+	})
+
+	t.Run("reads_allowed", func(t *testing.T) {
+		retrievedValue, err := readOnlyEngine.GetKV(key)
+		assert.NoError(t, err, "GetKV should work in read-only mode")
+		assert.Equal(t, value, retrievedValue, "Retrieved value should match")
+
+		retrievedColumns, err := readOnlyEngine.GetRowColumns(string(rowKey), func(columnKey string) bool {
+			return true
+		})
+		assert.NoError(t, err, "GetRowColumns should work in read-only mode")
+		assert.Equal(t, columns, retrievedColumns, "Retrieved columns should match")
+
+		reader, err := readOnlyEngine.NewReader()
+		assert.NoError(t, err, "NewReader should work in read-only mode")
+		assert.NotNil(t, reader, "Reader should not be nil")
+	})
+}
