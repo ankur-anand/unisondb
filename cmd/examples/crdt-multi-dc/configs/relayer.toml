@@ -1,0 +1,52 @@
+http_port = 8003
+
+[storage_config]
+base_dir = "/tmp/unisondb/examples/crdt/relayer"
+namespaces = ["ad-campaign-dc1", "ad-campaign-dc2"]
+bytes_per_sync = "1MB"
+segment_size = "16MB"
+
+[write_notify_config]
+enabled = true
+max_delay = "20ms"
+
+[storage_config.wal_cleanup_config]
+interval = "5m"
+enabled = true
+max_age = "1h"
+min_segments = 5
+max_segments = 10
+
+[relayer_config.relayer1]
+namespaces = ["ad-campaign-dc1"]
+upstream_address = "127.0.0.1:4001"
+segment_lag_threshold = 10
+allow_insecure = true
+
+[relayer_config.relayer2]
+namespaces = ["ad-campaign-dc2"]
+upstream_address = "127.0.0.1:4002"
+segment_lag_threshold = 10
+allow_insecure = true
+
+[log_config]
+log_level = "info"
+disable_timestamp = true
+
+[log_config.min_level_percents]
+debug = 100.0
+info  = 100.0
+warn  = 100.0
+error = 100.0
+
+## ZeroMQ notifier configuration (per-namespace)
+## Publishes change notifications for local application consumption
+[notifier_config.ad-campaign-dc1]
+bind_port = 5555
+high_water_mark = 1000
+linger_time = 1000
+
+[notifier_config.ad-campaign-dc2]
+bind_port = 5556
+high_water_mark = 1000
+linger_time = 1000
