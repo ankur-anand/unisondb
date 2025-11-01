@@ -8,6 +8,8 @@
 [![ci-tests](https://github.com/ankur-anand/unisondb/actions/workflows/go.yml/badge.svg)](https://github.com/ankur-anand/unisondb/actions/workflows/go.yml)
 [![Coverage Status](https://coveralls.io/repos/github/ankur-anand/unisondb/badge.svg?branch=main)](https://coveralls.io/github/ankur-anand/unisondb?branch=main)
 
+[![Docs](https://img.shields.io/badge/UnisonDB-Getting%20Started-0b5fff?style=flat-square)](https://unisondb.io/docs/getting-started/)
+
 ## What UnisonDB Is
 
 A log-native database that replicates like a message bus.
