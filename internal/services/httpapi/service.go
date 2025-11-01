@@ -30,7 +30,8 @@ const (
 type Service struct {
 	engines map[string]*dbkernel.Engine
 	// map[string]*transactionState - txnID -> transaction state
-	transactions sync.Map
+	transactions   sync.Map
+	healthResponse []byte
 }
 
 // transactionState holds the state of an active transaction.
@@ -43,8 +44,21 @@ type transactionState struct {
 
 // NewService creates a new HTTP API service.
 func NewService(engines map[string]*dbkernel.Engine) *Service {
+	namespaces := make([]string, 0, len(engines))
+	for ns := range engines {
+		namespaces = append(namespaces, ns)
+	}
+
+	healthResp := HealthResponse{
+		Status:     "ok",
+		Namespaces: namespaces,
+	}
+
+	healthJSON, _ := json.Marshal(healthResp)
+
 	return &Service{
-		engines: engines,
+		engines:        engines,
+		healthResponse: healthJSON,
 	}
 }
 
@@ -742,4 +756,18 @@ func (s *Service) handleGetCheckpoint(w http.ResponseWriter, r *http.Request) {
 		SegmentID:       segmentID,
 		Offset:          offset,
 	})
+}
+
+type HealthResponse struct {
+	Status     string   `json:"status"`
+	Namespaces []string `json:"namespaces"`
+}
+
+// HandleHealth handles the /health endpoint for server health checks.
+func (s *Service) HandleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	if _, err := w.Write(s.healthResponse); err != nil {
+		slog.Error("[httpapi]: error writing health response", "err", err)
+	}
 }
