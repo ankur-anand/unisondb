@@ -79,7 +79,7 @@ type Server struct {
 	relayer               []relayerWithInfo
 	fuzzStats             *fuzzer.FuzzStats
 	statsHandler          *grpcutils.GRPCStatsHandler
-	notifiers             map[string]*notifier.ZeroMQNotifier
+	notifiers             map[string]notifier.Notifier
 
 	pprofServer *http.Server
 
@@ -302,7 +302,7 @@ func (ms *Server) SetupNotifier(ctx context.Context) error {
 		return nil
 	}
 
-	ms.notifiers = make(map[string]*notifier.ZeroMQNotifier)
+	ms.notifiers = make(map[string]notifier.Notifier)
 
 	for namespace, notifierCfg := range ms.cfg.NotifierConfigs {
 		if !slices.Contains(ms.cfg.Storage.Namespaces, namespace) {
