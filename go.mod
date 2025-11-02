@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	github.com/PowerDNS/lmdb-go v1.9.3
 	github.com/anishathalye/porcupine v1.0.3
+	github.com/ankur-anand/unisondb/plugin/notifier/zeromq v0.0.0-00010101000000-000000000000
 	github.com/bits-and-blooms/bloom/v3 v3.7.1
 	github.com/brianvoe/gofakeit/v7 v7.8.1
 	github.com/cenkalti/backoff/v5 v5.0.3
@@ -20,7 +21,6 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/hashicorp/go-metrics v0.5.4
 	github.com/openhistogram/circonusllhist v0.4.1
-	github.com/pebbe/zmq4 v1.4.0
 	github.com/pelletier/go-toml/v2 v2.2.4
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.23.2
@@ -55,6 +55,7 @@ require (
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
+	github.com/pebbe/zmq4 v1.4.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
@@ -75,6 +76,8 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250804133106-a7a43d27e69b // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/ankur-anand/unisondb/plugin/notifier/zeromq => ./plugin/notifier/zeromq
 
 //tool (
 //	github.com/ajstarks/svgo/structlayout-svg
