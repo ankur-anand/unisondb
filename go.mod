@@ -5,7 +5,7 @@ go 1.24.0
 require (
 	github.com/PowerDNS/lmdb-go v1.9.3
 	github.com/anishathalye/porcupine v1.0.3
-	github.com/ankur-anand/unisondb/notifiers/zeromq v0.0.0-00010101000000-000000000000
+	github.com/ankur-anand/unisondb/plugin/notifier/zeromq v0.0.0-00010101000000-000000000000
 	github.com/bits-and-blooms/bloom/v3 v3.7.1
 	github.com/brianvoe/gofakeit/v7 v7.8.1
 	github.com/cenkalti/backoff/v5 v5.0.3
@@ -77,7 +77,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/ankur-anand/unisondb/notifiers/zeromq => ./plugins/notifiers/zeromq
+replace github.com/ankur-anand/unisondb/plugin/notifier/zeromq => ./plugin/notifier/zeromq
 
 //tool (
 //	github.com/ajstarks/svgo/structlayout-svg

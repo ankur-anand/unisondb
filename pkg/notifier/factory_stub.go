@@ -2,9 +2,7 @@
 
 package notifier
 
-import (
-	"errors"
-)
+import "errors"
 
 // NewZeroMQNotifier returns an error when ZeroMQ support is not compiled in.
 // Build with -tags zeromq to enable ZeroMQ support.

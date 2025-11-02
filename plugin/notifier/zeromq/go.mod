@@ -1,4 +1,4 @@
-module github.com/ankur-anand/unisondb/notifiers/zeromq
+module github.com/ankur-anand/unisondb/plugin/notifier/zeromq
 
 go 1.24.0
 

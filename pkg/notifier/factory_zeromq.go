@@ -3,7 +3,7 @@
 package notifier
 
 import (
-	"github.com/ankur-anand/unisondb/notifiers/zeromq"
+	"github.com/ankur-anand/unisondb/plugin/notifier/zeromq"
 )
 
 // NewZeroMQNotifier creates a new ZeroMQ notifier.
