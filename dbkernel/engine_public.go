@@ -11,6 +11,7 @@ import (
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
+	"github.com/ankur-anand/unisondb/internal/keycodec"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
@@ -177,6 +178,9 @@ func (e *Engine) PutKV(key, value []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
+
+	key = keycodec.KeyKV(key)
+
 	putScope := e.taggedScope.Tagged(kvPutSurface)
 	putScope.Counter(mRequestsTotal).Inc(1)
 
@@ -191,6 +195,11 @@ func (e *Engine) BatchPutKV(key, value [][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
+
+	for i := range key {
+		key[i] = keycodec.KeyKV(key[i])
+	}
+
 	putScope := e.taggedScope.Tagged(kvPutSurface)
 	putScope.Counter(mRequestsTotal).Inc(int64(len(key)))
 
@@ -206,6 +215,8 @@ func (e *Engine) DeleteKV(key []byte) error {
 		return ErrInCloseProcess
 	}
 
+	key = keycodec.KeyKV(key)
+
 	deleteScope := e.taggedScope.Tagged(kvDelSurface)
 	deleteScope.Counter(mRequestsTotal).Inc(1)
 
@@ -219,6 +230,10 @@ func (e *Engine) DeleteKV(key []byte) error {
 func (e *Engine) BatchDeleteKV(keys [][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
+	}
+
+	for i := range keys {
+		keys[i] = keycodec.KeyKV(keys[i])
 	}
 
 	deleteScope := e.taggedScope.Tagged(kvDelSurface)
@@ -268,6 +283,8 @@ func (e *Engine) GetKV(key []byte) ([]byte, error) {
 	if e.shutdown.Load() {
 		return nil, ErrInCloseProcess
 	}
+
+	key = keycodec.KeyKV(key)
 
 	getScope := e.taggedScope.Tagged(kvGetSurface)
 	getScope.Counter(mRequestsTotal).Inc(1)
@@ -332,6 +349,9 @@ func (e *Engine) PutColumnsForRow(rowKey []byte, columnEntries map[string][]byte
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
+
+	rowKey = keycodec.RowKey(rowKey)
+
 	rowSetScope := e.taggedScope.Tagged(wideColumnPutSurface)
 	rowSetScope.Counter(mRequestsTotal).Inc(1)
 
@@ -346,6 +366,11 @@ func (e *Engine) PutColumnsForRows(rowKeys [][]byte, columnEntriesPerRow []map[s
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
+
+	for i := range rowKeys {
+		rowKeys[i] = keycodec.RowKey(rowKeys[i])
+	}
+
 	rowSetScope := e.taggedScope.Tagged(wideColumnPutSurface)
 	rowSetScope.Counter(mRequestsTotal).Inc(int64(len(rowKeys)))
 
@@ -360,6 +385,9 @@ func (e *Engine) DeleteColumnsForRow(rowKey []byte, columnEntries map[string][]b
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
+
+	rowKey = keycodec.RowKey(rowKey)
+
 	rowDeleteScope := e.taggedScope.Tagged(wideColumnDelSurface)
 	rowDeleteScope.Counter(mRequestsTotal).Inc(1)
 
@@ -376,6 +404,11 @@ func (e *Engine) DeleteColumnsForRows(rowKeys [][]byte, columnEntries []map[stri
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
+
+	for i := range rowKeys {
+		rowKeys[i] = keycodec.RowKey(rowKeys[i])
+	}
+
 	rowDeleteScope := e.taggedScope.Tagged(wideColumnDelSurface)
 	rowDeleteScope.Counter(mRequestsTotal).Inc(int64(len(rowKeys)))
 
@@ -390,6 +423,9 @@ func (e *Engine) DeleteRow(rowKey []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
+
+	rowKey = keycodec.RowKey(rowKey)
+
 	rowDeleteScope := e.taggedScope.Tagged(wideColumnDelSurface)
 	rowDeleteScope.Counter(mRequestsTotal).Inc(1)
 
@@ -403,6 +439,11 @@ func (e *Engine) BatchDeleteRows(rowKeys [][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
+
+	for i := range rowKeys {
+		rowKeys[i] = keycodec.RowKey(rowKeys[i])
+	}
+
 	rowDeleteScope := e.taggedScope.Tagged(wideColumnDelSurface)
 	rowDeleteScope.Counter(mRequestsTotal).Inc(int64(len(rowKeys)))
 
@@ -418,13 +459,14 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 	if e.shutdown.Load() {
 		return nil, ErrInCloseProcess
 	}
+
+	key := keycodec.RowKey([]byte(rowKey))
+
 	rowGetScope := e.taggedScope.Tagged(wideColumnGetSurface)
 	rowGetScope.Counter(mRequestsTotal).Inc(1)
 
 	timer := rowGetScope.Timer(mRequestLatencySeconds).Start()
 	defer timer.Stop()
-
-	key := []byte(rowKey)
 
 	checkFunc := func() ([]y.ValueStruct, error) {
 		// Retrieve entry from MemTable
@@ -586,6 +628,8 @@ func (e *Engine) GetLOB(key []byte) ([]byte, error) {
 	if e.shutdown.Load() {
 		return nil, ErrInCloseProcess
 	}
+
+	key = keycodec.KeyBlobChunk(key)
 
 	lobGetScope := e.taggedScope.Tagged(lobSurface)
 	lobGetScope.Counter(mRequestsTotal).Inc(1)

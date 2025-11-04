@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
+	"github.com/ankur-anand/unisondb/internal/keycodec"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/dgraph-io/badger/v4/y"
@@ -122,6 +123,12 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 		return t.err
 	}
 
+	if t.txnEntryType == logrecord.LogEntryTypeChunked {
+		key = keycodec.KeyBlobChunk(key)
+	} else {
+		key = keycodec.KeyKV(key)
+	}
+
 	kvEncoded := logcodec.SerializeKVEntry(key, value)
 	checksum := crc32.ChecksumIEEE(kvEncoded)
 	t.chunkedValueChecksum = crc32.Update(t.chunkedValueChecksum, crc32.IEEETable, value)
@@ -182,6 +189,8 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 	if len(columnEntries) == 0 {
 		return ErrEmptyColumns
 	}
+
+	rowKey = keycodec.RowKey(rowKey)
 
 	rce := logcodec.SerializeRowUpdateEntry(rowKey, columnEntries)
 	checksum := crc32.ChecksumIEEE(rce)

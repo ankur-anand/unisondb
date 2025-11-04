@@ -27,3 +27,5 @@ venv
 *.prof
 certs
 !docs/*.png
+.gocache
+

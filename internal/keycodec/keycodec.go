@@ -99,13 +99,12 @@ func KeyColumn(row, col []byte) []byte {
 	return b
 }
 
-// Format: [0xFF][blobIDLenBE(4)][blobID][chunkBE(4)].
-func KeyBlobChunk(blobID []byte, chunk int) []byte {
-	b := make([]byte, 1+4+len(blobID)+4)
-	b[0] = KeyTypeBlobChunk
+// Format: [0xFF][blobIDLenBE(4)][blobID].
+func KeyBlobChunk(blobID []byte) []byte {
+	b := make([]byte, 1+4+len(blobID))
+	b[0] = KeyTypeWideColumn
 	binary.BigEndian.PutUint32(b[1:], uint32(len(blobID)))
 	copy(b[5:], blobID)
-	binary.BigEndian.PutUint32(b[5+len(blobID):], uint32(chunk))
 	return b
 }
 
