@@ -70,7 +70,6 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 	assert.Equal(t, value, retrievedValue, "Retrieved value should match the inserted value")
 
 	batchKey := []byte(gofakeit.Name())
-
 	var batchValues []string
 	fullValue := new(bytes.Buffer)
 
@@ -109,10 +108,12 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 	assert.NoError(t, err, "Commit operation should succeed")
 
 	got, err = engine.GetKV(batchKey)
+	assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Key not Found Error should be present.")
 
+	got, err = engine.GetLOB(batchKey)
 	assert.NoError(t, err, "GetKV operation should succeed")
 	assert.NotNil(t, got, "GetKV operation should succeed")
-	assert.Equal(t, got, fullValue.Bytes(), "Retrieved value should match the inserted value")
+	assert.Equal(t, fullValue.Bytes(), got, "Retrieved value should match the inserted value")
 }
 
 func TestTxn_Batch_KV_Commit(t *testing.T) {

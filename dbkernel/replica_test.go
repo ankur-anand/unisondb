@@ -252,7 +252,7 @@ func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 		}
 
 		assert.Equal(t, replicaEngine.CurrentOffset(), engine.CurrentOffset(), "offset of both the engine should be the same")
-		chunkedValue, err := replicaEngine.GetKV([]byte(chunkedKey))
+		chunkedValue, err := replicaEngine.GetLOB([]byte(chunkedKey))
 		assert.NoError(t, err, "error reading from chunked reader")
 		assert.Equal(t, chunkedValue, chunkedAppendedValue, "invalid chunked value")
 	})

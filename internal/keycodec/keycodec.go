@@ -1,9 +1,8 @@
-package kvdrivers
+package keycodec
 
 import (
 	"encoding/binary"
 	"fmt"
-	"unsafe"
 )
 
 // values are non-printable bytes to avoid any user ASCII collision.
@@ -67,14 +66,6 @@ func KeyKV(k []byte) []byte {
 	return append([]byte{KeyTypeKV}, k...)
 }
 
-func unsafeStringToBytes(s string) []byte {
-	return unsafe.Slice(unsafe.StringData(s), len(s))
-}
-
-func unsafeBytesToString(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
-}
-
 // [type][rowLenBE(4)][row][col]
 // Why this format?
 // - The rowLen tells us where the row ends and the column begins.
@@ -104,21 +95,7 @@ func RowKey(row []byte) []byte {
 }
 
 // KeyColumn returns the storage key for a wide-column cell.
-// If the row key is already typed ([KeyTypeWideColumn][len][row]), it simply appends
-// the column. Otherwise, it prefixes it with the wide-column marker and length.
 func KeyColumn(row, col []byte) []byte {
-	if len(row) > 0 && row[0] == KeyTypeWideColumn {
-		// already a typed row key — just append the column.
-		if len(col) == 0 {
-			return append([]byte(nil), row...)
-		}
-		out := make([]byte, len(row)+len(col))
-		copy(out, row)
-		copy(out[len(row):], col)
-		return out
-	}
-
-	// untyped path: [type][rowLenBE(4)][row][col]
 	b := make([]byte, 1+4+len(row)+len(col))
 	b[0] = KeyTypeWideColumn
 	binary.BigEndian.PutUint32(b[1:], uint32(len(row)))
@@ -129,7 +106,7 @@ func KeyColumn(row, col []byte) []byte {
 
 // [type][blobIDLenBE(4)][blobID][chunkBE(4)].
 func KeyBlobChunk(blobID []byte, chunk int) []byte {
-	if len(blobID) > 0 && blobID[0] == KeyTypeBlobChunk && chunk == 0 {
+	if len(blobID) > 0 && blobID[0] == KeyTypeBlobChunk {
 		return blobID
 	}
 	b := make([]byte, 1+4+len(blobID)+4)
