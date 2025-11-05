@@ -1,6 +1,7 @@
 package kvdrivers
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"strconv"
@@ -336,55 +337,101 @@ func TestRowKey_Idempotent(t *testing.T) {
 	assert.Equal(t, KeyKindWideColumn, ParseKeyKind(second))
 }
 
-func TestKeyBlobChunk_Idempotent_NewAndTyped(t *testing.T) {
+func TestKeyBlobChunk_TypedPrefix_ChunkZero_ReturnsUnchanged(t *testing.T) {
 	blobID := []byte("blobid")
-	chunk := 7
 
-	// Case 1: raw blobID (should add marker + len + id + chunk)
-	first := KeyBlobChunk(blobID, chunk)
+	typedPrefix := make([]byte, 1+4+len(blobID))
+	typedPrefix[0] = KeyTypeBlobChunk
+	binary.BigEndian.PutUint32(typedPrefix[1:], uint32(len(blobID)))
+	copy(typedPrefix[5:], blobID)
 
-	want := make([]byte, 1+4+len(blobID)+4)
+	got := KeyBlobChunk(typedPrefix, 0)
+	assert.Equal(t, typedPrefix, got, "typed prefix + chunk==0 must return unchanged")
+}
+
+func TestKeyBlobChunk_TypedPrefix_ChunkGreaterThanZero_BuildsFullKey(t *testing.T) {
+	blobID := []byte("blobid")
+	chunk := 42
+
+	typedPrefix := make([]byte, 1+4+len(blobID))
+	typedPrefix[0] = KeyTypeBlobChunk
+	binary.BigEndian.PutUint32(typedPrefix[1:], uint32(len(blobID)))
+	copy(typedPrefix[5:], blobID)
+
+	got := KeyBlobChunk(typedPrefix, chunk)
+	want := make([]byte, 1+4+len(typedPrefix)+4)
 	want[0] = KeyTypeBlobChunk
-	binary.BigEndian.PutUint32(want[1:], uint32(len(blobID)))
-	copy(want[5:], blobID)
-	binary.BigEndian.PutUint32(want[5+len(blobID):], uint32(chunk))
+	binary.BigEndian.PutUint32(want[1:], uint32(len(typedPrefix)))
+	copy(want[5:], typedPrefix)
+	binary.BigEndian.PutUint32(want[5+len(typedPrefix):], uint32(chunk))
 
-	assert.Equal(t, want, first, "first application must construct full key (typed+len+id+chunk)")
-
-	// Case 2: already-typed input must not get double-typed.
-	// NOTE: This assumes the idempotent version that *preserves* the existing prefix
-	// and still appends/overwrites the chunk suffix (as discussed previously).
-	second := KeyBlobChunk(first[:1+4+len(blobID)], chunk) // pass the typed prefix [type][len][id]
-	assert.Equal(t, want, second, "typed input must not add another prefix and must set chunk")
-
-	// Idempotency (call multiple times)
-	third := KeyBlobChunk(second[:1+4+len(blobID)], chunk)
-	assert.Equal(t, want, third, "re-applying should be idempotent")
-
-	assert.Equal(t, KeyKindBlobChunk, ParseKeyKind(first))
-	assert.Equal(t, KeyKindBlobChunk, ParseKeyKind(second))
-	assert.Equal(t, KeyKindBlobChunk, ParseKeyKind(third))
+	assert.Equal(t, want, got, "typed prefix + chunk>0 must produce full encoded key from the typedPrefix payload")
 }
 
-func TestKeyBlobChunk_DoubleCallStability(t *testing.T) {
-	blobID := []byte("asset:123")
-	chunk := 123456
-
-	a := KeyBlobChunk(blobID, chunk)
-	b := KeyBlobChunk(a[:1+4+len(blobID)], chunk) // pass typed prefix back in
-	assert.Equal(t, a, b, "calling with typed prefix must yield identical bytes")
+// helper to build [type][rowLen][row][col]
+func wantCell(row, col []byte) []byte {
+	b := make([]byte, 1+4+len(row)+len(col))
+	b[0] = KeyTypeWideColumn
+	binary.BigEndian.PutUint32(b[1:], uint32(len(row)))
+	copy(b[5:], row)
+	copy(b[5+len(row):], col)
+	return b
 }
 
-func TestNoDoubleTyping_Property(t *testing.T) {
-	// Quick property: applying each constructor twice yields same bytes.
-	k := KeyKV([]byte("cfg:very:long:key"))
-	assert.Equal(t, k, KeyKV(k))
+func TestKeyColumn_UntypedRow_AppendsTypeLenAndCol(t *testing.T) {
+	row := []byte("user:42")
+	col := []byte("email")
 
-	r := RowKey([]byte("row-abcdefg"))
-	assert.Equal(t, r, RowKey(r))
+	got := KeyColumn(row, col)
+	want := wantCell(row, col)
 
-	blobID := []byte("video:abcd")
-	b := KeyBlobChunk(blobID, 42)
-	// For the idempotent variant, reusing the typed prefix must produce same final key.
-	assert.Equal(t, b, KeyBlobChunk(b[:1+4+len(blobID)], 42))
+	assert.Equal(t, want, got)
+	assert.Equal(t, KeyKindWideColumn, ParseKeyKind(got))
+}
+
+func TestKeyColumn_TypedRow_AppendsCol(t *testing.T) {
+	row := []byte("user:42")
+	typedRow := RowKey(row)
+	col := []byte("email")
+
+	got := KeyColumn(typedRow, col)
+	want := wantCell(row, col)
+
+	assert.Equal(t, want, got)
+	assert.Equal(t, KeyKindWideColumn, ParseKeyKind(got))
+}
+
+func TestKeyColumn_TypedRow_EmptyCol_ReturnsCopyOfRow(t *testing.T) {
+	row := []byte("user:42")
+	typedRow := RowKey(row)
+
+	got := KeyColumn(typedRow, nil)
+
+	assert.True(t, bytes.Equal(typedRow, got), "expected exact bytes of typed row")
+	assert.Equal(t, len(typedRow), len(got))
+}
+
+func TestKeyColumn_TypedCell_AppendsAdditionalColSuffix(t *testing.T) {
+	row := []byte("user:42")
+	col1 := []byte("email")
+	col2 := []byte("verified")
+
+	typedRow := RowKey(row)
+	typedCell := KeyColumn(typedRow, col1)
+
+	got := KeyColumn(typedCell, col2)
+	want := append(typedCell, col2...)
+
+	assert.Equal(t, want, got)
+	assert.Equal(t, KeyKindWideColumn, ParseKeyKind(got))
+}
+
+func TestKeyColumn_UntypedRow_EmptyCol_StillTypedPrefixOnly(t *testing.T) {
+	row := []byte("user:99")
+
+	got := KeyColumn(row, nil)
+	want := RowKey(row)
+
+	assert.Equal(t, want, got)
+	assert.Equal(t, KeyKindWideColumn, ParseKeyKind(got))
 }

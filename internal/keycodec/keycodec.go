@@ -3,7 +3,6 @@ package keycodec
 import (
 	"encoding/binary"
 	"fmt"
-	"unsafe"
 )
 
 // values are non-printable bytes to avoid any user ASCII collision.
@@ -65,14 +64,6 @@ func KeyKV(k []byte) []byte {
 		return k
 	}
 	return append([]byte{KeyTypeKV}, k...)
-}
-
-func unsafeStringToBytes(s string) []byte {
-	return unsafe.Slice(unsafe.StringData(s), len(s))
-}
-
-func unsafeBytesToString(b []byte) string {
-	return *(*string)(unsafe.Pointer(&b))
 }
 
 // [type][rowLenBE(4)][row][col]

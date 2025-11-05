@@ -1,7 +1,6 @@
 package memtable
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
@@ -28,7 +27,6 @@ func (g *tsGenerator) Next() uint64 {
 // BuildColumnMap builds the columns from the provided mem-table entries.
 // it modifies the provided columnEntries with the entries fetched from mem table.
 func BuildColumnMap(columnEntries map[string][]byte, vs []y.ValueStruct) {
-	fmt.Println("build column map called", len(vs))
 	for _, v := range vs {
 		if v.Meta == internal.LogOperationDeleteRowByKey {
 			// reset all key

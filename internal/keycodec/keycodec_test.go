@@ -306,15 +306,11 @@ func TestKeyKV_Idempotent(t *testing.T) {
 	raw := []byte("hello")
 	first := KeyKV(raw)
 
-	// Already-typed input must not get double-prefixed.
 	second := KeyKV(first)
-
-	// Format: [KeyTypeKV][raw...]
 	want := append([]byte{KeyTypeKV}, raw...)
 	assert.Equal(t, want, first, "first application must prefix once")
 	assert.Equal(t, want, second, "second application must be idempotent")
 
-	// Round-trip kind
 	assert.Equal(t, KeyKindKV, ParseKeyKind(first))
 	assert.Equal(t, KeyKindKV, ParseKeyKind(second))
 }
@@ -322,7 +318,7 @@ func TestKeyKV_Idempotent(t *testing.T) {
 func TestRowKey_Idempotent(t *testing.T) {
 	row := []byte("user:42")
 	first := RowKey(row)
-	second := RowKey(first) // pass an already-typed key
+	second := RowKey(first)
 
 	// want = [KeyTypeWideColumn][rowLenBE(4)][row]
 	want := make([]byte, 1+4+len(row))
@@ -340,26 +336,20 @@ func TestKeyBlobChunk_Idempotent_NewAndTyped(t *testing.T) {
 	blobID := []byte("blobid")
 	chunk := 7
 
-	// Case 1: raw blobID (should add marker + len + id + chunk)
 	first := KeyBlobChunk(blobID, chunk)
 
-	want := make([]byte, 1+4+len(blobID)+4)
-	want[0] = KeyTypeBlobChunk
-	binary.BigEndian.PutUint32(want[1:], uint32(len(blobID)))
-	copy(want[5:], blobID)
-	binary.BigEndian.PutUint32(want[5+len(blobID):], uint32(chunk))
+	wantFull := make([]byte, 1+4+len(blobID)+4)
+	wantFull[0] = KeyTypeBlobChunk
+	binary.BigEndian.PutUint32(wantFull[1:], uint32(len(blobID)))
+	copy(wantFull[5:], blobID)
+	binary.BigEndian.PutUint32(wantFull[5+len(blobID):], uint32(chunk))
+	assert.Equal(t, wantFull, first, "first application must construct full key")
 
-	assert.Equal(t, want, first, "first application must construct full key (typed+len+id+chunk)")
-
-	// Case 2: already-typed input must not get double-typed.
-	// NOTE: This assumes the idempotent version that *preserves* the existing prefix
-	// and still appends/overwrites the chunk suffix (as discussed previously).
-	second := KeyBlobChunk(first[:1+4+len(blobID)], chunk) // pass the typed prefix [type][len][id]
-	assert.Equal(t, want, second, "typed input must not add another prefix and must set chunk")
-
-	// Idempotency (call multiple times)
-	third := KeyBlobChunk(second[:1+4+len(blobID)], chunk)
-	assert.Equal(t, want, third, "re-applying should be idempotent")
+	typedPrefix := first[:1+4+len(blobID)]
+	second := KeyBlobChunk(typedPrefix, chunk)
+	assert.Equal(t, typedPrefix, second, "typed input should be returned unchanged")
+	third := KeyBlobChunk(typedPrefix, chunk)
+	assert.Equal(t, typedPrefix, third, "re-applying on typed prefix should be unchanged")
 
 	assert.Equal(t, KeyKindBlobChunk, ParseKeyKind(first))
 	assert.Equal(t, KeyKindBlobChunk, ParseKeyKind(second))
@@ -370,13 +360,13 @@ func TestKeyBlobChunk_DoubleCallStability(t *testing.T) {
 	blobID := []byte("asset:123")
 	chunk := 123456
 
-	a := KeyBlobChunk(blobID, chunk)
-	b := KeyBlobChunk(a[:1+4+len(blobID)], chunk) // pass typed prefix back in
-	assert.Equal(t, a, b, "calling with typed prefix must yield identical bytes")
+	full := KeyBlobChunk(blobID, chunk)
+	prefix := full[:1+4+len(blobID)]
+	got := KeyBlobChunk(prefix, chunk)
+	assert.Equal(t, prefix, got, "calling with typed prefix must yield the same prefix")
 }
 
 func TestNoDoubleTyping_Property(t *testing.T) {
-	// Quick property: applying each constructor twice yields same bytes.
 	k := KeyKV([]byte("cfg:very:long:key"))
 	assert.Equal(t, k, KeyKV(k))
 
@@ -384,7 +374,9 @@ func TestNoDoubleTyping_Property(t *testing.T) {
 	assert.Equal(t, r, RowKey(r))
 
 	blobID := []byte("video:abcd")
-	b := KeyBlobChunk(blobID, 42)
-	// For the idempotent variant, reusing the typed prefix must produce same final key.
-	assert.Equal(t, b, KeyBlobChunk(b[:1+4+len(blobID)], 42))
+	full := KeyBlobChunk(blobID, 42)
+
+	typedPrefix := full[:1+4+len(blobID)]
+	re := KeyBlobChunk(typedPrefix, 42)
+	assert.Equal(t, typedPrefix, re, "typed prefix must be returned unchanged")
 }

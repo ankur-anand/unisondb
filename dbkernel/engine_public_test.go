@@ -790,6 +790,13 @@ func TestReadOnlyEngine_WritesBlocked(t *testing.T) {
 	err = engine.PutColumnsForRow(rowKey, columns)
 	require.NoError(t, err)
 
+	retrievedColumns, err := engine.GetRowColumns(string(rowKey), func(columnKey string) bool {
+		return true
+	})
+
+	assert.NoError(t, err, "GetRowColumns should work in read-only mode")
+	assert.Equal(t, columns, retrievedColumns, "Retrieved columns should match")
+
 	err = engine.Close(context.Background())
 	require.NoError(t, err)
 
@@ -834,7 +841,6 @@ func TestReadOnlyEngine_WritesBlocked(t *testing.T) {
 		assert.NoError(t, err, "GetKV should work in read-only mode")
 		assert.Equal(t, value, retrievedValue, "Retrieved value should match")
 
-		fmt.Println("getting rowkey", string(rowKey))
 		retrievedColumns, err := readOnlyEngine.GetRowColumns(string(rowKey), func(columnKey string) bool {
 			return true
 		})
