@@ -45,8 +45,6 @@ type MemTable struct {
 
 	chunkedFlushed int
 	tsGenerator    *tsGenerator
-	// no pointer no gc.
-	//rowEntryKeys map[uint64]struct{}
 }
 
 // NewMemTable returns an initialized mem-table.
@@ -59,7 +57,6 @@ func NewMemTable(capacity int64, wIO *wal.WalIO, namespace string,
 		namespace:     namespace,
 		newTxnBatcher: newTxnBatcher,
 		tsGenerator:   &tsGenerator{},
-		//rowEntryKeys:  make(map[uint64]struct{}),
 	}
 }
 
@@ -89,7 +86,6 @@ func (table *MemTable) Put(key []byte, val y.ValueStruct) error {
 		// multiple column entity in different ops of transaction.
 		ts := table.tsGenerator.Next()
 		putKey = y.KeyWithTs(key, ts)
-		//table.rowEntryKeys[xxhash.Sum64(key)] = struct{}{}
 	}
 
 	table.opCount++
