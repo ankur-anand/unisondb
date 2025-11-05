@@ -61,6 +61,9 @@ func (k KeyKind) String() string {
 
 // KeyKV returns the storage key for a key-value pair.
 func KeyKV(k []byte) []byte {
+	if len(k) > 0 && k[0] == KeyTypeKV {
+		return k
+	}
 	return append([]byte{KeyTypeKV}, k...)
 }
 
@@ -90,6 +93,10 @@ func unsafeBytesToString(b []byte) string {
 
 // RowKey constructs a storage key for a wide-column row.
 func RowKey(row []byte) []byte {
+	if len(row) > 0 && row[0] == KeyTypeWideColumn {
+		fmt.Println("already typed row key")
+		return row
+	}
 	b := make([]byte, 1+4+len(row))
 	b[0] = KeyTypeWideColumn
 	binary.BigEndian.PutUint32(b[1:], uint32(len(row)))
@@ -109,6 +116,9 @@ func KeyColumn(row, col []byte) []byte {
 
 // [type][blobIDLenBE(4)][blobID][chunkBE(4)].
 func KeyBlobChunk(blobID []byte, chunk int) []byte {
+	if len(blobID) > 0 && blobID[0] == KeyTypeBlobChunk && chunk == 0 {
+		return blobID
+	}
 	b := make([]byte, 1+4+len(blobID)+4)
 	b[0] = KeyTypeBlobChunk
 	binary.BigEndian.PutUint32(b[1:], uint32(len(blobID)))

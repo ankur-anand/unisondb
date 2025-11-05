@@ -350,8 +350,9 @@ func (e *Engine) PutColumnsForRow(rowKey []byte, columnEntries map[string][]byte
 		return ErrInCloseProcess
 	}
 
+	fmt.Println("or", string(rowKey))
 	rowKey = keycodec.RowKey(rowKey)
-
+	fmt.Println(string(rowKey), "ori", "in put colums")
 	rowSetScope := e.taggedScope.Tagged(wideColumnPutSurface)
 	rowSetScope.Counter(mRequestsTotal).Inc(1)
 
@@ -460,8 +461,9 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 		return nil, ErrInCloseProcess
 	}
 
+	fmt.Println("or", string(rowKey), "ori", "in get row columns")
 	key := keycodec.RowKey([]byte(rowKey))
-
+	fmt.Println("or", string(key), "ori", "in get row columns")
 	rowGetScope := e.taggedScope.Tagged(wideColumnGetSurface)
 	rowGetScope.Counter(mRequestsTotal).Inc(1)
 
@@ -519,6 +521,7 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 		columnsValue = make(map[string][]byte)
 	}
 
+	fmt.Println("came here", len(vs))
 	buildColumnMap(columnsValue, vs)
 
 	for columnKey := range columnsValue {
@@ -629,7 +632,7 @@ func (e *Engine) GetLOB(key []byte) ([]byte, error) {
 		return nil, ErrInCloseProcess
 	}
 
-	key = keycodec.KeyBlobChunk(key)
+	key = keycodec.KeyBlobChunk(key, 0)
 
 	lobGetScope := e.taggedScope.Tagged(lobSurface)
 	lobGetScope.Counter(mRequestsTotal).Inc(1)

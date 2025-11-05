@@ -298,7 +298,9 @@ func TestEngine_WaitForAppend_And_Reader(t *testing.T) {
 			record := logrecord.GetRootAsLogRecord(value, 0)
 			decoded := logcodec.DeserializeFBRootLogRecord(record)
 			kv := logcodec.DeserializeKVEntry(decoded.Entries[0])
-			assert.Equal(t, putKV[string(kv.Key)], kv.Value, "decompressed value should be equal to put value")
+			// first byte is marker.
+			key := kv.Key[1:]
+			assert.Equal(t, putKV[string(key)], kv.Value, "decompressed value should be equal to put value")
 		}
 	}
 
@@ -832,6 +834,7 @@ func TestReadOnlyEngine_WritesBlocked(t *testing.T) {
 		assert.NoError(t, err, "GetKV should work in read-only mode")
 		assert.Equal(t, value, retrievedValue, "Retrieved value should match")
 
+		fmt.Println("getting rowkey", string(rowKey))
 		retrievedColumns, err := readOnlyEngine.GetRowColumns(string(rowKey), func(columnKey string) bool {
 			return true
 		})

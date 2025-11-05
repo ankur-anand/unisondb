@@ -3,9 +3,10 @@ package keycodec
 import (
 	"encoding/binary"
 	"fmt"
+	"unsafe"
 )
 
-// Key type markers are non-printable bytes to avoid any user ASCII collision.
+// values are non-printable bytes to avoid any user ASCII collision.
 const (
 	KeyTypeKV         byte = 254
 	KeyTypeWideColumn byte = 253
@@ -58,30 +59,43 @@ func (k KeyKind) String() string {
 	}
 }
 
-// Format: [0xFE][key].
+// KeyKV returns the storage key for a key-value pair.
 func KeyKV(k []byte) []byte {
+	if len(k) > 0 && k[0] == KeyTypeKV {
+		return k
+	}
 	return append([]byte{KeyTypeKV}, k...)
 }
 
-// RowKey constructs a storage key for a wide-column row prefix.
-// Format: [0xFD][rowLenBE(4)][row]
-//
+func unsafeStringToBytes(s string) []byte {
+	return unsafe.Slice(unsafe.StringData(s), len(s))
+}
+
+func unsafeBytesToString(b []byte) string {
+	return *(*string)(unsafe.Pointer(&b))
+}
+
+// [type][rowLenBE(4)][row][col]
 // Why this format?
 // - The rowLen tells us where the row ends and the column begins.
 // - Big Endian is used so that keys sort in the right order in the B-tree.
 // - All columns of the same row share the same prefix, making scans efficient.
 //
 // Example:
-//
-//	Row = "user123"
-//	Key = [0xFD][00 00 00 07]["user123"]
+//   Row = "user123", Col = "email"
+//   Key = [0xFD][00 00 00 07]["user123"]["email"]
 //
 // We avoid text separators like "row::col". B-trees compare keys bytewise,
 // so string separators break ordering (e.g., "user10..." < "user2..."),
 // are ambiguous if row/col contain "::", and are not binary-safe for []byte keys.
 // Length-prefixing with Big Endian keeps keys self-delimiting, binary-safe,
 // and groups all columns of a row under the shared prefix [type][rowLen][row].
+
+// RowKey constructs a storage key for a wide-column row.
 func RowKey(row []byte) []byte {
+	if len(row) > 0 && row[0] == KeyTypeWideColumn {
+		return row
+	}
 	b := make([]byte, 1+4+len(row))
 	b[0] = KeyTypeWideColumn
 	binary.BigEndian.PutUint32(b[1:], uint32(len(row)))
@@ -89,7 +103,7 @@ func RowKey(row []byte) []byte {
 	return b
 }
 
-// Format: [0xFD][rowLenBE(4)][row][col].
+// KeyColumn returns the storage key for a wide-column cell.
 func KeyColumn(row, col []byte) []byte {
 	b := make([]byte, 1+4+len(row)+len(col))
 	b[0] = KeyTypeWideColumn
@@ -99,16 +113,20 @@ func KeyColumn(row, col []byte) []byte {
 	return b
 }
 
-// Format: [0xFF][blobIDLenBE(4)][blobID].
-func KeyBlobChunk(blobID []byte) []byte {
-	b := make([]byte, 1+4+len(blobID))
-	b[0] = KeyTypeWideColumn
+// [type][blobIDLenBE(4)][blobID][chunkBE(4)].
+func KeyBlobChunk(blobID []byte, chunk int) []byte {
+	if len(blobID) > 0 && blobID[0] == KeyTypeBlobChunk {
+		return blobID
+	}
+	b := make([]byte, 1+4+len(blobID)+4)
+	b[0] = KeyTypeBlobChunk
 	binary.BigEndian.PutUint32(b[1:], uint32(len(blobID)))
 	copy(b[5:], blobID)
+	binary.BigEndian.PutUint32(b[5+len(blobID):], uint32(chunk))
 	return b
 }
 
-// Format: [0xFC][name].
+// KeySystem returns the storage key for a system/internal entry.
 func KeySystem(name []byte) []byte {
 	return append([]byte{KeyTypeSystem}, name...)
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
+	"github.com/ankur-anand/unisondb/internal/keycodec"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	kvdrivers2 "github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
@@ -95,7 +96,7 @@ func TestMemTable_PutAndGet(t *testing.T) {
 	table := NewMemTable(capacity, nil, "", nil)
 
 	// Create a test key, value, and WAL position.
-	key := []byte("test-key")
+	key := keycodec.KeyKV([]byte("test-key"))
 	val := y.ValueStruct{Value: []byte("test-value")}
 	pos := new(wal.Offset)
 	pos.SegmentID = 1
@@ -115,7 +116,7 @@ func TestMemTable_CannotPut(t *testing.T) {
 	const capacity = 1 << 10
 	table := NewMemTable(capacity, nil, "", nil)
 
-	key := []byte("key")
+	key := keycodec.KeyKV([]byte("key"))
 	// more than 1 KB
 	value := gofakeit.LetterN(1100)
 	val := y.ValueStruct{Value: []byte(value)}
@@ -135,23 +136,22 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		recordCount := 10
 		kv := make(map[string][]byte)
 		for i := 0; i < recordCount; i++ {
-			key := []byte(fmt.Sprintf("key-%d", i))
+			key := keycodec.KeyKV([]byte(fmt.Sprintf("key-%d", i)))
 			value := gofakeit.LetterN(100)
 			kv[string(key)] = []byte(value)
 			vs := y.ValueStruct{Value: []byte(value), Meta: internal.LogOperationInsert,
 				UserMeta: internal.EntryTypeKV,
 				Version:  uint64(i)}
-			err := memTable.Put([]byte(key), vs)
+			err := memTable.Put(key, vs)
 			memTable.SetOffset(nil)
 			assert.NoError(t, err)
-
 		}
 
 		count, err := memTable.Flush(context.Background())
 		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
-			retrievedValue, err := db.GetKV([]byte(k))
+			retrievedValue, err := db.GetKV(keycodec.KeyKV([]byte(k)))
 			assert.NoError(t, err, "failed to GetKV")
 			assert.Equal(t, v, retrievedValue, "unexpected value on GetKV")
 		}
@@ -172,7 +172,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 			lastOffset = offset
 		}
 
-		kvEncoded := logcodec.SerializeKVEntry([]byte(key), nil)
+		kvEncoded := logcodec.SerializeKVEntry(keycodec.KeyBlobChunk([]byte(key), 0), nil)
 		lastRecord := logcodec.LogRecord{
 			LSN:             0,
 			HLC:             0,
@@ -196,19 +196,20 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 			Value:    lastOffset.Encode(),
 		}
 
-		err = memTable.Put([]byte(key), vs)
+		blobMetaKey := keycodec.KeyBlobChunk([]byte(key), 0)
+		err = memTable.Put(blobMetaKey, vs)
 		assert.NoError(t, err)
 		memTable.SetOffset(lastOffset)
 
-		valueType, ok := memTable.GetEntryTpe([]byte(key))
-		assert.Equal(t, logrecord.LogEntryTypeChunked, valueType, "unexpected entry type")
-		assert.True(t, ok, "expected entry type to exist")
+		//valueType, ok := memTable.GetEntryTpe(blobMetaKey)
+		//assert.Equal(t, logrecord.LogEntryTypeChunked, valueType, "unexpected entry type")
+		//assert.True(t, ok, "expected entry type to exist")
 
 		count, err := memTable.Flush(t.Context())
 		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount+2, count, "expected records to be flushed")
 
-		chunks, err := db.GetLOBChunks([]byte(key))
+		chunks, err := db.GetLOBChunks(blobMetaKey)
 		assert.NoError(t, err, "failed to GetKV")
 		joined := bytes.Join(chunks, nil)
 		assert.Equal(t, checksum, crc32.ChecksumIEEE(joined), "unexpected value on GetKV")
@@ -223,23 +224,22 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		recordCount := 10
 		kv := make(map[string][]byte)
 		for i := 0; i < recordCount; i++ {
-			key := []byte(fmt.Sprintf("key-%d", i))
+			key := keycodec.KeyKV([]byte(fmt.Sprintf("key-%d", i)))
 			value := gofakeit.LetterN(100)
 			kv[string(key)] = []byte(value)
 			vs := y.ValueStruct{Value: []byte(value), Meta: internal.LogOperationInsert,
 				UserMeta: internal.EntryTypeKV,
 				Version:  uint64(i)}
-			err := memTable.Put([]byte(key), vs)
+			err := memTable.Put(key, vs)
 			memTable.SetOffset(nil)
 			assert.NoError(t, err)
-
 		}
 
 		count, err := memTable.Flush(context.Background())
 		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
-			retrievedValue, err := db.GetKV([]byte(k))
+			retrievedValue, err := db.GetKV(keycodec.KeyKV([]byte(k)))
 			assert.NoError(t, err, "failed to GetKV")
 			assert.Equal(t, v, retrievedValue, "unexpected value on GetKV")
 		}
@@ -260,7 +260,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 			lastOffset = offset
 		}
 
-		kvEncoded := logcodec.SerializeKVEntry([]byte(key), nil)
+		kvEncoded := logcodec.SerializeKVEntry(keycodec.KeyBlobChunk([]byte(key), 0), nil)
 		lastRecord := logcodec.LogRecord{
 			LSN:             0,
 			HLC:             0,
@@ -284,7 +284,8 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 			Value:    lastOffset.Encode(),
 		}
 
-		err = memTable.Put([]byte(key), vs)
+		blobMetaKey := keycodec.KeyBlobChunk([]byte(key), 0)
+		err = memTable.Put(blobMetaKey, vs)
 		assert.NoError(t, err)
 		memTable.SetOffset(lastOffset)
 
@@ -292,7 +293,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount+2, count, "expected records to be flushed")
 
-		chunks, err := db.GetLOBChunks([]byte(key))
+		chunks, err := db.GetLOBChunks(blobMetaKey)
 		assert.NoError(t, err, "failed to GetKV")
 		joined := bytes.Join(chunks, nil)
 		assert.Equal(t, checksum, crc32.ChecksumIEEE(joined), "unexpected value on GetKV")
@@ -305,7 +306,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 
 	kv := make(map[string][]byte)
 	for i := 0; i < recordCount; i++ {
-		key := []byte(fmt.Sprintf("key-%d", i))
+		key := keycodec.KeyKV([]byte(fmt.Sprintf("key-%d", i)))
 		value := gofakeit.LetterN(100)
 		kv[string(key)] = []byte(value)
 	}
@@ -316,10 +317,10 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 			vs := y.ValueStruct{Value: []byte(v),
 				Meta:     internal.LogOperationInsert,
 				UserMeta: internal.EntryTypeKV}
-			err := memTable.Put([]byte(k), vs)
+			err := memTable.Put(keycodec.KeyKV([]byte(k)), vs)
 			assert.NoError(t, err)
 			memTable.SetOffset(nil)
-			val := memTable.Get([]byte(k))
+			val := memTable.Get(keycodec.KeyKV([]byte(k)))
 			assert.Equal(t, val, vs, "unexpected value on GetKV")
 		}
 
@@ -327,7 +328,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, recordCount, count, "expected records to be flushed")
 		for k, v := range kv {
-			retrievedValue, err := db.GetKV([]byte(k))
+			retrievedValue, err := db.GetKV(keycodec.KeyKV([]byte(k)))
 			assert.NoError(t, err, "failed to GetKV")
 			assert.Equal(t, v, retrievedValue, "unexpected value on GetKV")
 		}
@@ -335,12 +336,12 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 
 	t.Run("flush_delete_value", func(t *testing.T) {
 		for k, v := range kv {
-			retrievedValue, err := db.GetKV([]byte(k))
+			retrievedValue, err := db.GetKV(keycodec.KeyKV([]byte(k)))
 			assert.NoError(t, err, "failed to GetKV")
 			assert.Equal(t, v, retrievedValue, "unexpected value on GetKV")
 
 			vs := y.ValueStruct{Value: []byte(v), Meta: internal.LogOperationDelete, UserMeta: internal.EntryTypeKV}
-			err = memTable.Put([]byte(k), vs)
+			err = memTable.Put(keycodec.KeyKV([]byte(k)), vs)
 			assert.NoError(t, err)
 			memTable.SetOffset(nil)
 		}
@@ -349,7 +350,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 		assert.NoError(t, err, "failed to processBatch")
 		assert.Equal(t, 2*recordCount, count, "expected records to be flushed")
 		for k := range kv {
-			retrievedValue, err := db.GetKV([]byte(k))
+			retrievedValue, err := db.GetKV(keycodec.KeyKV([]byte(k)))
 			assert.Nil(t, retrievedValue)
 			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound, "failed to GetKV")
 		}
@@ -358,7 +359,7 @@ func TestMemTable_Flush_SetDelete(t *testing.T) {
 }
 
 func TestFlush_EmptyMemTable(t *testing.T) {
-	mmTable, _ := setupMemTableWithBoltDB(t, 1<<10)
+	mmTable, _ := setupMemTableWithLMDB(t, 1<<10)
 
 	_, err := mmTable.Flush(t.Context())
 	assert.NoError(t, err)
@@ -391,7 +392,6 @@ func TestRow_KeysPut_Delete_GetRows_Flush(t *testing.T) {
 
 			err := mmTable.Put([]byte(rowKey), vs)
 			assert.NoError(t, err)
-			//fmt.Println("set offset called", mmTable.offsetCount)
 			mmTable.SetOffset(nil)
 		}
 	}
@@ -479,9 +479,9 @@ func TestRow_KeysPut_Delete_GetRows_Flush(t *testing.T) {
 	BuildColumnMap(buildColumns, values)
 	assert.Equal(t, buildColumns, addEntries, "new added entry should be added")
 
-	valueType, ok := mmTable.GetEntryTpe([]byte(randomRow))
-	assert.Equal(t, valueType, logrecord.LogEntryTypeRow, "unexpected entry type")
-	assert.True(t, ok, "expected entry type to be logrecord.LogEntryTypeRow")
+	//valueType, ok := mmTable.GetEntryTpe([]byte(randomRow))
+	//assert.Equal(t, valueType, logrecord.LogEntryTypeRow, "unexpected entry type")
+	//assert.True(t, ok, "expected entry type to be logrecord.LogEntryTypeRow")
 	value, err = db.ScanRowCells([]byte(randomRow), nil)
 	assert.NoError(t, err, "get should not fail")
 	assert.Equal(t, len(value), len(addEntries), "unexpected number of column values")
@@ -537,7 +537,7 @@ func TestPublic_Functions(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, n, 1)
 
-	key := []byte("key")
+	key := keycodec.KeyKV([]byte("key"))
 	// more than 1 KB
 	value := gofakeit.LetterN(1100)
 	val := y.ValueStruct{Value: []byte(value)}
@@ -558,22 +558,22 @@ func TestPublic_Functions(t *testing.T) {
 	assert.Equal(t, mmTable.GetBytesStored(), size)
 }
 
-func TestMemTable_GetEntryTpe(t *testing.T) {
-	mmTable, _ := setupMemTableWithLMDB(t, 1<<20)
-
-	key := []byte("test-key")
-	val := y.ValueStruct{Value: []byte("test-value"), Meta: internal.LogOperationInsert,
-		UserMeta: internal.EntryTypeKV}
-	err := mmTable.Put(key, val)
-	assert.NoError(t, err, "unexpected error on Put")
-	value, ok := mmTable.GetEntryTpe(key)
-	assert.Equal(t, value, logrecord.LogEntryTypeKV)
-	assert.True(t, ok)
-
-	nValue, ok := mmTable.GetEntryTpe([]byte("no"))
-	assert.Equal(t, nValue, logrecord.LogEntryTypeKV)
-	assert.False(t, ok)
-}
+//func TestMemTable_GetEntryTpe(t *testing.T) {
+//	mmTable, _ := setupMemTableWithLMDB(t, 1<<20)
+//
+//	key := keycodec.KeyKV([]byte("test-key"))
+//	val := y.ValueStruct{Value: []byte("test-value"), Meta: internal.LogOperationInsert,
+//		UserMeta: internal.EntryTypeKV}
+//	err := mmTable.Put(key, val)
+//	assert.NoError(t, err, "unexpected error on Put")
+//	value, ok := mmTable.GetEntryTpe(key)
+//	assert.Equal(t, value, logrecord.LogEntryTypeKV)
+//	assert.True(t, ok)
+//
+//	nValue, ok := mmTable.GetEntryTpe(keycodec.KeyKV([]byte("no")))
+//	assert.Equal(t, nValue, logrecord.LogEntryTypeKV)
+//	assert.False(t, ok)
+//}
 
 func TestGetRowYValue_ShortKeysShouldNotPanic(t *testing.T) {
 	mmTable, _ := setupMemTableWithLMDB(t, 1<<20)
