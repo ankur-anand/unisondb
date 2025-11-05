@@ -307,7 +307,7 @@ func TestKeyKV_Idempotent(t *testing.T) {
 	raw := []byte("hello")
 	first := KeyKV(raw)
 	second := KeyKV(first)
-	
+
 	want := append([]byte{KeyTypeKV}, raw...)
 	assert.Equal(t, want, first, "first application must prefix once")
 	assert.Equal(t, want, second, "second application must be idempotent")
