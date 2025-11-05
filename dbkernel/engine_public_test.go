@@ -852,3 +852,170 @@ func TestReadOnlyEngine_WritesBlocked(t *testing.T) {
 		assert.NotNil(t, reader, "Reader should not be nil")
 	})
 }
+
+func TestEngine_SameKeyDifferentEntryType_TXN(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_namespaces"
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.Close(context.Background())
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+
+	sameKey := []byte("shared_key")
+
+	kvValue := []byte("this_is_kv_value")
+	columnValue := []byte("this_is_column_value")
+	lobValue := []byte("this_is_lob_value_that_should_be_stored_as_chunked_type")
+
+	t.Run("put_same_key_different_namespaces_via_txn", func(t *testing.T) {
+		txnKV, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+		require.NoError(t, err)
+		require.NotNil(t, txnKV)
+
+		err = txnKV.AppendKVTxn(sameKey, kvValue)
+		require.NoError(t, err)
+		err = txnKV.Commit()
+		require.NoError(t, err)
+
+		txnRow, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeRow)
+		require.NoError(t, err)
+		require.NotNil(t, txnRow)
+
+		columns := map[string][]byte{
+			"col1": columnValue,
+		}
+		err = txnRow.AppendColumnTxn(sameKey, columns)
+		require.NoError(t, err)
+
+		err = txnRow.Commit()
+		require.NoError(t, err)
+
+		txnLOB, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
+		require.NoError(t, err)
+		require.NotNil(t, txnLOB)
+
+		err = txnLOB.AppendKVTxn(sameKey, lobValue)
+		require.NoError(t, err)
+
+		err = txnLOB.Commit()
+		require.NoError(t, err)
+	})
+
+	t.Run("get_same_key_different_namespaces", func(t *testing.T) {
+		retrievedKV, err := engine.GetKV(sameKey)
+		require.NoError(t, err)
+		assert.Equal(t, kvValue, retrievedKV, "KV value should match the value stored in KV namespace")
+
+		retrievedColumns, err := engine.GetRowColumns(string(sameKey), nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, len(retrievedColumns), "Should have exactly one column")
+		assert.Equal(t, columnValue, retrievedColumns["col1"], "Column value should match the value stored in Row namespace")
+
+		retrievedLOB, err := engine.GetLOB(sameKey)
+		require.NoError(t, err)
+		assert.Equal(t, lobValue, retrievedLOB, "LOB value should match the value stored in LOB namespace")
+	})
+
+	t.Run("update_one_namespace_should_not_affect_others", func(t *testing.T) {
+		newKVValue := []byte("updated_kv_value")
+		txnKV, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+		require.NoError(t, err)
+		err = txnKV.AppendKVTxn(sameKey, newKVValue)
+		require.NoError(t, err)
+		err = txnKV.Commit()
+		require.NoError(t, err)
+
+		retrievedKV, err := engine.GetKV(sameKey)
+		require.NoError(t, err)
+		assert.Equal(t, newKVValue, retrievedKV, "KV value should be updated")
+
+		retrievedColumns, err := engine.GetRowColumns(string(sameKey), nil)
+		require.NoError(t, err)
+		assert.Equal(t, columnValue, retrievedColumns["col1"], "Column value should remain unchanged")
+
+		retrievedLOB, err := engine.GetLOB(sameKey)
+		require.NoError(t, err)
+		assert.Equal(t, lobValue, retrievedLOB, "LOB value should remain unchanged")
+	})
+}
+
+func TestEngine_SameKeyDifferentEntryType_Mix(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test_namespaces"
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.Close(context.Background())
+		if err != nil {
+			t.Errorf("Failed to close engine: %v", err)
+		}
+	})
+
+	sameKey := []byte("shared_key")
+
+	kvValue := []byte("this_is_kv_value")
+	columnValue := []byte("this_is_column_value")
+	lobValue := []byte("this_is_lob_value_that_should_be_stored_as_chunked_type")
+
+	t.Run("put_same_key_different_namespaces_via_txn", func(t *testing.T) {
+		require.NoError(t, engine.PutKV(sameKey, kvValue))
+		columns := map[string][]byte{
+			"col1": columnValue,
+		}
+		
+		require.NoError(t, engine.PutColumnsForRow(sameKey, columns))
+
+		txnLOB, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
+		require.NoError(t, err)
+		require.NotNil(t, txnLOB)
+
+		err = txnLOB.AppendKVTxn(sameKey, lobValue)
+		require.NoError(t, err)
+
+		err = txnLOB.Commit()
+		require.NoError(t, err)
+	})
+
+	t.Run("get_same_key_different_namespaces", func(t *testing.T) {
+		retrievedKV, err := engine.GetKV(sameKey)
+		require.NoError(t, err)
+		assert.Equal(t, kvValue, retrievedKV, "KV value should match the value stored in KV namespace")
+
+		retrievedColumns, err := engine.GetRowColumns(string(sameKey), nil)
+		require.NoError(t, err)
+		assert.Equal(t, 1, len(retrievedColumns), "Should have exactly one column")
+		assert.Equal(t, columnValue, retrievedColumns["col1"], "Column value should match the value stored in Row namespace")
+
+		retrievedLOB, err := engine.GetLOB(sameKey)
+		require.NoError(t, err)
+		assert.Equal(t, lobValue, retrievedLOB, "LOB value should match the value stored in LOB namespace")
+	})
+
+	t.Run("update_one_namespace_should_not_affect_others", func(t *testing.T) {
+		newKVValue := []byte("updated_kv_value")
+		txnKV, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+		require.NoError(t, err)
+		err = txnKV.AppendKVTxn(sameKey, newKVValue)
+		require.NoError(t, err)
+		err = txnKV.Commit()
+		require.NoError(t, err)
+
+		retrievedKV, err := engine.GetKV(sameKey)
+		require.NoError(t, err)
+		assert.Equal(t, newKVValue, retrievedKV, "KV value should be updated")
+
+		retrievedColumns, err := engine.GetRowColumns(string(sameKey), nil)
+		require.NoError(t, err)
+		assert.Equal(t, columnValue, retrievedColumns["col1"], "Column value should remain unchanged")
+
+		retrievedLOB, err := engine.GetLOB(sameKey)
+		require.NoError(t, err)
+		assert.Equal(t, lobValue, retrievedLOB, "LOB value should remain unchanged")
+	})
+}
