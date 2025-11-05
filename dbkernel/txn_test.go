@@ -3,7 +3,6 @@ package dbkernel_test
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"hash/crc32"
 	"testing"
 
@@ -71,7 +70,6 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 	assert.Equal(t, value, retrievedValue, "Retrieved value should match the inserted value")
 
 	batchKey := []byte(gofakeit.Name())
-	fmt.Println(string(batchKey))
 	var batchValues []string
 	fullValue := new(bytes.Buffer)
 

@@ -306,16 +306,11 @@ func BenchmarkKeyBlobChunk(b *testing.B) {
 func TestKeyKV_Idempotent(t *testing.T) {
 	raw := []byte("hello")
 	first := KeyKV(raw)
-
-	// Already-typed input must not get double-prefixed.
 	second := KeyKV(first)
-
-	// Format: [KeyTypeKV][raw...]
+	
 	want := append([]byte{KeyTypeKV}, raw...)
 	assert.Equal(t, want, first, "first application must prefix once")
 	assert.Equal(t, want, second, "second application must be idempotent")
-
-	// Round-trip kind
 	assert.Equal(t, KeyKindKV, ParseKeyKind(first))
 	assert.Equal(t, KeyKindKV, ParseKeyKind(second))
 }
@@ -323,9 +318,8 @@ func TestKeyKV_Idempotent(t *testing.T) {
 func TestRowKey_Idempotent(t *testing.T) {
 	row := []byte("user:42")
 	first := RowKey(row)
-	second := RowKey(first) // pass an already-typed key
+	second := RowKey(first)
 
-	// want = [KeyTypeWideColumn][rowLenBE(4)][row]
 	want := make([]byte, 1+4+len(row))
 	want[0] = KeyTypeWideColumn
 	binary.BigEndian.PutUint32(want[1:], uint32(len(row)))
