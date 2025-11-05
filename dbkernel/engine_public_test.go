@@ -968,7 +968,7 @@ func TestEngine_SameKeyDifferentEntryType_Mix(t *testing.T) {
 		columns := map[string][]byte{
 			"col1": columnValue,
 		}
-		
+
 		require.NoError(t, engine.PutColumnsForRow(sameKey, columns))
 
 		txnLOB, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
