@@ -49,6 +49,21 @@ jobs:
             exit 1
           fi
 
+      - name: Run Submodule Go Fmt (fail if any)
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed=$(
+            find . -mindepth 2 -name go.mod -execdir bash -lc '
+              go fmt ./... | sed -e "s|^|$(pwd)/|"
+            ' \;
+          )
+          if [ -n "$changed" ]; then
+            echo "Please run gofmt on these files (submodules) ..."
+            echo "$changed"
+            exit 1
+          fi
+
   test:
     runs-on: ubuntu-latest
     permissions:
@@ -67,6 +82,10 @@ jobs:
 
       - name: Run go test
         run: go test -count 1 -v -race -covermode atomic -coverprofile=covprofile $(go list ./... | grep -vE  'schemas|cmd|etc|middleware')
+
+      - name: Run Submodule Test
+        run: |
+          find . -mindepth 2 -name go.mod -execdir go test ./... -race \;
 
       - name: Install goveralls
         run: go install github.com/mattn/goveralls@latest

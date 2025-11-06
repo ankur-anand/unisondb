@@ -232,7 +232,7 @@ func BenchmarkChannelCloseBroadcast(b *testing.B) {
 						timeouts++
 					}
 				}
-				
+
 				cancel()
 			}
 		})

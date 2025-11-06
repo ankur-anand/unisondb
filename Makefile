@@ -3,6 +3,8 @@
 COVERAGE_DIR ?= .coverage
 .PHONY: test
 test: lint
+	@find . -name go.mod -execdir go fmt ./... \;
+	@find . -mindepth 2 -name go.mod -execdir go test ./... -race \;
 	@echo "[go test] running unit tests and collecting coverage metrics"
 	@-rm -r $(COVERAGE_DIR)
 	@mkdir $(COVERAGE_DIR)
