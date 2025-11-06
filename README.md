@@ -1,40 +1,73 @@
 ## UnisonDB
 
-<img src="docs/logo.svg" width="300" alt="UnisonDB" />
+> Store, stream, and sync instantly — UnisonDB is a log-native database that replicates like a message bus at the edge.
 
-> UnisonDB is a **reactive, multi-modal database** built on **B+Trees** and **WAL-based streaming replication**,  
-> designed for **local-first, edge-scale** applications.
+<img src="docs/logo.svg" width="300" alt="UnisonDB" />
 
 [![ci-tests](https://github.com/ankur-anand/unisondb/actions/workflows/go.yml/badge.svg)](https://github.com/ankur-anand/unisondb/actions/workflows/go.yml)
 [![Coverage Status](https://coveralls.io/repos/github/ankur-anand/unisondb/badge.svg?branch=main)](https://coveralls.io/github/ankur-anand/unisondb?branch=main)
-
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/UnisonDB-Getting%20Started-0b5fff?style=flat-square)](https://unisondb.io/docs/getting-started/)
+
+---
+[![Status: Alpha](https://img.shields.io/badge/status-alpha-orange)](#)
+
+**Project Status: Alpha**  
+UnisonDB is currently in **active development**. Expect frequent updates and potential **breaking changes** as the system evolves toward its first beta release.  
+Contributions, issues, and feedback are highly encouraged.
+---
 
 ## What UnisonDB Is
 
-A log-native database that replicates like a message bus.
+UnisonDB is a log-native database that replicates like a message bus — built for distributed, edge-scale architectures.
+It merges the best of both worlds: the durability of a database and the reactivity of a streaming system.
 
-UnisonDB unifies storage and streaming by building a database directly on top of a Write-Ahead Log (WAL).
-Every write becomes a first-class event — durable, ordered, and streamable to thousands of replicas in real time.
+Every write in UnisonDB is instantly available — stored durably, broadcast to replicas, and ready for local queries — all without external message buses, CDC pipelines, or sync drift.
 
-It combines the predictability of B+Trees with the power of log-based replication,
-letting data flow continuously between core and edge without coordination overhead.
-
-Built for reactive architectures and local-first systems, UnisonDB turns each insert, update, or delete into a live data stream —
-ready to power AI agents, caches, and event pipelines instantly.
-
-Core Highlights
-1.	Predictable Performance — B+Tree reads, zero LSM compaction storms
-2.	Built-In Replication — WAL-based streaming to 1,000+ nodes
-3.	Hub-and-Spoke Topology — Primary → Hubs → Edge replication flow
-4.	Namespace Isolation — Multi-tenant replication boundaries
-5.	Multi-Modal Storage — Key-Value, Wide-Column, and LOB in one transaction
-6.	Reactive by Design — Every write emits a real-time stream
+## Key Features
+- **Multi-Modal Storage**: Key-Value, Wide-Column, and Large Objects (LOB)
+- **Streaming Replication**: WAL-based replication with sub-second fan-out to 100+ edge replicas
+- **Real-Time Notifications**: ZeroMQ-based change notifications with sub-millisecond latency
+- **Durable & Fast**: B+Tree storage with Write-Ahead Logging
+- **Edge-First Design**: Optimized for edge computing and local-first architectures
+- **Namespace Isolation**: Multi-tenancy support with namespace-based isolation
 
 
-![storage architecture](docs/arch.svg)
+![storage architecture](docs/unison_overview.png)
+
+## Use Cases
+
+UnisonDB is built for **distributed edge-first architectures** systems where **data and computation must live close together** — reducing network hops, minimizing latency, and enabling real-time responsiveness at scale.
+
+By **co-locating data with the services that use it**, UnisonDB removes the traditional boundary between the database and the application layer.
+Applications can react to local changes instantly, while UnisonDB’s WAL-based replication ensures eventual consistency across all replicas globally.
+
+## Quick Start
+
+```bash
+# Clone the repository
+git clone https://github.com/ankur-anand/unisondb
+cd unisondb
+
+# Build
+go build -o unisondb ./cmd/unisondb
+
+# Run in replicator mode (primary)
+./unisondb server --mode replicator --config config.toml
+
+# Use the HTTP API
+curl -X PUT http://localhost:4000/api/v1/default/kv/mykey \
+  -H "Content-Type: application/json" \
+  -d '{"value":"bXl2YWx1ZQ=="}'
+```
+
+Check [Getting Started](https://unisondb.io/docs/getting-started/) for more
 
 ## Why UnisonDB
+
+> Traditional databases persist. Stream systems propagate.
+UnisonDB does both — turning every write into a durable, queryable stream that replicates seamlessly across the edge.
+
 
 ### The Problem: Storage and Streaming Live in Different Worlds
 
