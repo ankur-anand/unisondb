@@ -48,6 +48,9 @@ jobs:
             echo "$files"
             exit 1
           fi
+      - name: Run Submodule Test
+        run : |
+          find . -mindepth 2 -name go.mod -execdir go test ./... -race \;
 
   test:
     runs-on: ubuntu-latest
