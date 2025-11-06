@@ -9,13 +9,15 @@
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/UnisonDB-Getting%20Started-0b5fff?style=flat-square)](https://unisondb.io/docs/getting-started/)
 
----
+___
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange)](#)
 
+
 **Project Status: Alpha**  
+
 UnisonDB is currently in **active development**. Expect frequent updates and potential **breaking changes** as the system evolves toward its first beta release.  
 Contributions, issues, and feedback are highly encouraged.
----
+
 
 ## What UnisonDB Is
 
