@@ -22,7 +22,6 @@ import (
 	udbmetrics "github.com/ankur-anand/unisondb/internal/metrics"
 	"github.com/ankur-anand/unisondb/internal/services/fuzzer"
 	"github.com/ankur-anand/unisondb/internal/services/httpapi"
-	"github.com/ankur-anand/unisondb/internal/services/kvstore"
 	"github.com/ankur-anand/unisondb/internal/services/relayer"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
 	"github.com/ankur-anand/unisondb/pkg/logutil"
@@ -448,8 +447,6 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 	errGroup, _ := errgroup.WithContext(ctx)
 
 	rep := streamer.NewGrpcStreamer(errGroup, ms.engines, 2*time.Minute)
-	kvr := kvstore.NewKVReaderService(ms.engines)
-	kvw := kvstore.NewKVWriterService(ms.engines)
 
 	grpcMethods := grpcutils.RegisterGRPCSMethods(v1Streamer.WalStreamerService_ServiceDesc,
 		v1.KVStoreWriteService_ServiceDesc,
@@ -514,12 +511,6 @@ func (ms *Server) SetupGrpcServer(ctx context.Context) error {
 	healthpb.RegisterHealthServer(gS, healthServer)
 
 	v1Streamer.RegisterWalStreamerServiceServer(gS, rep)
-	v1.RegisterKVStoreReadServiceServer(gS, kvr)
-	// only register write server if allowed
-	if ms.mode == modeReplicator {
-		v1.RegisterKVStoreWriteServiceServer(gS, kvw)
-	}
-
 	if ms.env != "prod" {
 		reflection.Register(gS)
 	}
