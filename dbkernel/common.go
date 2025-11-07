@@ -9,9 +9,10 @@ import (
 )
 
 const (
-	dbFileName  = "unison.db"
-	walDirName  = "wal"
-	pidLockName = "pid.lock"
+	dbFileName        = "unison.db"
+	walDirName        = "wal"
+	pidLockName       = "pid.lock"
+	BackupRootDirName = "backups"
 )
 
 var (

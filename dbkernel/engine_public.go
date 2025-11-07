@@ -79,6 +79,11 @@ func (e *Engine) Namespace() string {
 	return e.namespace
 }
 
+// BackupRoot returns the namespace-specific backup root on disk.
+func (e *Engine) BackupRoot() string {
+	return e.backupNamespaceRoot
+}
+
 type countingWriter struct {
 	w     io.Writer
 	count int64
@@ -153,20 +158,12 @@ func (e *Engine) BtreeSnapshot(w io.Writer) (int64, error) {
 
 // BackupBtree writes a full snapshot of the B-Tree store to backupPath atomically.
 func (e *Engine) BackupBtree(backupPath string) (int64, error) {
-	if strings.TrimSpace(backupPath) == "" {
-		return 0, errors.New("backup path cannot be empty")
+	resolvedPath, err := e.resolveBackupFile(backupPath)
+	if err != nil {
+		return 0, err
 	}
 
-	dir := filepath.Dir(backupPath)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return 0, fmt.Errorf("create backup directory: %w", err)
-	}
-
-	if isWithinDir(e.namespaceDir(), filepath.Clean(dir)) {
-		return 0, fmt.Errorf("backup path cannot be inside engine data directory: %s", e.namespaceDir())
-	}
-
-	tmpPath := backupPath + ".tmp"
+	tmpPath := resolvedPath + ".tmp"
 	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return 0, fmt.Errorf("create temp backup file: %w", err)
@@ -188,8 +185,8 @@ func (e *Engine) BackupBtree(backupPath string) (int64, error) {
 		return 0, snapshotErr
 	}
 
-	_ = os.Remove(backupPath)
-	if err := os.Rename(tmpPath, backupPath); err != nil {
+	_ = os.Remove(resolvedPath)
+	if err := os.Rename(tmpPath, resolvedPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return 0, fmt.Errorf("finalize backup: %w", err)
 	}
@@ -227,16 +224,12 @@ func (e *Engine) GetWalCheckPoint() (*internal.Metadata, error) {
 
 // BackupWalSegmentsAfter copies sealed WAL segments whose IDs are greater than afterID into backupDir.
 func (e *Engine) BackupWalSegmentsAfter(afterID SegmentID, backupDir string) (map[SegmentID]string, error) {
-	if strings.TrimSpace(backupDir) == "" {
-		return nil, errors.New("backup directory cannot be empty")
+	resolvedDir, err := e.resolveBackupDir(backupDir)
+	if err != nil {
+		return nil, err
 	}
 
-	cleanDir := filepath.Clean(backupDir)
-	if isWithinDir(e.namespaceDir(), cleanDir) || isWithinDir(e.walDir(), cleanDir) {
-		return nil, fmt.Errorf("backup directory cannot be inside engine data directory: %s", e.namespaceDir())
-	}
-
-	return e.walIO.BackupSegmentsAfter(afterID, backupDir)
+	return e.walIO.BackupSegmentsAfter(afterID, resolvedDir)
 }
 
 // PutKV inserts a key-value pair.
@@ -360,6 +353,64 @@ func isWithinDir(root, target string) bool {
 	}
 	sep := string(os.PathSeparator)
 	return strings.HasPrefix(target, root+sep)
+}
+
+func (e *Engine) resolveBackupDir(rel string) (string, error) {
+	clean, err := e.cleanBackupRelativePath(rel, true)
+	if err != nil {
+		return "", err
+	}
+
+	target := filepath.Join(e.backupNamespaceRoot, clean)
+	if !isWithinDir(e.backupNamespaceRoot, target) {
+		return "", errors.New("backup directory escapes allowed root")
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return "", fmt.Errorf("create backup directory: %w", err)
+	}
+	return target, nil
+}
+
+func (e *Engine) resolveBackupFile(rel string) (string, error) {
+	clean, err := e.cleanBackupRelativePath(rel, false)
+	if err != nil {
+		return "", err
+	}
+
+	target := filepath.Join(e.backupNamespaceRoot, clean)
+	if !isWithinDir(e.backupNamespaceRoot, target) {
+		return "", errors.New("backup path escapes allowed root")
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", fmt.Errorf("create backup directory: %w", err)
+	}
+	return target, nil
+}
+
+func (e *Engine) cleanBackupRelativePath(rel string, allowRoot bool) (string, error) {
+	trimmed := strings.TrimSpace(rel)
+	if trimmed == "" {
+		if allowRoot {
+			return ".", nil
+		}
+		return "", errors.New("backup path cannot be empty")
+	}
+	if filepath.IsAbs(trimmed) {
+		return "", errors.New("backup path must be relative")
+	}
+
+	clean := filepath.Clean(trimmed)
+	if clean == "." && !allowRoot {
+		return "", errors.New("backup file path cannot reference backup root directly")
+	}
+
+	sep := string(os.PathSeparator)
+	for _, part := range strings.Split(clean, sep) {
+		if part == ".." {
+			return "", errors.New("backup path cannot traverse outside backup root")
+		}
+	}
+	return clean, nil
 }
 
 // GetKV retrieves the value associated with the given key.

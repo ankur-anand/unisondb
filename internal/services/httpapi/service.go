@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -863,7 +864,7 @@ func (s *Service) handleBackupBTree(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusOK, BtreeBackupResponse{
-		Path:  req.Path,
+		Path:  filepath.Join(engine.BackupRoot(), req.Path),
 		Bytes: bytesWritten,
 	})
 }

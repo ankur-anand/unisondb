@@ -1041,7 +1041,7 @@ func TestEngineBackupWalSegmentsAfter(t *testing.T) {
 		require.NoError(t, engine.PutKV(key, payload))
 	}
 
-	backupDir := filepath.Join(t.TempDir(), "backups")
+	backupDir := filepath.Join("wal", "customer-a")
 	backups, err := engine.BackupWalSegmentsAfter(0, backupDir)
 	require.NoError(t, err)
 	require.NotEmpty(t, backups)
@@ -1056,7 +1056,7 @@ func TestEngineBackupWalSegmentsAfter(t *testing.T) {
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, walfs.ErrSegmentNotFound)
 
-	internalWalDir := filepath.Join(dataDir, "test", "wal")
+	internalWalDir := "/tmp/should-not-pass"
 	_, err = engine.BackupWalSegmentsAfter(0, internalWalDir)
 	assert.Error(t, err)
 }
@@ -1074,19 +1074,18 @@ func TestEngineBackupBtree(t *testing.T) {
 
 	require.NoError(t, engine.PutKV([]byte("btree-key"), []byte("btree-value")))
 
-	backupPath := filepath.Join(t.TempDir(), "btree.snapshot")
+	backupPath := filepath.Join("snapshots", "btree.snapshot")
 	bytesWritten, err := engine.BackupBtree(backupPath)
 	require.NoError(t, err)
 	assert.Greater(t, bytesWritten, int64(0))
 
-	info, err := os.Stat(backupPath)
+	info, err := os.Stat(filepath.Join(dataDir, dbkernel.BackupRootDirName, "btree", backupPath))
 	require.NoError(t, err)
 	assert.Greater(t, info.Size(), int64(0))
 
 	_, err = engine.BackupBtree("")
 	assert.Error(t, err)
 
-	internalPath := filepath.Join(dataDir, "btree", "snapshot.db")
-	_, err = engine.BackupBtree(internalPath)
+	_, err = engine.BackupBtree("/tmp/not-allowed.snapshot")
 	assert.Error(t, err)
 }

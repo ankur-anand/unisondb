@@ -23,9 +23,10 @@ import (
 )
 
 type testServer struct {
-	service *Service
-	router  *mux.Router
-	engine  *dbkernel.Engine
+	service    *Service
+	router     *mux.Router
+	engine     *dbkernel.Engine
+	backupRoot string
 }
 
 func setupTestServer(t *testing.T) (*testServer, func()) {
@@ -60,9 +61,10 @@ func setupTestServerWithConfig(t *testing.T, modify func(cfg *dbkernel.EngineCon
 	}
 
 	return &testServer{
-		service: service,
-		router:  router,
-		engine:  engine,
+		service:    service,
+		router:     router,
+		engine:     engine,
+		backupRoot: filepath.Join(tmpDir, dbkernel.BackupRootDirName, "test"),
 	}, cleanup
 }
 
@@ -892,7 +894,7 @@ func TestBackupSegmentsAfter_Success(t *testing.T) {
 	require.NotNil(t, offset)
 	require.Greater(t, offset.SegmentID, uint32(1), "expected WAL rotation to seal prior segments")
 
-	backupDir := filepath.Join(t.TempDir(), "backups")
+	backupDir := filepath.Join("wal", "case-a")
 	reqBody := BackupSegmentsRequest{
 		AfterSegmentID: 0,
 		BackupDir:      backupDir,
@@ -908,6 +910,7 @@ func TestBackupSegmentsAfter_Success(t *testing.T) {
 
 	for _, entry := range resp.Backups {
 		assert.Greater(t, entry.SegmentID, uint32(0))
+		assert.True(t, strings.HasPrefix(entry.Path, ts.backupRoot))
 		_, statErr := os.Stat(entry.Path)
 		assert.NoError(t, statErr)
 	}
@@ -919,7 +922,7 @@ func TestBackupSegmentsAfter_NoSegments(t *testing.T) {
 	})
 	defer cleanup()
 
-	backupDir := filepath.Join(t.TempDir(), "backups")
+	backupDir := "wal/empty"
 	reqBody := BackupSegmentsRequest{
 		AfterSegmentID: 99,
 		BackupDir:      backupDir,
@@ -947,7 +950,7 @@ func TestBtreeBackup_Success(t *testing.T) {
 
 	require.NoError(t, ts.engine.PutKV([]byte("backup-key"), []byte("backup-value")))
 
-	backupPath := filepath.Join(t.TempDir(), "btree.snapshot")
+	backupPath := filepath.Join("snapshots", "btree.snapshot")
 	reqBody := BtreeBackupRequest{Path: backupPath}
 
 	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/btree/backup", reqBody)
@@ -956,10 +959,11 @@ func TestBtreeBackup_Success(t *testing.T) {
 	var resp BtreeBackupResponse
 	err := json.NewDecoder(rr.Body).Decode(&resp)
 	require.NoError(t, err)
-	assert.Equal(t, backupPath, resp.Path)
+	expectedPath := filepath.Join(ts.backupRoot, backupPath)
+	assert.Equal(t, expectedPath, resp.Path)
 	assert.Greater(t, resp.Bytes, int64(0))
 
-	info, err := os.Stat(backupPath)
+	info, err := os.Stat(expectedPath)
 	require.NoError(t, err)
 	assert.Greater(t, info.Size(), int64(0))
 }
