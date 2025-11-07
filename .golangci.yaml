@@ -14,7 +14,6 @@ linters:
     - gocognit
     - gofmt
     - goimports
-    - ireturn
     - nilerr
     - perfsprint
     - rowserrcheck
@@ -25,6 +24,7 @@ linters:
     - whitespace
   disable:
     - unused
+    - ireturn
 
 issues:
   fix: true

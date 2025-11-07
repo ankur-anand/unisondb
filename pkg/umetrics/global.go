@@ -2,7 +2,6 @@ package umetrics
 
 import (
 	"io"
-	"log/slog"
 	"sync"
 	"time"
 
@@ -12,8 +11,15 @@ import (
 var (
 	globalRegistry *Registry
 	once           sync.Once
-	lOnce          sync.Once
 )
+
+func init() {
+	// with NoopScope by default to avoid nil checks
+	globalRegistry = &Registry{
+		scope:      tally.NoopScope,
+		commonTags: make(map[string]string),
+	}
+}
 
 // Registry holds the global metrics configuration.
 type Registry struct {
@@ -35,7 +41,8 @@ func Initialize(opts Options) (io.Closer, error) {
 	var closer io.Closer
 	var err error
 
-	if globalRegistry != nil {
+	// if already initialized with a real reporter (not NoopScope)
+	if globalRegistry.scope != tally.NoopScope {
 		return nil, nil
 	}
 
@@ -67,20 +74,15 @@ func Initialize(opts Options) (io.Closer, error) {
 }
 
 // GetScope returns a scoped metrics collector for a specific package.
-// nolint:ireturn
+//
+//nolint:ireturn
 func GetScope(packageName string) tally.Scope {
-	reg := globalRegistry
-	if reg == nil {
-		lOnce.Do(func() {
-			slog.Warn("[unsiondb.umetrics] globalRegistry is nil")
-		})
-		return tally.NoopScope.SubScope(packageName)
-	}
-	return reg.scope.SubScope(packageName)
+	return globalRegistry.scope.SubScope(packageName)
 }
 
 // GetTaggedScope returns a scoped metrics collector with additional tags.
-// nolint:ireturn
+//
+//nolint:ireturn
 func GetTaggedScope(packageName string, tags map[string]string) tally.Scope {
 	return GetScope(packageName).Tagged(tags)
 }

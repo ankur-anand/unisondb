@@ -14,7 +14,6 @@ const (
 )
 
 var (
-	runtimeScope   = umetrics.AutoScope()
 	startDriftOnce sync.Once
 )
 
@@ -39,7 +38,7 @@ func StartClockDriftMonitor(ctx context.Context, interval time.Duration) {
 					drift = -drift
 				}
 				if drift > driftReportThreshold {
-					runtimeScope.Gauge(mClockDriftSeconds).Update(drift.Seconds())
+					umetrics.AutoScope().Gauge(mClockDriftSeconds).Update(drift.Seconds())
 				}
 			case <-ctx.Done():
 				return
