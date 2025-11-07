@@ -138,7 +138,8 @@ type Engine struct {
 	pendingMetadata       *pendingMetadata
 	fsyncReqSignal        chan struct{}
 	disableEntryTypeCheck bool
-	readOnly              bool // Prevents write operations when true (relayer mode)
+	readOnly              bool
+	dataDir               string
 
 	recoveredEntriesCount int
 	startMetadata         internal.Metadata
@@ -181,6 +182,7 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 	}
 
 	engine := &Engine{
+		dataDir:                   dataDir,
 		namespace:                 namespace,
 		config:                    conf,
 		wg:                        &sync.WaitGroup{},

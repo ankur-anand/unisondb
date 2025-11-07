@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/gorilla/mux"
 )
 
@@ -94,6 +96,8 @@ func (s *Service) RegisterRoutes(router *mux.Router) {
 	api.HandleFunc("/offset", s.handleGetOffset).Methods(http.MethodGet)
 	api.HandleFunc("/stats", s.handleGetStats).Methods(http.MethodGet)
 	api.HandleFunc("/checkpoint", s.handleGetCheckpoint).Methods(http.MethodGet)
+	api.HandleFunc("/wal/backup", s.handleBackupSegmentsAfter).Methods(http.MethodPost)
+	api.HandleFunc("/btree/backup", s.handleBackupBTree).Methods(http.MethodPost)
 }
 
 func (s *Service) getTransaction(txnID string) (*transactionState, error) {
@@ -755,6 +759,112 @@ func (s *Service) handleGetCheckpoint(w http.ResponseWriter, r *http.Request) {
 		RecordProcessed: recordProcessed,
 		SegmentID:       segmentID,
 		Offset:          offset,
+	})
+}
+
+type BackupSegmentsRequest struct {
+	AfterSegmentID uint32 `json:"afterSegmentId"`
+	BackupDir      string `json:"backupDir"`
+}
+
+type BackupSegmentEntry struct {
+	SegmentID uint32 `json:"segmentId"`
+	Path      string `json:"path"`
+}
+
+type BackupSegmentsResponse struct {
+	Backups []BackupSegmentEntry `json:"backups"`
+}
+
+func (s *Service) handleBackupSegmentsAfter(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	namespace := vars["namespace"]
+
+	engine, err := s.getEngine(namespace)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	var req BackupSegmentsRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+
+	if strings.TrimSpace(req.BackupDir) == "" {
+		respondError(w, http.StatusBadRequest, "backupDir cannot be empty")
+		return
+	}
+
+	backups, err := engine.BackupWalSegmentsAfter(req.AfterSegmentID, req.BackupDir)
+	if err != nil {
+		if errors.Is(err, walfs.ErrSegmentNotFound) {
+			respondError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to backup WAL segments: %v", err))
+		return
+	}
+
+	segmentIDs := make([]dbkernel.SegmentID, 0, len(backups))
+	for id := range backups {
+		segmentIDs = append(segmentIDs, id)
+	}
+	slices.Sort(segmentIDs)
+
+	entries := make([]BackupSegmentEntry, 0, len(segmentIDs))
+	for _, id := range segmentIDs {
+		entries = append(entries, BackupSegmentEntry{
+			SegmentID: id,
+			Path:      backups[id],
+		})
+	}
+
+	respondJSON(w, http.StatusOK, BackupSegmentsResponse{Backups: entries})
+}
+
+type BtreeBackupRequest struct {
+	Path string `json:"path"`
+}
+
+type BtreeBackupResponse struct {
+	Path  string `json:"path"`
+	Bytes int64  `json:"bytes"`
+}
+
+func (s *Service) handleBackupBTree(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	namespace := vars["namespace"]
+
+	engine, err := s.getEngine(namespace)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	var req BtreeBackupRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
+		return
+	}
+
+	if strings.TrimSpace(req.Path) == "" {
+		respondError(w, http.StatusBadRequest, "path cannot be empty")
+		return
+	}
+
+	bytesWritten, err := engine.BackupBtree(req.Path)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to backup btree: %v", err))
+		return
+	}
+
+	respondJSON(w, http.StatusOK, BtreeBackupResponse{
+		Path:  req.Path,
+		Bytes: bytesWritten,
 	})
 }
 

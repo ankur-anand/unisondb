@@ -802,13 +802,18 @@ func (seg *Segment) incrRef() {
 
 func (seg *Segment) decrRef(id uint64) {
 	if ok := seg.activeReaders.Remove(id); ok {
-		count := seg.refCount.Add(-1)
-		if count == 0 {
-			seg.closeCond.L.Lock()
-			seg.closeCond.Broadcast()
-			seg.closeCond.L.Unlock()
-		}
-		if count == 0 && seg.markedForDeletion.Load() {
+		seg.releaseRef()
+	}
+}
+
+// releaseRef decrements the reference count and performs any deferred cleanup.
+func (seg *Segment) releaseRef() {
+	count := seg.refCount.Add(-1)
+	if count == 0 {
+		seg.closeCond.L.Lock()
+		seg.closeCond.Broadcast()
+		seg.closeCond.L.Unlock()
+		if seg.markedForDeletion.Load() {
 			seg.cleanup()
 		}
 	}

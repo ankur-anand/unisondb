@@ -215,6 +215,21 @@ func (w *WalIO) BatchAppend(records [][]byte) ([]*Offset, error) {
 	return result, nil
 }
 
+// BackupSegmentsAfter copies every sealed segment with ID greater than after into backupDir.
+func (w *WalIO) BackupSegmentsAfter(after SegID, backupDir string) (map[SegID]string, error) {
+	backups, err := w.appendLog.BackupSegmentsAfter(after, backupDir)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[SegID]string, len(backups))
+	for id, path := range backups {
+		result[id] = path
+	}
+
+	return result, nil
+}
+
 // ReaderOption defines a functional option for configuring a Reader instance.
 type ReaderOption func(*Reader)
 

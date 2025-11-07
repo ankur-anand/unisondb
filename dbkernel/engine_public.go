@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
@@ -58,6 +61,9 @@ var (
 
 // Offset represents the offset in the wal.
 type Offset = wal.Offset
+
+// SegmentID represents a WAL segment identifier.
+type SegmentID = wal.SegID
 
 // DecodeOffset decodes the offset position from a byte slice.
 func DecodeOffset(b []byte) *Offset {
@@ -145,6 +151,52 @@ func (e *Engine) BtreeSnapshot(w io.Writer) (int64, error) {
 	return cw.count, err
 }
 
+// BackupBtree writes a full snapshot of the B-Tree store to backupPath atomically.
+func (e *Engine) BackupBtree(backupPath string) (int64, error) {
+	if strings.TrimSpace(backupPath) == "" {
+		return 0, errors.New("backup path cannot be empty")
+	}
+
+	dir := filepath.Dir(backupPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return 0, fmt.Errorf("create backup directory: %w", err)
+	}
+
+	if isWithinDir(e.namespaceDir(), filepath.Clean(dir)) {
+		return 0, fmt.Errorf("backup path cannot be inside engine data directory: %s", e.namespaceDir())
+	}
+
+	tmpPath := backupPath + ".tmp"
+	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return 0, fmt.Errorf("create temp backup file: %w", err)
+	}
+
+	written, snapshotErr := e.BtreeSnapshot(file)
+	if snapshotErr == nil {
+		if err := file.Sync(); err != nil {
+			snapshotErr = fmt.Errorf("sync backup file: %w", err)
+		}
+	}
+
+	if closeErr := file.Close(); snapshotErr == nil && closeErr != nil {
+		snapshotErr = closeErr
+	}
+
+	if snapshotErr != nil {
+		_ = os.Remove(tmpPath)
+		return 0, snapshotErr
+	}
+
+	_ = os.Remove(backupPath)
+	if err := os.Rename(tmpPath, backupPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return 0, fmt.Errorf("finalize backup: %w", err)
+	}
+
+	return written, nil
+}
+
 // OpsReceivedCount returns the total number of Put and Delete operations received.
 func (e *Engine) OpsReceivedCount() uint64 {
 	return e.writeSeenCounter.Load()
@@ -171,6 +223,20 @@ func (e *Engine) GetWalCheckPoint() (*internal.Metadata, error) {
 	}
 	metadata := internal.UnmarshalMetadata(data)
 	return &metadata, nil
+}
+
+// BackupWalSegmentsAfter copies sealed WAL segments whose IDs are greater than afterID into backupDir.
+func (e *Engine) BackupWalSegmentsAfter(afterID SegmentID, backupDir string) (map[SegmentID]string, error) {
+	if strings.TrimSpace(backupDir) == "" {
+		return nil, errors.New("backup directory cannot be empty")
+	}
+
+	cleanDir := filepath.Clean(backupDir)
+	if isWithinDir(e.namespaceDir(), cleanDir) || isWithinDir(e.walDir(), cleanDir) {
+		return nil, fmt.Errorf("backup directory cannot be inside engine data directory: %s", e.namespaceDir())
+	}
+
+	return e.walIO.BackupSegmentsAfter(afterID, backupDir)
 }
 
 // PutKV inserts a key-value pair.
@@ -276,6 +342,24 @@ func hasNewWriteSince(current, lastSeen *Offset) bool {
 	}
 	return current.SegmentID > lastSeen.SegmentID ||
 		(current.SegmentID == lastSeen.SegmentID && current.Offset > lastSeen.Offset)
+}
+
+func (e *Engine) namespaceDir() string {
+	return filepath.Join(e.dataDir, e.namespace)
+}
+
+func (e *Engine) walDir() string {
+	return filepath.Join(e.namespaceDir(), walDirName)
+}
+
+func isWithinDir(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	if root == target {
+		return true
+	}
+	sep := string(os.PathSeparator)
+	return strings.HasPrefix(target, root+sep)
 }
 
 // GetKV retrieves the value associated with the given key.

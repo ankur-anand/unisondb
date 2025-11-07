@@ -1,10 +1,13 @@
 package dbkernel_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
@@ -1018,4 +1021,72 @@ func TestEngine_SameKeyDifferentEntryType_Mix(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, lobValue, retrievedLOB, "LOB value should remain unchanged")
 	})
+}
+
+func TestEngineBackupWalSegmentsAfter(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := dbkernel.NewDefaultEngineConfig()
+	cfg.DBEngine = dbkernel.LMDBEngine
+	cfg.WalConfig.SegmentSize = 64 * 1024
+
+	engine, err := dbkernel.NewStorageEngine(dataDir, "test", cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, engine.Close(context.Background()))
+	})
+
+	payload := bytes.Repeat([]byte("data"), 2048)
+	for i := 0; i < 200; i++ {
+		key := []byte(fmt.Sprintf("key-%d", i))
+		require.NoError(t, engine.PutKV(key, payload))
+	}
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	backups, err := engine.BackupWalSegmentsAfter(0, backupDir)
+	require.NoError(t, err)
+	require.NotEmpty(t, backups)
+
+	for id, path := range backups {
+		assert.Greater(t, id, dbkernel.SegmentID(0))
+		_, statErr := os.Stat(path)
+		assert.NoError(t, statErr)
+	}
+
+	_, err = engine.BackupWalSegmentsAfter(9999, backupDir)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, walfs.ErrSegmentNotFound)
+
+	internalWalDir := filepath.Join(dataDir, "test", "wal")
+	_, err = engine.BackupWalSegmentsAfter(0, internalWalDir)
+	assert.Error(t, err)
+}
+
+func TestEngineBackupBtree(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := dbkernel.NewDefaultEngineConfig()
+	cfg.DBEngine = dbkernel.LMDBEngine
+
+	engine, err := dbkernel.NewStorageEngine(dataDir, "btree", cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, engine.Close(context.Background()))
+	})
+
+	require.NoError(t, engine.PutKV([]byte("btree-key"), []byte("btree-value")))
+
+	backupPath := filepath.Join(t.TempDir(), "btree.snapshot")
+	bytesWritten, err := engine.BackupBtree(backupPath)
+	require.NoError(t, err)
+	assert.Greater(t, bytesWritten, int64(0))
+
+	info, err := os.Stat(backupPath)
+	require.NoError(t, err)
+	assert.Greater(t, info.Size(), int64(0))
+
+	_, err = engine.BackupBtree("")
+	assert.Error(t, err)
+
+	internalPath := filepath.Join(dataDir, "btree", "snapshot.db")
+	_, err = engine.BackupBtree(internalPath)
+	assert.Error(t, err)
 }
