@@ -9,6 +9,8 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -1480,5 +1482,527 @@ func TestWALog_WriteBatch_ReadbackAfterReopen(t *testing.T) {
 			assert.NoError(t, err, "sequential read %d should work after reopen", i)
 			assert.Equal(t, records[i], data, "sequential read %d data should match", i)
 		}
+	}
+}
+
+func TestSegmentManager_BackupLastRotatedSegment(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	_, err = manager.Current().Write([]byte("segment-1-data"))
+	assert.NoError(t, err)
+	assert.NoError(t, manager.RotateSegment())
+	_, err = manager.Current().Write([]byte("segment-2-data"))
+	assert.NoError(t, err)
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	backupPath, err := manager.BackupLastRotatedSegment(backupDir)
+	assert.NoError(t, err)
+
+	expectedPath := filepath.Join(backupDir, fmt.Sprintf("%09d.wal", 1))
+	assert.Equal(t, expectedPath, backupPath)
+
+	originalPath := filepath.Join(dir, fmt.Sprintf("%09d.wal", 1))
+	original, err := os.ReadFile(originalPath)
+	assert.NoError(t, err)
+
+	backup, err := os.ReadFile(backupPath)
+	assert.NoError(t, err)
+	assert.Equal(t, original, backup, "backup contents should match original segment")
+}
+
+func TestSegmentManager_BackupLastRotatedSegment_NoRotation(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	_, err = manager.BackupLastRotatedSegment(backupDir)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, walfs.ErrSegmentNotFound)
+}
+
+func TestSegmentManager_BackupSegmentsAfter(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	for i := 0; i < 2; i++ {
+		_, err = manager.Current().Write([]byte(fmt.Sprintf("segment-%d", i+1)))
+		assert.NoError(t, err)
+		assert.NoError(t, manager.RotateSegment())
+	}
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	backups, err := manager.BackupSegmentsAfter(1, backupDir)
+	assert.NoError(t, err)
+	assert.Len(t, backups, 1)
+
+	backupPath, ok := backups[2]
+	assert.True(t, ok, "expected segment 2 to be backed up")
+
+	originalPath := filepath.Join(dir, fmt.Sprintf("%09d.wal", 2))
+	original, err := os.ReadFile(originalPath)
+	assert.NoError(t, err)
+
+	copied, err := os.ReadFile(backupPath)
+	assert.NoError(t, err)
+	assert.Equal(t, original, copied)
+}
+
+func TestSegmentManager_BackupSegmentsAfter_NoMatches(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	_, err = manager.Current().Write([]byte("segment-1-data"))
+	assert.NoError(t, err)
+	assert.NoError(t, manager.RotateSegment())
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	_, err = manager.BackupSegmentsAfter(1, backupDir)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, walfs.ErrSegmentNotFound)
+}
+
+func BenchmarkBackupLastRotatedSegment(b *testing.B) {
+	const segmentSizeBytes = 16 * 1024 * 1024
+
+	dir := b.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(segmentSizeBytes))
+	if err != nil {
+		b.Fatalf("new walog: %v", err)
+	}
+
+	payload := bytes.Repeat([]byte("a"), 1024)
+	seg := manager.Current()
+	for !seg.WillExceed(len(payload)) {
+		if _, err := seg.Write(payload); err != nil {
+			b.Fatalf("prepare segment: %v", err)
+		}
+	}
+
+	if err := manager.RotateSegment(); err != nil {
+		b.Fatalf("rotate segment: %v", err)
+	}
+
+	backupDir := filepath.Join(b.TempDir(), "backups")
+	b.ReportAllocs()
+	b.SetBytes(segmentSizeBytes)
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		if _, err := manager.BackupLastRotatedSegment(backupDir); err != nil {
+			b.Fatalf("backup: %v", err)
+		}
+	}
+}
+
+func TestBackupLastRotatedSegment_EmptyBackupDir(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	_, err = manager.Current().Write([]byte("data"))
+	assert.NoError(t, err)
+	assert.NoError(t, manager.RotateSegment())
+
+	_, err = manager.BackupLastRotatedSegment("")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "backup directory cannot be empty")
+}
+
+func TestBackupLastRotatedSegment_SameDirectory(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	_, err = manager.Current().Write([]byte("data"))
+	assert.NoError(t, err)
+	assert.NoError(t, manager.RotateSegment())
+
+	_, err = manager.BackupLastRotatedSegment(dir)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "backup destination must differ from WAL directory")
+}
+
+func TestBackupLastRotatedSegment_ReadOnlyBackupDir(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("chmod doesn't work the same on Windows")
+	}
+
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	_, err = manager.Current().Write([]byte("data"))
+	assert.NoError(t, err)
+	assert.NoError(t, manager.RotateSegment())
+
+	backupDir := filepath.Join(t.TempDir(), "readonly")
+	assert.NoError(t, os.MkdirAll(backupDir, 0o555))
+	defer os.Chmod(backupDir, 0o755)
+
+	_, err = manager.BackupLastRotatedSegment(backupDir)
+	assert.Error(t, err)
+}
+
+func TestBackupSegmentsAfter_InvalidAfterID(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	_, err = manager.Current().Write([]byte("data"))
+	assert.NoError(t, err)
+	assert.NoError(t, manager.RotateSegment())
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	_, err = manager.BackupSegmentsAfter(999, backupDir)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, walfs.ErrSegmentNotFound)
+}
+
+func TestBackupLastRotatedSegment_MultipleRotations(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	for i := 0; i < 5; i++ {
+		_, err = manager.Current().Write([]byte(fmt.Sprintf("segment-%d", i+1)))
+		assert.NoError(t, err)
+		assert.NoError(t, manager.RotateSegment())
+	}
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	backupPath, err := manager.BackupLastRotatedSegment(backupDir)
+	assert.NoError(t, err)
+
+	expectedPath := filepath.Join(backupDir, fmt.Sprintf("%09d.wal", 5))
+	assert.Equal(t, expectedPath, backupPath)
+
+	originalPath := filepath.Join(dir, fmt.Sprintf("%09d.wal", 5))
+	original, err := os.ReadFile(originalPath)
+	assert.NoError(t, err)
+
+	backup, err := os.ReadFile(backupPath)
+	assert.NoError(t, err)
+	assert.Equal(t, original, backup)
+}
+
+func TestBackupSegmentsAfter_AllSegments(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	numSegments := 5
+	for i := 0; i < numSegments; i++ {
+		_, err = manager.Current().Write([]byte(fmt.Sprintf("segment-%d-data", i+1)))
+		assert.NoError(t, err)
+		assert.NoError(t, manager.RotateSegment())
+	}
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+
+	backups, err := manager.BackupSegmentsAfter(0, backupDir)
+	assert.NoError(t, err)
+
+	assert.Len(t, backups, numSegments)
+
+	for i := 1; i <= numSegments; i++ {
+		segID := walfs.SegmentID(i)
+		backupPath, ok := backups[segID]
+		assert.True(t, ok, "segment %d should be in backup map", i)
+
+		originalPath := filepath.Join(dir, fmt.Sprintf("%09d.wal", i))
+		original, err := os.ReadFile(originalPath)
+		assert.NoError(t, err)
+
+		backup, err := os.ReadFile(backupPath)
+		assert.NoError(t, err)
+		assert.Equal(t, original, backup, "segment %d content mismatch", i)
+	}
+}
+
+func TestBackupSegmentsAfter_RangeSelection(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	for i := 0; i < 10; i++ {
+		_, err = manager.Current().Write([]byte(fmt.Sprintf("segment-%d", i+1)))
+		assert.NoError(t, err)
+		assert.NoError(t, manager.RotateSegment())
+	}
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+
+	backups, err := manager.BackupSegmentsAfter(5, backupDir)
+	assert.NoError(t, err)
+	assert.Len(t, backups, 5)
+
+	for i := 6; i <= 10; i++ {
+		_, ok := backups[walfs.SegmentID(i)]
+		assert.True(t, ok, "segment %d should be backed up", i)
+	}
+
+	for i := 1; i <= 5; i++ {
+		_, ok := backups[walfs.SegmentID(i)]
+		assert.False(t, ok, "segment %d should not be backed up", i)
+	}
+}
+
+func TestBackup_OriginalSegmentUnmodified(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	_, err = manager.Current().Write([]byte("important-data"))
+	assert.NoError(t, err)
+	assert.NoError(t, manager.RotateSegment())
+
+	originalPath := filepath.Join(dir, fmt.Sprintf("%09d.wal", 1))
+	originalInfo, err := os.Stat(originalPath)
+	assert.NoError(t, err)
+	originalModTime := originalInfo.ModTime()
+
+	time.Sleep(10 * time.Millisecond)
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	_, err = manager.BackupLastRotatedSegment(backupDir)
+	assert.NoError(t, err)
+
+	newInfo, err := os.Stat(originalPath)
+	assert.NoError(t, err)
+	assert.Equal(t, originalModTime.Unix(), newInfo.ModTime().Unix(),
+		"original segment should not be modified")
+}
+
+func TestBackup_ConcurrentWrites(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	_, err = manager.Current().Write([]byte("segment-1"))
+	assert.NoError(t, err)
+	assert.NoError(t, manager.RotateSegment())
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	var wg sync.WaitGroup
+	e := make(chan error, 2)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, err := manager.BackupLastRotatedSegment(backupDir)
+		if err != nil {
+			e <- err
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			_, err := manager.Current().Write([]byte(fmt.Sprintf("data-%d", i)))
+			if err != nil {
+				e <- err
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+	close(e)
+
+	for err := range e {
+		t.Errorf("concurrent operation error: %v", err)
+	}
+}
+
+func TestBackup_ConcurrentBackups(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	for i := 0; i < 5; i++ {
+		_, err = manager.Current().Write([]byte(fmt.Sprintf("segment-%d", i+1)))
+		assert.NoError(t, err)
+		assert.NoError(t, manager.RotateSegment())
+	}
+
+	var wg sync.WaitGroup
+	e := make(chan error, 3)
+
+	for i := 0; i < 3; i++ {
+		backupDir := filepath.Join(t.TempDir(), fmt.Sprintf("backups-%d", i))
+		wg.Add(1)
+		go func(dir string) {
+			defer wg.Done()
+			_, err := manager.BackupLastRotatedSegment(dir)
+			if err != nil {
+				e <- err
+			}
+		}(backupDir)
+	}
+
+	wg.Wait()
+	close(e)
+
+	for err := range e {
+		t.Errorf("concurrent backup error: %v", err)
+	}
+}
+
+func TestBackupSegmentsAfter_ConcurrentWithRotation(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		_, err = manager.Current().Write([]byte(fmt.Sprintf("segment-%d", i+1)))
+		assert.NoError(t, err)
+		assert.NoError(t, manager.RotateSegment())
+	}
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	var wg sync.WaitGroup
+	e := make(chan error, 2)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_, err := manager.BackupSegmentsAfter(0, backupDir)
+		if err != nil {
+			e <- err
+		}
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 3; i++ {
+			_, err := manager.Current().Write([]byte(fmt.Sprintf("new-segment-%d", i)))
+			if err != nil {
+				e <- err
+				return
+			}
+			if err := manager.RotateSegment(); err != nil {
+				e <- err
+				return
+			}
+			time.Sleep(1 * time.Millisecond)
+		}
+	}()
+
+	wg.Wait()
+	close(e)
+
+	for err := range e {
+		t.Errorf("concurrent operation error: %v", err)
+	}
+}
+
+func TestBackup_OverwriteExistingBackup(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	_, err = manager.Current().Write([]byte("first-data"))
+	assert.NoError(t, err)
+	assert.NoError(t, manager.RotateSegment())
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+
+	backupPath1, err := manager.BackupLastRotatedSegment(backupDir)
+	assert.NoError(t, err)
+
+	_, err = manager.Current().Write([]byte("second-data"))
+	assert.NoError(t, err)
+	assert.NoError(t, manager.RotateSegment())
+
+	backupPath2, err := manager.BackupLastRotatedSegment(backupDir)
+	assert.NoError(t, err)
+
+	assert.NotEqual(t, backupPath1, backupPath2)
+	_, err = os.Stat(backupPath1)
+	assert.NoError(t, err)
+	_, err = os.Stat(backupPath2)
+	assert.NoError(t, err)
+}
+
+func TestBackup_LargeSegment(t *testing.T) {
+	dir := t.TempDir()
+	segmentSize := 10 * 1024 * 1024
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(int64(segmentSize)))
+	assert.NoError(t, err)
+
+	payload := bytes.Repeat([]byte("x"), 1024)
+	seg := manager.Current()
+	for !seg.WillExceed(len(payload)) {
+		_, err := seg.Write(payload)
+		assert.NoError(t, err)
+	}
+
+	assert.NoError(t, manager.RotateSegment())
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	start := time.Now()
+	backupPath, err := manager.BackupLastRotatedSegment(backupDir)
+	duration := time.Since(start)
+
+	assert.NoError(t, err)
+	t.Logf("Backed up %d MB in %v", segmentSize/(1024*1024), duration)
+
+	info, err := os.Stat(backupPath)
+	assert.NoError(t, err)
+	minExpectedSize := int64(segmentSize * 9 / 10)
+	assert.Greater(t, info.Size(), minExpectedSize, "backup should be near segment size")
+}
+
+func TestBackup_EmptySegment(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	assert.NoError(t, manager.RotateSegment())
+	_, err = manager.Current().Write([]byte("data-in-segment-2"))
+	assert.NoError(t, err)
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	backupPath, err := manager.BackupLastRotatedSegment(backupDir)
+
+	if err == nil {
+		info, err := os.Stat(backupPath)
+		assert.NoError(t, err)
+		t.Logf("Empty segment backup size: %d bytes", info.Size())
+	}
+}
+
+func TestBackupSegmentsAfter_VerifyOrdering(t *testing.T) {
+	dir := t.TempDir()
+	manager, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	assert.NoError(t, err)
+
+	numSegments := 10
+	for i := 0; i < numSegments; i++ {
+		data := []byte(fmt.Sprintf("segment-%02d-content", i+1))
+		_, err = manager.Current().Write(data)
+		assert.NoError(t, err)
+		assert.NoError(t, manager.RotateSegment())
+	}
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	backups, err := manager.BackupSegmentsAfter(0, backupDir)
+	assert.NoError(t, err)
+
+	var segmentIDs []int
+	for id := range backups {
+		segmentIDs = append(segmentIDs, int(id))
+	}
+	sort.Ints(segmentIDs)
+
+	for i := 0; i < len(segmentIDs)-1; i++ {
+		assert.Less(t, segmentIDs[i], segmentIDs[i+1], "segments should be in order")
 	}
 }

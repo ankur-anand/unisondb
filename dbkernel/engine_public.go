@@ -7,6 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
@@ -59,6 +62,9 @@ var (
 // Offset represents the offset in the wal.
 type Offset = wal.Offset
 
+// SegmentID represents a WAL segment identifier.
+type SegmentID = wal.SegID
+
 // DecodeOffset decodes the offset position from a byte slice.
 func DecodeOffset(b []byte) *Offset {
 	return wal.DecodeOffset(b)
@@ -71,6 +77,11 @@ func (e *Engine) RecoveredWALCount() int {
 
 func (e *Engine) Namespace() string {
 	return e.namespace
+}
+
+// BackupRoot returns the namespace-specific backup root on disk.
+func (e *Engine) BackupRoot() string {
+	return e.backupNamespaceRoot
 }
 
 type countingWriter struct {
@@ -145,6 +156,44 @@ func (e *Engine) BtreeSnapshot(w io.Writer) (int64, error) {
 	return cw.count, err
 }
 
+// BackupBtree writes a full snapshot of the B-Tree store to backupPath atomically.
+func (e *Engine) BackupBtree(backupPath string) (int64, error) {
+	resolvedPath, err := e.resolveBackupFile(backupPath)
+	if err != nil {
+		return 0, err
+	}
+
+	tmpPath := resolvedPath + ".tmp"
+	file, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	if err != nil {
+		return 0, fmt.Errorf("create temp backup file: %w", err)
+	}
+
+	written, snapshotErr := e.BtreeSnapshot(file)
+	if snapshotErr == nil {
+		if err := file.Sync(); err != nil {
+			snapshotErr = fmt.Errorf("sync backup file: %w", err)
+		}
+	}
+
+	if closeErr := file.Close(); snapshotErr == nil && closeErr != nil {
+		snapshotErr = closeErr
+	}
+
+	if snapshotErr != nil {
+		_ = os.Remove(tmpPath)
+		return 0, snapshotErr
+	}
+
+	_ = os.Remove(resolvedPath)
+	if err := os.Rename(tmpPath, resolvedPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return 0, fmt.Errorf("finalize backup: %w", err)
+	}
+
+	return written, nil
+}
+
 // OpsReceivedCount returns the total number of Put and Delete operations received.
 func (e *Engine) OpsReceivedCount() uint64 {
 	return e.writeSeenCounter.Load()
@@ -171,6 +220,16 @@ func (e *Engine) GetWalCheckPoint() (*internal.Metadata, error) {
 	}
 	metadata := internal.UnmarshalMetadata(data)
 	return &metadata, nil
+}
+
+// BackupWalSegmentsAfter copies sealed WAL segments whose IDs are greater than afterID into backupDir.
+func (e *Engine) BackupWalSegmentsAfter(afterID SegmentID, backupDir string) (map[SegmentID]string, error) {
+	resolvedDir, err := e.resolveBackupDir(backupDir)
+	if err != nil {
+		return nil, err
+	}
+
+	return e.walIO.BackupSegmentsAfter(afterID, resolvedDir)
 }
 
 // PutKV inserts a key-value pair.
@@ -276,6 +335,82 @@ func hasNewWriteSince(current, lastSeen *Offset) bool {
 	}
 	return current.SegmentID > lastSeen.SegmentID ||
 		(current.SegmentID == lastSeen.SegmentID && current.Offset > lastSeen.Offset)
+}
+
+func (e *Engine) namespaceDir() string {
+	return filepath.Join(e.dataDir, e.namespace)
+}
+
+func (e *Engine) walDir() string {
+	return filepath.Join(e.namespaceDir(), walDirName)
+}
+
+func isWithinDir(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	if root == target {
+		return true
+	}
+	sep := string(os.PathSeparator)
+	return strings.HasPrefix(target, root+sep)
+}
+
+func (e *Engine) resolveBackupDir(rel string) (string, error) {
+	clean, err := e.cleanBackupRelativePath(rel, true)
+	if err != nil {
+		return "", err
+	}
+
+	target := filepath.Join(e.backupNamespaceRoot, clean)
+	if !isWithinDir(e.backupNamespaceRoot, target) {
+		return "", errors.New("backup directory escapes allowed root")
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return "", fmt.Errorf("create backup directory: %w", err)
+	}
+	return target, nil
+}
+
+func (e *Engine) resolveBackupFile(rel string) (string, error) {
+	clean, err := e.cleanBackupRelativePath(rel, false)
+	if err != nil {
+		return "", err
+	}
+
+	target := filepath.Join(e.backupNamespaceRoot, clean)
+	if !isWithinDir(e.backupNamespaceRoot, target) {
+		return "", errors.New("backup path escapes allowed root")
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return "", fmt.Errorf("create backup directory: %w", err)
+	}
+	return target, nil
+}
+
+func (e *Engine) cleanBackupRelativePath(rel string, allowRoot bool) (string, error) {
+	trimmed := strings.TrimSpace(rel)
+	if trimmed == "" {
+		if allowRoot {
+			return ".", nil
+		}
+		return "", errors.New("backup path cannot be empty")
+	}
+	if filepath.IsAbs(trimmed) {
+		return "", errors.New("backup path must be relative")
+	}
+
+	clean := filepath.Clean(trimmed)
+	if clean == "." && !allowRoot {
+		return "", errors.New("backup file path cannot reference backup root directly")
+	}
+
+	sep := string(os.PathSeparator)
+	for _, part := range strings.Split(clean, sep) {
+		if part == ".." {
+			return "", errors.New("backup path cannot traverse outside backup root")
+		}
+	}
+	return clean, nil
 }
 
 // GetKV retrieves the value associated with the given key.

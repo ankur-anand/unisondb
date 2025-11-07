@@ -138,7 +138,10 @@ type Engine struct {
 	pendingMetadata       *pendingMetadata
 	fsyncReqSignal        chan struct{}
 	disableEntryTypeCheck bool
-	readOnly              bool // Prevents write operations when true (relayer mode)
+	readOnly              bool
+	dataDir               string
+	backupRoot            string
+	backupNamespaceRoot   string
 
 	recoveredEntriesCount int
 	startMetadata         internal.Metadata
@@ -181,6 +184,7 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 	}
 
 	engine := &Engine{
+		dataDir:                   dataDir,
 		namespace:                 namespace,
 		config:                    conf,
 		wg:                        &sync.WaitGroup{},
@@ -197,6 +201,11 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		taggedScope:               taggedScope,
 		changeNotifier:            chNotifier,
 		coalesceDuration:          conf.WriteNotifyCoalescing.Duration,
+	}
+	engine.backupRoot = filepath.Join(dataDir, BackupRootDirName)
+	engine.backupNamespaceRoot = filepath.Join(engine.backupRoot, namespace)
+	if err := os.MkdirAll(engine.backupNamespaceRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create backup root: %w", err)
 	}
 
 	if err := engine.initStorage(dataDir, namespace, conf); err != nil {

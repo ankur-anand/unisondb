@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -471,6 +472,159 @@ func (wl *WALog) rotateSegment() error {
 	wl.segmentRotated.Add(1)
 	wl.snapshotSegments()
 	wl.rotationCallback()
+	return nil
+}
+
+// BackupLastRotatedSegment copies the most recently sealed WAL segment into backupDir and returns the backup path.
+func (wl *WALog) BackupLastRotatedSegment(backupDir string) (string, error) {
+	if backupDir == "" {
+		return "", errors.New("backup directory cannot be empty")
+	}
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		return "", fmt.Errorf("failed to create backup directory: %w", err)
+	}
+
+	wl.writeMu.RLock()
+	if wl.currentSegment == nil {
+		wl.writeMu.RUnlock()
+		return "", errors.New("no active segment")
+	}
+	if wl.currentSegment.ID() <= 1 {
+		wl.writeMu.RUnlock()
+		return "", fmt.Errorf("%w: no rotated segment available", ErrSegmentNotFound)
+	}
+
+	lastID := wl.currentSegment.ID() - 1
+	segment, ok := wl.segments[lastID]
+	if !ok {
+		wl.writeMu.RUnlock()
+		return "", fmt.Errorf("%w: segment %d", ErrSegmentNotFound, lastID)
+	}
+
+	segment.incrRef()
+	wl.writeMu.RUnlock()
+	defer segment.releaseRef()
+
+	if !segment.IsInMemorySealed() && !IsSealed(segment.GetFlags()) {
+		return "", fmt.Errorf("segment %d has not been sealed yet", segment.ID())
+	}
+
+	srcPath := segment.path
+	dstPath := filepath.Join(backupDir, filepath.Base(srcPath))
+	if filepath.Clean(srcPath) == filepath.Clean(dstPath) {
+		return "", errors.New("backup destination must differ from WAL directory")
+	}
+
+	if err := copySegmentFile(srcPath, dstPath); err != nil {
+		return "", fmt.Errorf("backup segment %d: %w", segment.ID(), err)
+	}
+
+	return dstPath, nil
+}
+
+// BackupSegmentsAfter copies every sealed segment with ID > afterID into backupDir.
+// Returns a map of SegmentID to the backup file path.
+func (wl *WALog) BackupSegmentsAfter(afterID SegmentID, backupDir string) (map[SegmentID]string, error) {
+	if backupDir == "" {
+		return nil, errors.New("backup directory cannot be empty")
+	}
+	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create backup directory: %w", err)
+	}
+
+	wl.writeMu.RLock()
+	var (
+		targets   []*Segment
+		currentID SegmentID
+	)
+	if wl.currentSegment != nil {
+		currentID = wl.currentSegment.ID()
+	}
+	for id, seg := range wl.segments {
+		if id <= afterID {
+			continue
+		}
+		if id == currentID && !seg.IsInMemorySealed() && !IsSealed(seg.GetFlags()) {
+			continue
+		}
+		seg.incrRef()
+		targets = append(targets, seg)
+	}
+	wl.writeMu.RUnlock()
+
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("%w: no segments after %d", ErrSegmentNotFound, afterID)
+	}
+
+	sort.Slice(targets, func(i, j int) bool {
+		return targets[i].ID() < targets[j].ID()
+	})
+
+	defer func() {
+		for _, seg := range targets {
+			seg.releaseRef()
+		}
+	}()
+
+	backups := make(map[SegmentID]string, len(targets))
+
+	for _, seg := range targets {
+		if !seg.IsInMemorySealed() && !IsSealed(seg.GetFlags()) {
+			return nil, fmt.Errorf("segment %d has not been sealed yet", seg.ID())
+		}
+
+		srcPath := seg.path
+		dstPath := filepath.Join(backupDir, filepath.Base(srcPath))
+		if filepath.Clean(srcPath) == filepath.Clean(dstPath) {
+			return nil, errors.New("backup destination must differ from WAL directory")
+		}
+
+		if err := copySegmentFile(srcPath, dstPath); err != nil {
+			return nil, fmt.Errorf("backup segment %d: %w", seg.ID(), err)
+		}
+
+		backups[seg.ID()] = dstPath
+	}
+
+	return backups, nil
+}
+
+func copySegmentFile(srcPath, dstPath string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("open source segment: %w", err)
+	}
+	defer src.Close()
+
+	tmpPath := dstPath + ".tmp"
+	dst, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, fileModePerm)
+	if err != nil {
+		return fmt.Errorf("create temp backup: %w", err)
+	}
+
+	if _, err := io.Copy(dst, src); err != nil {
+		dst.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("copy contents: %w", err)
+	}
+
+	if err := dst.Sync(); err != nil {
+		dst.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("sync backup: %w", err)
+	}
+
+	if err := dst.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close backup: %w", err)
+	}
+
+	_ = os.Remove(dstPath)
+	if err := os.Rename(tmpPath, dstPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("finalize backup: %w", err)
+	}
+
 	return nil
 }
 

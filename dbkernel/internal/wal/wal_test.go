@@ -1,27 +1,40 @@
 package wal_test
 
 import (
+	"bytes"
 	"io"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
+	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func setupWalTest(t *testing.T) *wal.WalIO {
-	dir := t.TempDir()
+	return setupWalTestWithConfig(t, nil)
+}
 
-	walInstance, err := wal.NewWalIO(dir, "test_namespace", wal.NewDefaultConfig())
-	assert.NoError(t, err)
+func setupWalTestWithConfig(t *testing.T, cfg *wal.Config) *wal.WalIO {
+	t.Helper()
+
+	dir := t.TempDir()
+	if cfg == nil {
+		cfg = wal.NewDefaultConfig()
+	}
+
+	walInstance, err := wal.NewWalIO(dir, "test_namespace", cfg)
+	require.NoError(t, err)
 
 	t.Cleanup(func() {
-		err := walInstance.Close()
-		assert.NoError(t, err, "closing wal instance failed")
+		require.NoError(t, walInstance.Close(), "closing wal instance failed")
 	})
 
 	return walInstance
@@ -247,6 +260,34 @@ func TestWalIO_Suite(t *testing.T) {
 		assert.ErrorIs(t, err, wal.ErrWalNextOffset)
 		assert.Len(t, records, 0, "should return 0 transaction record")
 	})
+}
+
+func TestWalIO_BackupSegmentsAfter(t *testing.T) {
+	cfg := wal.NewDefaultConfig()
+	cfg.SegmentSize = 32 * 1024
+
+	walInstance := setupWalTestWithConfig(t, cfg)
+
+	payload := bytes.Repeat([]byte("x"), 8*1024)
+	for i := 0; i < 200; i++ {
+		_, err := walInstance.Append(payload)
+		require.NoError(t, err)
+	}
+
+	backupDir := filepath.Join(t.TempDir(), "backups")
+	backups, err := walInstance.BackupSegmentsAfter(0, backupDir)
+	require.NoError(t, err)
+	require.NotEmpty(t, backups)
+
+	for id, path := range backups {
+		assert.Greater(t, id, wal.SegID(0))
+		_, statErr := os.Stat(path)
+		assert.NoError(t, statErr)
+	}
+
+	_, err = walInstance.BackupSegmentsAfter(9999, backupDir)
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, walfs.ErrSegmentNotFound)
 }
 
 func TestReader_CloseMidway(t *testing.T) {

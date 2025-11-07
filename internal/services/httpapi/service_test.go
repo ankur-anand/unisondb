@@ -6,10 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,18 +23,26 @@ import (
 )
 
 type testServer struct {
-	service *Service
-	router  *mux.Router
-	engine  *dbkernel.Engine
+	service    *Service
+	router     *mux.Router
+	engine     *dbkernel.Engine
+	backupRoot string
 }
 
 func setupTestServer(t *testing.T) (*testServer, func()) {
+	return setupTestServerWithConfig(t, nil)
+}
+
+func setupTestServerWithConfig(t *testing.T, modify func(cfg *dbkernel.EngineConfig)) (*testServer, func()) {
 	t.Helper()
 
 	tmpDir := t.TempDir()
 
 	cfg := dbkernel.NewDefaultEngineConfig()
 	cfg.DBEngine = dbkernel.LMDBEngine
+	if modify != nil {
+		modify(cfg)
+	}
 
 	engine, err := dbkernel.NewStorageEngine(tmpDir, "test", cfg)
 	require.NoError(t, err)
@@ -50,9 +61,10 @@ func setupTestServer(t *testing.T) (*testServer, func()) {
 	}
 
 	return &testServer{
-		service: service,
-		router:  router,
-		engine:  engine,
+		service:    service,
+		router:     router,
+		engine:     engine,
+		backupRoot: filepath.Join(tmpDir, dbkernel.BackupRootDirName, "test"),
 	}, cleanup
 }
 
@@ -864,6 +876,105 @@ func TestGetCheckpoint_Success(t *testing.T) {
 	assert.GreaterOrEqual(t, resp.RecordProcessed, uint64(0))
 	assert.GreaterOrEqual(t, resp.SegmentID, uint32(0))
 	assert.GreaterOrEqual(t, resp.Offset, int64(0))
+}
+
+func TestBackupSegmentsAfter_Success(t *testing.T) {
+	ts, cleanup := setupTestServerWithConfig(t, func(cfg *dbkernel.EngineConfig) {
+		cfg.WalConfig.SegmentSize = 64 * 1024
+	})
+	defer cleanup()
+
+	payload := bytes.Repeat([]byte("x"), 8*1024)
+	for i := 0; i < 200; i++ {
+		key := fmt.Sprintf("key-%d", i)
+		require.NoError(t, ts.engine.PutKV([]byte(key), payload))
+	}
+
+	offset := ts.engine.CurrentOffset()
+	require.NotNil(t, offset)
+	require.Greater(t, offset.SegmentID, uint32(1), "expected WAL rotation to seal prior segments")
+
+	backupDir := filepath.Join("wal", "case-a")
+	reqBody := BackupSegmentsRequest{
+		AfterSegmentID: 0,
+		BackupDir:      backupDir,
+	}
+
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/wal/backup", reqBody)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var resp BackupSegmentsResponse
+	err := json.NewDecoder(rr.Body).Decode(&resp)
+	require.NoError(t, err)
+	require.NotEmpty(t, resp.Backups)
+
+	for _, entry := range resp.Backups {
+		assert.Greater(t, entry.SegmentID, uint32(0))
+		assert.True(t, strings.HasPrefix(entry.Path, ts.backupRoot))
+		_, statErr := os.Stat(entry.Path)
+		assert.NoError(t, statErr)
+	}
+}
+
+func TestBackupSegmentsAfter_NoSegments(t *testing.T) {
+	ts, cleanup := setupTestServerWithConfig(t, func(cfg *dbkernel.EngineConfig) {
+		cfg.WalConfig.SegmentSize = 64 * 1024
+	})
+	defer cleanup()
+
+	backupDir := "wal/empty"
+	reqBody := BackupSegmentsRequest{
+		AfterSegmentID: 99,
+		BackupDir:      backupDir,
+	}
+
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/wal/backup", reqBody)
+	assert.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestBackupSegmentsAfter_InvalidRequest(t *testing.T) {
+	ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	reqBody := map[string]any{
+		"afterSegmentId": 0,
+	}
+
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/wal/backup", reqBody)
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
+}
+
+func TestBtreeBackup_Success(t *testing.T) {
+	ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	require.NoError(t, ts.engine.PutKV([]byte("backup-key"), []byte("backup-value")))
+
+	backupPath := filepath.Join("snapshots", "btree.snapshot")
+	reqBody := BtreeBackupRequest{Path: backupPath}
+
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/btree/backup", reqBody)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var resp BtreeBackupResponse
+	err := json.NewDecoder(rr.Body).Decode(&resp)
+	require.NoError(t, err)
+	expectedPath := filepath.Join(ts.backupRoot, backupPath)
+	assert.Equal(t, expectedPath, resp.Path)
+	assert.Greater(t, resp.Bytes, int64(0))
+
+	info, err := os.Stat(expectedPath)
+	require.NoError(t, err)
+	assert.Greater(t, info.Size(), int64(0))
+}
+
+func TestBtreeBackup_InvalidRequest(t *testing.T) {
+	ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	reqBody := BtreeBackupRequest{}
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/btree/backup", reqBody)
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
 
 func TestInvalidJSON(t *testing.T) {
