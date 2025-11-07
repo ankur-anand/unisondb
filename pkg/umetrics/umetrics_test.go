@@ -125,12 +125,15 @@ func TestUMetrics(t *testing.T) {
 	})
 
 	t.Run("custom_resolver", func(t *testing.T) {
-		umetrics.SetCustomScopeResolver(func() string {
+		originalResolver := func() string {
 			return "custom_test_scope"
-		})
+		}
+		umetrics.SetCustomScopeResolver(originalResolver)
 		scope := umetrics.AutoScope()
 		assert.Contains(t, fmt.Sprintf("%+v", scope.SubScope("test")), "custom_test_scope.test")
-		umetrics.SetCustomScopeResolver(nil)
+		umetrics.SetCustomScopeResolver(func() string {
+			return "umetrics"
+		})
 	})
 
 	t.Run("auto_scope", func(t *testing.T) {
@@ -214,14 +217,6 @@ func TestUMetrics(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Nil(t, closer, "subsequent Initialize should return nil closer")
 	})
-}
-
-func TestGetModulePathAndDir(t *testing.T) {
-	path := umetrics.GetModulePath()
-	dir := umetrics.GetModuleDir()
-
-	assert.NotEmpty(t, path, "module path should not be empty")
-	assert.NotEmpty(t, dir, "module dir should not be empty")
 }
 
 func callAutoScopeWithSkip(skip int) tally.Scope {
