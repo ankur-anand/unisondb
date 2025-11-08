@@ -28,7 +28,7 @@ func PrintBanner() {
 
 	color.New(color.FgCyan, color.Bold).Println(bannerStr)
 
-	centerPrint("Distributed. Durable. Globally Synced.", maxWidth, color.FgHiBlack)
+	centerPrint("Database + Message Bus. Built for Edge.", maxWidth, color.FgHiBlack)
 	centerPrint("https://unisondb.io", maxWidth, color.FgHiBlack)
 }
 

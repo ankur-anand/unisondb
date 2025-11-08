@@ -28,4 +28,5 @@ venv
 certs
 !docs/*.png
 .gocache
+unisondb
 
