@@ -1,6 +1,6 @@
 ## UnisonDB
 
-> Store, stream, and sync instantly — UnisonDB is a log-native database that replicates like a message bus at the edge.
+> Store, stream, and sync instantly — **UnisonDB** is a **log-native, real-time database** that replicates like a **message bus for AI and Edge Computing**.
 
 <img src="docs/logo.svg" width="300" alt="UnisonDB" />
 
@@ -8,23 +8,13 @@
 [![Coverage Status](https://coveralls.io/repos/github/ankur-anand/unisondb/badge.svg?branch=main)](https://coveralls.io/github/ankur-anand/unisondb?branch=main)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Docs](https://img.shields.io/badge/UnisonDB-Getting%20Started-0b5fff?style=flat-square)](https://unisondb.io/docs/getting-started/)
-
-___
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange)](#)
-
-
-**Project Status: Alpha**  
-
-UnisonDB is currently in **active development**. Expect frequent updates and potential **breaking changes** as the system evolves toward its first beta release.  
-Contributions, issues, and feedback are highly encouraged.
-
 
 ## What UnisonDB Is
 
-UnisonDB is a log-native database that replicates like a message bus — built for distributed, edge-scale architectures.
-It merges the best of both worlds: the durability of a database and the reactivity of a streaming system.
+UnisonDB is an open-source database designed specifically for [**Edge AI**](https://www.ibm.com/think/topics/edge-ai) and [**Edge Computing**](https://en.wikipedia.org/wiki/Edge_computing).  
 
-Every write in UnisonDB is instantly available — stored durably, broadcast to replicas, and ready for local queries — all without external message buses, CDC pipelines, or sync drift.
+It is a **reactive**, [**log-native**](https://www.unisondb.io/docs/architecture/) and [**multi-model database**](https://en.wikipedia.org/wiki/Multi-model_database) built for real-time and edge-scale applications.  UnisonDB combines a [**B+Tree storage engine**](https://en.wikipedia.org/wiki/B%2B_tree) with WAL-based ([**Write-Ahead Logging**](https://en.wikipedia.org/wiki/Write-ahead_logging)) streaming replication, enabling near-instant fan-out replication across hundreds of nodes — all while preserving strong consistency and durability.
 
 ## Key Features
 - **Multi-Modal Storage**: Key-Value, Wide-Column, and Large Objects (LOB)
@@ -33,7 +23,6 @@ Every write in UnisonDB is instantly available — stored durably, broadcast to 
 - **Durable & Fast**: B+Tree storage with Write-Ahead Logging
 - **Edge-First Design**: Optimized for edge computing and local-first architectures
 - **Namespace Isolation**: Multi-tenancy support with namespace-based isolation
-
 
 ![storage architecture](docs/unison_overview.png)
 
@@ -63,13 +52,50 @@ curl -X PUT http://localhost:4000/api/v1/default/kv/mykey \
   -d '{"value":"bXl2YWx1ZQ=="}'
 ```
 
-Check [Getting Started](https://unisondb.io/docs/getting-started/) for more
+## Documentation
+
+1. [Getting Started with UnisonDB](https://unisondb.io/docs/getting-started/)
+2. [Complete Configuration Guide](https://unisondb.io/docs/getting-started/configurations/)
+3. [Architecture Overview](https://unisondb.io/docs/architecture/)
+4. [HTTP API Reference](https://unisondb.io/docs/api/http-api/)
+5. [Backup and Restore](https://unisondb.io/docs/operations/backup-restore/)
+6. [Deployment Topologies](https://unisondb.io/docs/deployment/)
+
+## Performance Testing: Local Replication
+
+### Test Setup
+
+We validated the WAL-based replication architecture using the `pkg/replicator` component in a local test environment. 
+We Fuzzed the Write Path with all supported operations including Put, BatchPut, Delete, and row-column mutations.
+This tests the core replication mechanics without network overhead.
+
+> Server Running on Digitalocean s-8vcpu-16gb-480gb-intel
+
+### Test Parameters
+
+* 1000 Concurrent Readers: Simulates heavy read load alongside writes
+* 1000 Operations per Second: Sustained write throughput
+* Mixed Workload: Combines small metadata updates (100B) with larger payloads (100KB)
+* Isolation Testing: Validates transaction isolation under concurrent access patterns
+
+Each replication stream operates as an independent WAL reader, capturing critical performance metrics:
+
+Physical Latency Tracking: Measures p50, p90, p99, and max latencies using timestamps
+
+<img src="./docs/replication_test.png">
+
+### Replication and Fuzzer(write path) Latency Under Pressure
+
+<img src="./docs/latency.jpg" width="400"> <img src="./docs/fuzzing_latency.jpg" width="400">
+
+### Replication Throughput
+
+<img src="./docs/replication_throughput.jpg" width="600">
 
 ## Why UnisonDB
 
 > Traditional databases persist. Stream systems propagate.
 UnisonDB does both — turning every write into a durable, queryable stream that replicates seamlessly across the edge.
-
 
 ### The Problem: Storage and Streaming Live in Different Worlds
 
@@ -361,37 +387,6 @@ Replication in UnisonDB is **WAL-based streaming** - designed around the WALFS r
 * Real-time streaming - Active tail following for low latency
 
 <img src="./docs/replication_flow.png">
-
-## Performance Testing: Local Replication
-
-### Test Setup
-
-We validated the WAL-based replication architecture using the `pkg/replicator` component in a local test environment. 
-We Fuzzed the Write Path with all supported operations including Put, BatchPut, Delete, and row-column mutations.
-This tests the core replication mechanics without network overhead.
-
-> Server Running on Digitalocean s-8vcpu-16gb-480gb-intel
-
-### Test Parameters
-
-* 1000 Concurrent Readers: Simulates heavy read load alongside writes
-* 1000 Operations per Second: Sustained write throughput
-* Mixed Workload: Combines small metadata updates (100B) with larger payloads (100KB)
-* Isolation Testing: Validates transaction isolation under concurrent access patterns
-
-Each replication stream operates as an independent WAL reader, capturing critical performance metrics:
-
-Physical Latency Tracking: Measures p50, p90, p99, and max latencies using timestamps
-
-<img src="./docs/replication_test.png">
-
-### Replication and Fuzzer(write path) Latency Under Pressure
-
-<img src="./docs/latency.jpg" width="400"> <img src="./docs/fuzzing_latency.jpg" width="400">
-
-### Replication Throughput
-
-<img src="./docs/replication_throughput.jpg" width="600">
 
 ### SET Throughput: Design Tradeoffs
 
