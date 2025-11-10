@@ -24,7 +24,7 @@ It is a **reactive**, [**log-native**](https://www.unisondb.io/docs/architecture
 - **Edge-First Design**: Optimized for edge computing and local-first architectures
 - **Namespace Isolation**: Multi-tenancy support with namespace-based isolation
 
-![storage architecture](docs/unison_overview.png)
+![storage architecture](docs/unisondb_overview.png)
 
 ## Use Cases
 
