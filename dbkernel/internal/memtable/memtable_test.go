@@ -601,3 +601,150 @@ func TestSamePrefix_RowKey(t *testing.T) {
 	assert.NotNil(t, values, "Returned value slice should not be nil for key: %s", val)
 	assert.Equal(t, 1, len(values), "only one row ")
 }
+
+func TestBloomFilter_KVOperations(t *testing.T) {
+	const capacity = 1 << 20
+	table := NewMemTable(capacity, nil, testNamespace, nil)
+
+	assert.NotNil(t, table.bloomFilter, "bloom filter should be initialized")
+
+	testKeys := [][]byte{
+		keycodec.KeyKV([]byte("key1")),
+		keycodec.KeyKV([]byte("key2")),
+		keycodec.KeyKV([]byte("key3")),
+		keycodec.KeyKV([]byte("key4")),
+		keycodec.KeyKV([]byte("key5")),
+	}
+
+	for _, key := range testKeys {
+		val := y.ValueStruct{
+			Value:    []byte("value-" + string(key)),
+			UserMeta: internal.EntryTypeKV,
+			Meta:     internal.LogOperationInsert,
+		}
+		err := table.Put(key, val)
+		assert.NoError(t, err, "Put should succeed")
+		assert.True(t, table.bloomFilter.Test(key), "bloom filter should contain key after Put")
+	}
+
+	for _, key := range testKeys {
+		result := table.Get(key)
+		assert.NotNil(t, result.Value, "Get should return value for existing key")
+		assert.Equal(t, "value-"+string(key), string(result.Value), "Get should return correct value")
+	}
+
+	nonExistentKeys := [][]byte{
+		keycodec.KeyKV([]byte("nonexistent1")),
+		keycodec.KeyKV([]byte("nonexistent2")),
+		keycodec.KeyKV([]byte("nonexistent3")),
+	}
+
+	for _, key := range nonExistentKeys {
+		assert.False(t, table.bloomFilter.Test(key), "bloom filter should not contain non-existent key")
+
+		result := table.Get(key)
+		assert.Nil(t, result.Value, "Get should return nil for non-existent key")
+	}
+}
+
+func TestBloomFilter_RowOperations(t *testing.T) {
+	mmTable, _ := setupMemTableWithLMDB(t, 1<<20)
+
+	rowKeys := [][]byte{
+		[]byte("row1"),
+		[]byte("row2"),
+		[]byte("row3"),
+	}
+
+	for _, rowKey := range rowKeys {
+		val := y.ValueStruct{
+			Value:    logcodec.SerializeRowUpdateEntry(rowKey, map[string][]byte{"col1": []byte("value1")}),
+			UserMeta: internal.EntryTypeRow,
+			Meta:     internal.LogOperationInsert,
+		}
+		err := mmTable.Put(rowKey, val)
+		assert.NoError(t, err, "Put should succeed for row key")
+
+		assert.True(t, mmTable.bloomFilter.Test(rowKey), "bloom filter should contain row key after Put")
+	}
+
+	for _, rowKey := range rowKeys {
+		result := mmTable.GetRowYValue(rowKey)
+		assert.NotNil(t, result, "GetRowYValue should return results for existing key")
+		assert.Greater(t, len(result), 0, "GetRowYValue should return at least one entry")
+	}
+
+	nonExistentRowKeys := [][]byte{
+		[]byte("nonexistent_row1"),
+		[]byte("nonexistent_row2"),
+		[]byte("nonexistent_row3"),
+	}
+
+	for _, rowKey := range nonExistentRowKeys {
+		assert.False(t, mmTable.bloomFilter.Test(rowKey), "bloom filter should not contain non-existent row key")
+		result := mmTable.GetRowYValue(rowKey)
+		assert.Nil(t, result, "GetRowYValue should return nil for non-existent key")
+	}
+}
+
+func TestBloomFilter_MVCCRows(t *testing.T) {
+	mmTable, _ := setupMemTableWithLMDB(t, 1<<20)
+
+	rowKey := []byte("mvcc_row")
+
+	for i := 0; i < 5; i++ {
+		val := y.ValueStruct{
+			Value: logcodec.SerializeRowUpdateEntry(rowKey, map[string][]byte{
+				fmt.Sprintf("col%d", i): []byte(fmt.Sprintf("value%d", i)),
+			}),
+			UserMeta: internal.EntryTypeRow,
+			Meta:     internal.LogOperationInsert,
+		}
+		err := mmTable.Put(rowKey, val)
+		assert.NoError(t, err, "Put should succeed for MVCC row")
+	}
+
+	assert.True(t, mmTable.bloomFilter.Test(rowKey), "bloom filter should contain MVCC row key")
+
+	results := mmTable.GetRowYValue(rowKey)
+	assert.NotNil(t, results, "GetRowYValue should return results")
+	assert.Equal(t, 5, len(results), "GetRowYValue should return all 5 MVCC versions")
+}
+
+func TestBloomFilter_ManyKeys(t *testing.T) {
+	const capacity = 10 << 20 // 10MB
+	table := NewMemTable(capacity, nil, testNamespace, nil)
+
+	numKeys := 1000
+	keys := make([][]byte, numKeys)
+
+	for i := 0; i < numKeys; i++ {
+		key := keycodec.KeyKV([]byte(fmt.Sprintf("key-%d", i)))
+		keys[i] = key
+		val := y.ValueStruct{
+			Value:    []byte(fmt.Sprintf("value-%d", i)),
+			UserMeta: internal.EntryTypeKV,
+			Meta:     internal.LogOperationInsert,
+		}
+		err := table.Put(key, val)
+		assert.NoError(t, err, "Put should succeed")
+	}
+
+	for i, key := range keys {
+		assert.True(t, table.bloomFilter.Test(key), "bloom filter should contain key %d", i)
+	}
+
+	falsePositives := 0
+	nonExistentTests := 1000
+
+	for i := 0; i < nonExistentTests; i++ {
+		key := keycodec.KeyKV([]byte(fmt.Sprintf("nonexistent-key-%d", i)))
+		if table.bloomFilter.Test(key) {
+			falsePositives++
+		}
+	}
+
+	// test very low false positive rate
+	assert.Less(t, falsePositives, 5, "bloom filter should have very low false positive rate")
+	t.Logf("False positives: %d out of %d tests (%.2f%%)", falsePositives, nonExistentTests, float64(falsePositives)/float64(nonExistentTests)*100)
+}

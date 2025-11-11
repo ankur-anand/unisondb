@@ -1,19 +1,40 @@
-import re
+import csv
+import sys
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
+# Check if file arguments are provided
+if len(sys.argv) < 4:
+    print("Usage: python compare_plot.py <unisondb_csv> <badgerdb_csv> <boltdb_csv>")
+    sys.exit(1)
+
 # Define benchmark file paths
 files = {
-    "UnisonDB": "unisondb_benchmark.txt",
-    "BadgerDB": "badger_benchmark.txt",
-    "BoltDB": "boltdb_benchmark.txt"
+    "UnisonDB": sys.argv[1],
+    "BadgerDB": sys.argv[2],
+    "BoltDB": sys.argv[3]
 }
 
 def parse_set_benchmark(filepath):
+    set_p50 = []
+    set_tp = []
+
     with open(filepath, "r") as f:
-        data = f.read()
-    set_p50 = [float(p) for p in re.findall(r'SET: [\d.]+ requests per second, p50=([\d.]+) msec', data)]
-    set_tp  = [float(t) for t in re.findall(r'SET: ([\d.]+) requests per second, p50=[\d.]+ msec', data)]
+        reader = csv.DictReader(f)
+        for row in reader:
+            # Skip header rows or test rows
+            if row['command'] == 'test':
+                continue
+
+            # Only parse SET commands
+            if row['command'] == 'SET':
+                try:
+                    set_tp.append(float(row['requests_per_sec']))
+                    set_p50.append(float(row['p50_ms']))
+                except ValueError:
+                    # Skip rows with non-numeric values
+                    continue
+
     return set_tp, set_p50
 
 # Color map per DB
