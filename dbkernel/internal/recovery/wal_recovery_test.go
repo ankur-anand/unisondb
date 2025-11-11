@@ -11,7 +11,6 @@ import (
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	kvdrivers2 "github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
-	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 )
@@ -54,7 +53,6 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 	allCommitedKeys := make(map[string]struct{})
 	unCommitedKeys := make(map[string]struct{})
 	allCommitedDeleteKeys := make(map[string]struct{})
-	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001)
 	totalRecordCount := 0
 	// 50 full insert value.
 	recordCount := 50
@@ -74,7 +72,6 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		recoveryInstance := &walRecovery{
 			store: db,
 			walIO: walInstance,
-			bloom: bloomFilter,
 		}
 		err := recoveryInstance.recoverWAL(nil)
 		assert.NoError(t, err)
@@ -123,7 +120,6 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		recoveryInstance := &walRecovery{
 			store: db,
 			walIO: walInstance,
-			bloom: bloomFilter,
 		}
 		err := recoveryInstance.recoverWAL(nil)
 		assert.NoError(t, err, "failed to recover wal")
@@ -161,7 +157,6 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		recoveryInstance := &walRecovery{
 			store: db,
 			walIO: walInstance,
-			bloom: bloomFilter,
 		}
 
 		recordCount = 10
@@ -243,7 +238,6 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		recoveryInstance := &walRecovery{
 			store: db,
 			walIO: walInstance,
-			bloom: bloomFilter,
 		}
 
 		err = recoveryInstance.recoverWAL(checkpoint)
@@ -288,7 +282,6 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		recoveryInstance := &walRecovery{
 			store: db,
 			walIO: walInstance,
-			bloom: bloomFilter,
 		}
 
 		err = recoveryInstance.recoverWAL(checkpoint)
@@ -348,7 +341,6 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		recovery := &walRecovery{
 			store: db,
 			walIO: walInstance,
-			bloom: bloomFilter,
 		}
 		err = recovery.recoverWAL(checkpoint)
 		assert.NoError(t, err, "failed to recover wal")
@@ -419,7 +411,6 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		recovery := &walRecovery{
 			store: db,
 			walIO: walInstance,
-			bloom: bloomFilter,
 		}
 		err = recovery.recoverWAL(checkpoint)
 		assert.NoError(t, err, "failed to recover wal")
@@ -453,7 +444,6 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		recoveryInstance := &walRecovery{
 			store: db,
 			walIO: walInstance,
-			bloom: bloomFilter,
 		}
 
 		err = recoveryInstance.recoverWAL(checkpoint)
@@ -488,7 +478,6 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		recoveryInstance := &walRecovery{
 			store: db,
 			walIO: walInstance,
-			bloom: bloomFilter,
 		}
 
 		err = recoveryInstance.recoverWAL(checkpoint)
@@ -528,7 +517,6 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		recoveryInstance := &walRecovery{
 			store: db,
 			walIO: walInstance,
-			bloom: bloomFilter,
 		}
 
 		err = recoveryInstance.recoverWAL(checkpoint)
@@ -579,7 +567,6 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		recoveryInstance := &walRecovery{
 			store: db,
 			walIO: walInstance,
-			bloom: bloomFilter,
 		}
 
 		err = recoveryInstance.recoverWAL(checkpoint)
@@ -620,7 +607,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 
 		lastOffset, err = walInstance.Append(lastRecord.FBEncode(1024))
 
-		recoveryInstance := NewWalRecovery(db, walInstance, bloomFilter)
+		recoveryInstance := NewWalRecovery(db, walInstance)
 
 		err = recoveryInstance.Recover(checkpoint)
 		assert.NoError(t, err, "failed to recover wal")
@@ -656,23 +643,6 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 			value, err := db.GetKV([]byte(key))
 			assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound)
 			assert.Nil(t, value, "deleted key value should be nil %s", key)
-		}
-	})
-
-	t.Run("bloom_filter_validator", func(t *testing.T) {
-		for k := range allCommitedKeys {
-			ok := bloomFilter.Test([]byte(k))
-			assert.True(t, ok)
-		}
-
-		for k := range insertedRows {
-			ok := bloomFilter.Test([]byte(k))
-			assert.True(t, ok)
-		}
-
-		for k := range cleanupKVEntries {
-			ok := bloomFilter.Test([]byte(k))
-			assert.True(t, ok)
 		}
 	})
 

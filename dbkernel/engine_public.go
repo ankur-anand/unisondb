@@ -431,10 +431,6 @@ func (e *Engine) GetKV(key []byte) ([]byte, error) {
 		// Retrieve entry from MemTable
 		e.mu.RLock()
 		defer e.mu.RUnlock()
-		// fast negative check
-		if !e.bloom.Test(key) {
-			return y.ValueStruct{}, ErrKeyNotFound
-		}
 		yValue := e.activeMemTable.Get(key)
 		if yValue.Meta == byte(logrecord.LogOperationTypeNoOperation) {
 			// first latest value
@@ -606,9 +602,6 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 		e.mu.RLock()
 		defer e.mu.RUnlock()
 
-		if !e.bloom.Test(key) {
-			return nil, ErrKeyNotFound
-		}
 		first := e.activeMemTable.GetRowYValue(key)
 		if len(first) != 0 && first[len(first)-1].Meta == byte(logrecord.LogOperationTypeDeleteRowByKey) {
 			return nil, ErrKeyNotFound
@@ -647,6 +640,9 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 		return nil, err
 	}
 
+	// row was found in dataStore
+	foundInDataStore := err == nil
+
 	// ensure non-nil map before merging memtable deltas.
 	if columnsValue == nil {
 		columnsValue = make(map[string][]byte)
@@ -658,6 +654,13 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 		if predicate != nil && !predicate(columnKey) {
 			delete(columnsValue, columnKey)
 		}
+	}
+
+	// no columns were found and the row doesn't exist in either memtables or dataStore,
+	// return ErrKeyNotFound. If there's memtable data (vs is not empty), the row was touched
+	// at some point, even if all columns were deleted.
+	if len(columnsValue) == 0 && len(vs) == 0 && !foundInDataStore {
+		return nil, ErrKeyNotFound
 	}
 
 	return columnsValue, nil
@@ -771,16 +774,13 @@ func (e *Engine) GetLOB(key []byte) ([]byte, error) {
 	defer timer.Stop()
 
 	e.mu.RLock()
-	inBloom := e.bloom.Test(key)
 	var yv y.ValueStruct
-	if inBloom {
-		yv = e.activeMemTable.Get(key)
-		if yv.Meta == byte(logrecord.LogOperationTypeNoOperation) {
-			for i := len(e.sealedMemTables) - 1; i >= 0; i-- {
-				if val := e.sealedMemTables[i].Get(key); val.Meta != byte(logrecord.LogOperationTypeNoOperation) {
-					yv = val
-					break
-				}
+	yv = e.activeMemTable.Get(key)
+	if yv.Meta == byte(logrecord.LogOperationTypeNoOperation) {
+		for i := len(e.sealedMemTables) - 1; i >= 0; i-- {
+			if val := e.sealedMemTables[i].Get(key); val.Meta != byte(logrecord.LogOperationTypeNoOperation) {
+				yv = val
+				break
 			}
 		}
 	}

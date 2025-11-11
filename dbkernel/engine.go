@@ -1,7 +1,6 @@
 package dbkernel
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,7 +22,6 @@ import (
 	kvdrivers2 "github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/pkg/umetrics"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
-	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/dustin/go-humanize"
 	"github.com/gofrs/flock"
@@ -131,7 +129,6 @@ type Engine struct {
 
 	fileLock              *flock.Flock
 	wg                    *sync.WaitGroup
-	bloom                 *bloom.BloomFilter
 	activeMemTable        *memtable.MemTable
 	sealedMemTables       []*memtable.MemTable
 	flushReqSignal        chan struct{}
@@ -279,8 +276,6 @@ func (e *Engine) initStorage(dataDir, namespace string, conf *EngineConfig) erro
 	}
 
 	mTable := memtable.NewMemTable(conf.ArenaSize, walIO, namespace, e.newTxnBatcher)
-	bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001) // 1M keys, 0.01% false positives
-	e.bloom = bloomFilter
 	e.activeMemTable = mTable
 	e.walSyncer = walIO
 	return nil
@@ -345,28 +340,7 @@ func (e *Engine) loadMetaValues() error {
 	e.writeSeenCounter.Store(metadata.RecordProcessed)
 	e.opsFlushedCounter.Store(metadata.RecordProcessed)
 
-	// Recover WAL logs and bloom filter on startup
-	err = e.loadBloomFilter()
-	if err != nil && !errors.Is(err, ErrKeyNotFound) {
-		return err
-	}
-
 	return nil
-}
-
-func (e *Engine) loadBloomFilter() error {
-	result, err := e.dataStore.RetrieveMetadata(internal.SysKeyBloomFilter)
-
-	if len(result) != 0 {
-		// Deserialize Bloom Filter
-		buf := bytes.NewReader(result)
-		_, err = e.bloom.ReadFrom(buf)
-		if err != nil {
-			return fmt.Errorf("failed to deserialize bloom filter: %w", err)
-		}
-	}
-
-	return err
 }
 
 // recoverWAL recovers the wal if any pending writes are still not visible.
@@ -376,7 +350,7 @@ func (e *Engine) recoverWAL() error {
 		return fmt.Errorf("recover WAL failed %w", err)
 	}
 
-	walRecovery := recovery.NewWalRecovery(e.dataStore, e.walIO, e.bloom)
+	walRecovery := recovery.NewWalRecovery(e.dataStore, e.walIO)
 	startTime := time.Now()
 	if err := walRecovery.Recover(checkpoint); err != nil {
 		return err
@@ -632,11 +606,6 @@ func (e *Engine) memTableWrite(key []byte, v y.ValueStruct) error {
 		}
 	}
 
-	// bloom filter also need to be protected for concurrent ops.
-	if err == nil {
-		//put inside the bloom filter.
-		e.bloom.Add(key)
-	}
 	e.changeNotifier.Notify(e.ctx, key, decodeOperation(v), decodeEntryType(v))
 	return err
 }
@@ -668,19 +637,6 @@ func (e *Engine) rotateMemTable() {
 	default:
 		slog.Debug("queue signal channel full")
 	}
-}
-
-func (e *Engine) saveBloomFilter() error {
-	// Serialize Bloom Filter
-	var buf bytes.Buffer
-	e.mu.RLock()
-	_, err := e.bloom.WriteTo(&buf)
-	e.mu.RUnlock()
-	if err != nil {
-		return err
-	}
-
-	return e.dataStore.StoreMetadata(internal.SysKeyBloomFilter, buf.Bytes())
 }
 
 // asyncMemTableFlusher flushes the sealed mem table.
@@ -913,10 +869,6 @@ func (e *Engine) fSyncStore() {
 	e.taggedScope.Counter(mKeyFSyncTotal).Inc(1)
 
 	err := internal.SaveMetadata(e.dataStore, fm.metadata.Pos, fm.metadata.RecordProcessed)
-	if err != nil {
-		log.Fatal("[dbkernel] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
-	}
-	err = e.saveBloomFilter()
 	if err != nil {
 		log.Fatal("[dbkernel] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
 	}

@@ -17,7 +17,6 @@ import (
 	"github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/pkg/umetrics"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
-	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
 	"go.etcd.io/bbolt"
@@ -80,21 +79,7 @@ func TestStorageEngine_Suite(t *testing.T) {
 		assert.Equal(t, uint64(100), engine.opsFlushedCounter.Load(), "expected opsFlushed counter to be 100")
 		assert.Equal(t, uint64(100), engine.writeSeenCounter.Load(), "expected writeSeenCounter counter to be 100")
 
-		result, err := engine.dataStore.RetrieveMetadata(internal.SysKeyBloomFilter)
-		assert.NoError(t, err, "RetrieveMetadata should not error for bloom filter after flush")
-		// Deserialize Bloom Filter
-		buf := bytes.NewReader(result)
-		bloomFilter := bloom.NewWithEstimates(1_000_000, 0.0001)
-		_, err = bloomFilter.ReadFrom(buf)
-		assert.NoError(t, err, "bloom filter should not error")
-
-		// both the bloom should have the presence of value.
-		for k := range insertedKV {
-			assert.True(t, bloomFilter.Test([]byte(k)))
-			assert.True(t, engine.bloom.Test([]byte(k)))
-		}
-
-		result, err = engine.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
+		result, err := engine.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
 		assert.NoError(t, err, "RetrieveMetadata should not error")
 		metadata := internal.UnmarshalMetadata(result)
 		assert.Equal(t, uint64(100), metadata.RecordProcessed, "metadata.RecordProcessed should be 100")
@@ -117,10 +102,6 @@ func TestStorageEngine_Suite(t *testing.T) {
 		}
 
 		assert.Equal(t, uint64(1100), engine.writeSeenCounter.Load(), "expected writeSeenCounter counter to be 100")
-		// both the bloom should have the presence of value.
-		for k := range insertedKV {
-			assert.True(t, engine.bloom.Test([]byte(k)))
-		}
 
 		result, err := engine.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
 		assert.NoError(t, err, "RetrieveMetadata should not error")
@@ -894,7 +875,6 @@ func TestBtreeSyncInterval(t *testing.T) {
 		btreeFlushInterval:        10 * time.Millisecond,
 		btreeFlushIntervalEnabled: true,
 		dataStore:                 mt,
-		bloom:                     bloom.NewWithEstimates(1_000_000, 0.0001),
 		sealedMemTables:           make([]*memtable.MemTable, 0),
 	}
 

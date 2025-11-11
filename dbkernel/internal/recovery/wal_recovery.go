@@ -9,7 +9,6 @@ import (
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
-	"github.com/bits-and-blooms/bloom/v3"
 )
 
 // WalRecovery recovers WAL entries from WAL files and persists them into the B-tree store.
@@ -18,14 +17,13 @@ type WalRecovery struct {
 }
 
 // NewWalRecovery creates and returns a new initialized instance of WalRecovery.
-func NewWalRecovery(store internal.BTreeStore, walIO *wal.WalIO, bloom *bloom.BloomFilter) *WalRecovery {
+func NewWalRecovery(store internal.BTreeStore, walIO *wal.WalIO) *WalRecovery {
 	return &WalRecovery{
 		w: &walRecovery{
 			store:            store,
 			walIO:            walIO,
 			recoveredCount:   0,
 			lastRecoveredPos: nil,
-			bloom:            bloom,
 		},
 	}
 }
@@ -52,7 +50,6 @@ type walRecovery struct {
 	walIO            *wal.WalIO
 	recoveredCount   int
 	lastRecoveredPos *wal.Offset
-	bloom            *bloom.BloomFilter
 }
 
 // recoverWAL recover wal from last check point saved in btree store.
@@ -125,7 +122,6 @@ func (wr *walRecovery) handleInsert(record *logrecord.LogRecord) error {
 		var values [][]byte
 		for _, entry := range logEntry.Entries {
 			kvEntry := logcodec.DeserializeKVEntry(entry)
-			wr.bloom.Add(kvEntry.Key)
 			keys = append(keys, kvEntry.Key)
 			values = append(values, kvEntry.Value)
 		}
@@ -135,7 +131,6 @@ func (wr *walRecovery) handleInsert(record *logrecord.LogRecord) error {
 		var values []map[string][]byte
 		for _, entry := range logEntry.Entries {
 			rowEntry := logcodec.DeserializeRowUpdateEntry(entry)
-			wr.bloom.Add(rowEntry.Key)
 			keys = append(keys, rowEntry.Key)
 			values = append(values, rowEntry.Columns)
 		}
@@ -218,7 +213,6 @@ func (wr *walRecovery) handleKVValuesTxn(record *logrecord.LogRecord) error {
 		logEntry := logcodec.DeserializeFBRootLogRecord(pRecord)
 		for _, entry := range logEntry.Entries {
 			kvEntry := logcodec.DeserializeKVEntry(entry)
-			wr.bloom.Add(kvEntry.Key)
 			keys = append(keys, kvEntry.Key)
 			values = append(values, kvEntry.Value)
 		}
@@ -251,7 +245,6 @@ func (wr *walRecovery) handleRowColumnTxn(record *logrecord.LogRecord) error {
 		logEntry := logcodec.DeserializeFBRootLogRecord(pRecord)
 		for _, entry := range logEntry.Entries {
 			rowEntry := logcodec.DeserializeRowUpdateEntry(entry)
-			wr.bloom.Add(rowEntry.Key)
 			keys = append(keys, rowEntry.Key)
 			values = append(values, rowEntry.Columns)
 		}
@@ -295,6 +288,5 @@ func (wr *walRecovery) handleChunkedValuesTxn(record *logrecord.LogRecord) error
 	count := len(records)
 	err = wr.store.SetLobChunks(key, values, checksum)
 	wr.recoveredCount += count
-	wr.bloom.Add(key)
 	return err
 }
