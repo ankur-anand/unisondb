@@ -12,6 +12,7 @@ import (
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
+	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/dgraph-io/badger/v4/skl"
 	"github.com/dgraph-io/badger/v4/y"
 )
@@ -45,11 +46,20 @@ type MemTable struct {
 
 	chunkedFlushed int
 	tsGenerator    *tsGenerator
+	bloomFilter    *bloom.BloomFilter
 }
 
 // NewMemTable returns an initialized mem-table.
 func NewMemTable(capacity int64, wIO *wal.WalIO, namespace string,
 	newTxnBatcher func(maxBatchSize int) internal.TxnBatcher) *MemTable {
+	// assuming average entry size of 100 bytes (key + value + overhead)
+	estimatedKeys := uint(capacity / 100)
+	if estimatedKeys < 1000 {
+		estimatedKeys = 1000
+	}
+
+	bloomFilter := bloom.NewWithEstimates(estimatedKeys, 0.0001)
+
 	return &MemTable{
 		skipList:      skl.NewSkiplist(capacity),
 		capacity:      capacity,
@@ -57,6 +67,7 @@ func NewMemTable(capacity int64, wIO *wal.WalIO, namespace string,
 		namespace:     namespace,
 		newTxnBatcher: newTxnBatcher,
 		tsGenerator:   &tsGenerator{},
+		bloomFilter:   bloomFilter,
 	}
 }
 
@@ -91,6 +102,9 @@ func (table *MemTable) Put(key []byte, val y.ValueStruct) error {
 	table.opCount++
 	table.skipList.Put(putKey, val)
 	table.bytesStored = table.bytesStored + len(key) + len(val.Value)
+
+	table.bloomFilter.Add(key)
+
 	return nil
 }
 
@@ -119,11 +133,18 @@ func (table *MemTable) GetFirstOffset() *wal.Offset {
 }
 
 func (table *MemTable) Get(key []byte) y.ValueStruct {
+	if !table.bloomFilter.Test(key) {
+		return y.ValueStruct{}
+	}
 	return table.skipList.Get(y.KeyWithTs(key, 0))
 }
 
 // GetRowYValue returns all the mem table entries associated with the provided rowKey.
 func (table *MemTable) GetRowYValue(rowKey []byte) []y.ValueStruct {
+	if !table.bloomFilter.Test(rowKey) {
+		return nil
+	}
+
 	var result []y.ValueStruct
 	it := table.skipList.NewIterator()
 	defer func(it *skl.Iterator) {

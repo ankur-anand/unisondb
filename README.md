@@ -61,6 +61,32 @@ curl -X PUT http://localhost:4000/api/v1/default/kv/mykey \
 5. [Backup and Restore](https://unisondb.io/docs/operations/backup-restore/)
 6. [Deployment Topologies](https://unisondb.io/docs/deployment/)
 
+## Redis-Compatible Benchmark: UnisonDB vs BadgerDB vs BoltDB
+
+This benchmark compares the **write and read performance** of three databases — **UnisonDB**, **BadgerDB**, and **BoltDB** — using a Redis-compatible interface and the official [`redis-benchmark`](https://redis.io/docs/latest/operate/oss_and_stack/management/optimization/benchmarks/) tool.
+
+### What We Measured
+
+- **Throughput**: Requests per second for `SET` (write) and `GET` (read) operations
+- **Latency**: p50 latency in milliseconds
+- **Workload**: 50 iterations of mixed `SET` and `GET` operations (200k ops per run)
+- **Concurrency**: 100 parallel clients, 10 pipelined requests, 4 threads
+- **Payload Size**: 1KB
+
+### Test Environment
+
+```
+Chip: Apple M2 Pro
+Total Number of Cores: 10 (6 performance and 4 efficiency)
+Memory: 16 GB
+```
+
+All three databases were tested under identical conditions to highlight differences in write path efficiency, read performance, and I/O characteristics. The Redis-compatible server implementation can be found in `internal/benchtests/cmd/redis-server/`.
+
+### Results
+
+<img src="docs/ubb_compare.png" alt="UnisonDB, BadgerDB, BoltDB Comparison" />
+
 ## Performance Testing: Local Replication
 
 ### Test Setup

@@ -1,6 +1,5 @@
 #!/bin/bash
 
-runs=100
 engine="$1"
 
 if [ -z "$engine" ]; then
@@ -8,9 +7,39 @@ if [ -z "$engine" ]; then
   exit 1
 fi
 
-echo "Running redis-benchmark $runs times for engine: $engine"
+ # 200k ops
+TOTAL_REQ=200000
+# 100 parallel clients       
+CONNECTIONS=100
+ # 10 pipelined requests per connection          
+PIPELINE=10             
+THREADS=4                
+RUNS=50                 
+OUTFILE="benchmark_${engine}_$(date +%Y%m%d%H%M%S).csv"
 
-for i in $(seq 1 $runs); do
-  redis-benchmark -d 1000 -t set,get -r 10000 -n 10000 -p 6380 -q
+echo "Benchmarking engine: $engine"
+echo "Requests: $TOTAL_REQ, Connections: $CONNECTIONS, Pipeline: $PIPELINE, Threads: $THREADS"
+echo "Running $RUNS iterations..."
+
+echo "timestamp,run,command,requests_per_sec,p50_ms" > "$OUTFILE"
+
+for i in $(seq 1 $RUNS); do
+  timestamp=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+  echo "[$timestamp] Run $i/$RUNS for engine: $engine"
+
+  redis-benchmark \
+    -d 1000 \
+    -t set,get \
+    -r 200000 \
+    -n "$TOTAL_REQ" \
+    -c "$CONNECTIONS" \
+    -P "$PIPELINE" \
+    --threads "$THREADS" \
+    -p 6380 \
+    -q \
+    --csv |
+  awk -v ts="$timestamp" -v run="$i" -F',' '{print ts "," run "," $1 "," $2 "," $3}' >> "$OUTFILE"
 done
 
+echo "All $RUNS runs completed."
+echo "Results saved to $OUTFILE"

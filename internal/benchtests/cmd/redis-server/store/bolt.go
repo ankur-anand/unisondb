@@ -23,6 +23,9 @@ type BoltStore struct {
 func NewBoltStore(namespace, dir string) (*BoltStore, error) {
 	fp := filepath.Join(dir, namespace+".boltdb")
 	db, err := bbolt.Open(fp, 0600, nil)
+	if err != nil {
+		return nil, err
+	}
 	db.NoSync = true
 	ticker := time.NewTicker(time.Second)
 	go func() {
@@ -33,9 +36,6 @@ func NewBoltStore(namespace, dir string) (*BoltStore, error) {
 			}
 		}
 	}()
-	if err != nil {
-		return nil, err
-	}
 	return &BoltStore{
 		name:   namespace,
 		db:     db,
