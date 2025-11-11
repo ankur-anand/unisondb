@@ -71,6 +71,7 @@ This benchmark compares the **write and read performance** of three databases â€
 - **Latency**: p50 latency in milliseconds
 - **Workload**: 50 iterations of mixed `SET` and `GET` operations (200k ops per run)
 - **Concurrency**: 100 parallel clients, 10 pipelined requests, 4 threads
+- **Payload Size**: 1KB
 
 ### Test Environment
 
