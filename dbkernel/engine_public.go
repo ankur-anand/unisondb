@@ -337,14 +337,6 @@ func hasNewWriteSince(current, lastSeen *Offset) bool {
 		(current.SegmentID == lastSeen.SegmentID && current.Offset > lastSeen.Offset)
 }
 
-func (e *Engine) namespaceDir() string {
-	return filepath.Join(e.dataDir, e.namespace)
-}
-
-func (e *Engine) walDir() string {
-	return filepath.Join(e.namespaceDir(), walDirName)
-}
-
 func isWithinDir(root, target string) bool {
 	root = filepath.Clean(root)
 	target = filepath.Clean(target)
