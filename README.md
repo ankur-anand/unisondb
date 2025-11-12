@@ -61,6 +61,10 @@ curl -X PUT http://localhost:4000/api/v1/default/kv/mykey \
 5. [Backup and Restore](https://unisondb.io/docs/operations/backup-restore/)
 6. [Deployment Topologies](https://unisondb.io/docs/deployment/)
 
+UnisonDB implements a pluggable storage backend architecture supporting two BTree implementations:
+  - [BoltDB](https://github.com/etcd-io/bbolt): Single-file, ACID-compliant BTree.
+  - [LMDB](https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database): Memory-mapped ACID-compliant BTree with copy-on-write semantics.
+
 ## Redis-Compatible Benchmark: UnisonDB vs BadgerDB vs BoltDB
 
 This benchmark compares the **write and read performance** of three databases â€” **UnisonDB**, **BadgerDB**, and **BoltDB** â€” using a Redis-compatible interface and the official [`redis-benchmark`](https://redis.io/docs/latest/operate/oss_and_stack/management/optimization/benchmarks/) tool.
@@ -70,7 +74,7 @@ This benchmark compares the **write and read performance** of three databases â€
 - **Throughput**: Requests per second for `SET` (write) and `GET` (read) operations
 - **Latency**: p50 latency in milliseconds
 - **Workload**: 50 iterations of mixed `SET` and `GET` operations (200k ops per run)
-- **Concurrency**: 100 parallel clients, 10 pipelined requests, 4 threads
+- **Concurrency**: 10 parallel clients, 10 pipelined requests, 4 threads
 - **Payload Size**: 1KB
 
 ### Test Environment
@@ -79,13 +83,15 @@ This benchmark compares the **write and read performance** of three databases â€
 Chip: Apple M2 Pro
 Total Number of Cores: 10 (6 performance and 4 efficiency)
 Memory: 16 GB
+Unisondb Btree Backend - LMDB
 ```
 
 All three databases were tested under identical conditions to highlight differences in write path efficiency, read performance, and I/O characteristics. The Redis-compatible server implementation can be found in `internal/benchtests/cmd/redis-server/`.
 
+
 ### Results
 
-<img src="docs/ubb_compare.png" alt="UnisonDB, BadgerDB, BoltDB Comparison" />
+<img src="docs/ubbl_compare.png" alt="UnisonDB, BadgerDB, BoltDB, LMDB Comparison" />
 
 ## Performance Testing: Local Replication
 
@@ -413,27 +419,6 @@ Replication in UnisonDB is **WAL-based streaming** - designed around the WALFS r
 * Real-time streaming - Active tail following for low latency
 
 <img src="./docs/replication_flow.png">
-
-### SET Throughput: Design Tradeoffs
-
-* UnisonDB shows lower SET throughput than pure LSM databases â€” by design.
-* Writes are globally ordered under a lock to ensure replication-safe WAL entries.
-* This favors consistency and durability over raw speed.
-* Still, UnisonDB is nearly 2x faster than BoltDB, a pure B+Tree store.
-* Even with ordered writes, it outperforms BoltDB while offering stronger replication guarantees.
-
-<img src="./docs/tradeoff.jpg" width="400">
-
-#### When UnisonDB Wins:
-
-* Read-heavy workloads (edge nodes, replicas)
-* Predictable latency requirements (no background compaction)
-* Replication is critical (built-in, transactional)
-
-#### When to Choose LSM Instead:
-
-* Pure write throughput is #1 priority.
-* Read amplification is acceptable
 
 ---
 

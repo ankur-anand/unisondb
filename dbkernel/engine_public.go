@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/memtable"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/keycodec"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
@@ -57,6 +58,12 @@ var (
 		30 * time.Minute,
 		1 * time.Hour,
 	}
+)
+
+const (
+	metaNoOp           = byte(logrecord.LogOperationTypeNoOperation)
+	metaDelete         = byte(logrecord.LogOperationTypeDelete)
+	metaDeleteRowByKey = byte(logrecord.LogOperationTypeDeleteRowByKey)
 )
 
 // Offset represents the offset in the wal.
@@ -204,6 +211,14 @@ func (e *Engine) OpsFlushedCount() uint64 {
 	return e.opsFlushedCounter.Load()
 }
 
+// SealedMemTableCount returns the current number of sealed memtables.
+func (e *Engine) SealedMemTableCount() int {
+	e.mu.RLock()
+	count := len(e.sealedMemTables)
+	e.mu.RUnlock()
+	return count
+}
+
 // CurrentOffset returns the current offset that it has seen.
 func (e *Engine) CurrentOffset() *Offset {
 	return e.currentOffset.Load()
@@ -337,14 +352,6 @@ func hasNewWriteSince(current, lastSeen *Offset) bool {
 		(current.SegmentID == lastSeen.SegmentID && current.Offset > lastSeen.Offset)
 }
 
-func (e *Engine) namespaceDir() string {
-	return filepath.Join(e.dataDir, e.namespace)
-}
-
-func (e *Engine) walDir() string {
-	return filepath.Join(e.namespaceDir(), walDirName)
-}
-
 func isWithinDir(root, target string) bool {
 	root = filepath.Clean(root)
 	target = filepath.Clean(target)
@@ -427,52 +434,33 @@ func (e *Engine) GetKV(key []byte) ([]byte, error) {
 	timer := getScope.Timer(mRequestLatencySeconds).Start()
 	defer timer.Stop()
 
-	checkFunc := func() (y.ValueStruct, error) {
-		// Retrieve entry from MemTable
-		e.mu.RLock()
-		defer e.mu.RUnlock()
-		// fast negative check
-		if !e.bloom.Test(key) {
-			return y.ValueStruct{}, ErrKeyNotFound
+	e.mu.RLock()
+	activeMemTable := e.activeMemTable
+	sealedTables := append([]*memtable.MemTable(nil), e.sealedMemTables...)
+	e.mu.RUnlock()
+
+	yValue := activeMemTable.Get(key)
+
+	if yValue.Meta != metaNoOp {
+		if yValue.Meta == metaDelete {
+			return nil, ErrKeyNotFound
 		}
-		yValue := e.activeMemTable.Get(key)
-		if yValue.Meta == byte(logrecord.LogOperationTypeNoOperation) {
-			// first latest value
-			for i := len(e.sealedMemTables) - 1; i >= 0; i-- {
-				if val := e.sealedMemTables[i].Get(key); val.Meta != byte(logrecord.LogOperationTypeNoOperation) {
-					return val, nil
-				}
+
+		return yValue.Value, nil
+	}
+
+	for i := len(sealedTables) - 1; i >= 0; i-- {
+		if val := sealedTables[i].Get(key); val.Meta != metaNoOp {
+			yValue = val
+			if yValue.Meta == metaDelete {
+				return nil, ErrKeyNotFound
 			}
+
+			return yValue.Value, nil
 		}
-		return yValue, nil
 	}
 
-	yValue, err := checkFunc()
-	if err != nil {
-		return nil, err
-	}
-
-	// if the mem table doesn't have this key associated action or log.
-	// directly go to the boltdb to fetch the same.
-	if yValue.Meta == byte(logrecord.LogOperationTypeNoOperation) {
-		return e.dataStore.GetKV(key)
-	}
-
-	// key deleted
-	if yValue.Meta == byte(logrecord.LogOperationTypeDelete) {
-		return nil,
-			ErrKeyNotFound
-	}
-
-	if yValue.UserMeta == internal.EntryTypeChunked {
-		record, err := internal.GetWalRecord(yValue, e.walIO)
-		if err != nil {
-			return nil, err
-		}
-		return e.reconstructChunkedValue(record)
-	}
-
-	return yValue.Value, nil
+	return e.dataStore.GetKV(key)
 }
 
 // PutColumnsForRow inserts or updates the provided column entries.
@@ -601,37 +589,26 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 	timer := rowGetScope.Timer(mRequestLatencySeconds).Start()
 	defer timer.Stop()
 
-	checkFunc := func() ([]y.ValueStruct, error) {
-		// Retrieve entry from MemTable
-		e.mu.RLock()
-		defer e.mu.RUnlock()
+	e.mu.RLock()
+	activeMemTable := e.activeMemTable
+	sealedTables := append([]*memtable.MemTable(nil), e.sealedMemTables...)
+	e.mu.RUnlock()
 
-		if !e.bloom.Test(key) {
-			return nil, ErrKeyNotFound
-		}
-		first := e.activeMemTable.GetRowYValue(key)
-		if len(first) != 0 && first[len(first)-1].Meta == byte(logrecord.LogOperationTypeDeleteRowByKey) {
-			return nil, ErrKeyNotFound
-		}
-		// get the columns value from the old sealed table to new mem table.
-		// and build the column value.
-		var vs []y.ValueStruct
-		for _, sm := range e.sealedMemTables {
-			v := sm.GetRowYValue(key)
-			if len(v) != 0 {
-				vs = append(vs, v...)
-			}
-		}
-		if len(first) != 0 {
-			vs = append(vs, first...)
-		}
-
-		return vs, nil
+	first := activeMemTable.GetRowYValue(key)
+	if len(first) != 0 && first[len(first)-1].Meta == metaDeleteRowByKey {
+		return nil, ErrKeyNotFound
 	}
 
-	vs, err := checkFunc()
-	if err != nil {
-		return nil, err
+	var vs []y.ValueStruct
+	for _, sm := range sealedTables {
+		v := sm.GetRowYValue(key)
+		if len(v) != 0 {
+			vs = append(vs, v...)
+		}
+	}
+
+	if len(first) != 0 {
+		vs = append(vs, first...)
 	}
 
 	predicateFunc := func(columnKey []byte) bool {
@@ -647,6 +624,9 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 		return nil, err
 	}
 
+	// row was found in dataStore
+	foundInDataStore := err == nil
+
 	// ensure non-nil map before merging memtable deltas.
 	if columnsValue == nil {
 		columnsValue = make(map[string][]byte)
@@ -658,6 +638,13 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 		if predicate != nil && !predicate(columnKey) {
 			delete(columnsValue, columnKey)
 		}
+	}
+
+	// no columns were found and the row doesn't exist in either memtables or dataStore,
+	// return ErrKeyNotFound. If there's memtable data (vs is not empty), the row was touched
+	// at some point, even if all columns were deleted.
+	if len(columnsValue) == 0 && len(vs) == 0 && !foundInDataStore {
+		return nil, ErrKeyNotFound
 	}
 
 	return columnsValue, nil
@@ -771,20 +758,20 @@ func (e *Engine) GetLOB(key []byte) ([]byte, error) {
 	defer timer.Stop()
 
 	e.mu.RLock()
-	inBloom := e.bloom.Test(key)
-	var yv y.ValueStruct
-	if inBloom {
-		yv = e.activeMemTable.Get(key)
-		if yv.Meta == byte(logrecord.LogOperationTypeNoOperation) {
-			for i := len(e.sealedMemTables) - 1; i >= 0; i-- {
-				if val := e.sealedMemTables[i].Get(key); val.Meta != byte(logrecord.LogOperationTypeNoOperation) {
-					yv = val
-					break
-				}
+	activeMemTable := e.activeMemTable
+	sealedTables := append([]*memtable.MemTable(nil), e.sealedMemTables...)
+	e.mu.RUnlock()
+
+	yv := activeMemTable.Get(key)
+
+	if yv.Meta == metaNoOp {
+		for i := len(sealedTables) - 1; i >= 0; i-- {
+			if val := sealedTables[i].Get(key); val.Meta != metaNoOp {
+				yv = val
+				break
 			}
 		}
 	}
-	e.mu.RUnlock()
 
 	if yv.UserMeta == internal.EntryTypeChunked {
 		rec, err := internal.GetWalRecord(yv, e.walIO)

@@ -73,7 +73,7 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 	var batchValues []string
 	fullValue := new(bytes.Buffer)
 
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		batchValues = append(batchValues, gofakeit.Sentence(5))
 		fullValue.Write([]byte(batchValues[i]))
 	}
@@ -107,7 +107,7 @@ func TestTxn_Chunked_Commit(t *testing.T) {
 	err = txn.Commit()
 	assert.NoError(t, err, "Commit operation should succeed")
 
-	got, err = engine.GetKV(batchKey)
+	_, err = engine.GetKV(batchKey)
 	assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "Key not Found Error should be present.")
 
 	got, err = engine.GetLOB(batchKey)

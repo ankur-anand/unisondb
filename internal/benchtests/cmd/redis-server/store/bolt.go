@@ -3,6 +3,7 @@ package store
 import (
 	"hash/crc32"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"time"
@@ -21,7 +22,12 @@ type BoltStore struct {
 }
 
 func NewBoltStore(namespace, dir string) (*BoltStore, error) {
-	fp := filepath.Join(dir, namespace+".boltdb")
+	dirPath := filepath.Join(dir, namespace, "boltdb")
+	fp := filepath.Join(dirPath + ".boltdb")
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		return nil, err
+	}
+
 	db, err := bbolt.Open(fp, 0600, nil)
 	if err != nil {
 		return nil, err
@@ -77,6 +83,9 @@ func (s *BoltStore) Get(key []byte) ([]byte, error) {
 			return nil
 		}
 		val := bucket.Get(key)
+		if val == nil {
+			return nil
+		}
 		value = make([]byte, len(val))
 		copy(value, val)
 		return nil
@@ -84,10 +93,6 @@ func (s *BoltStore) Get(key []byte) ([]byte, error) {
 
 	if err != nil {
 		return nil, err
-	}
-
-	if value == nil {
-		return nil, nil
 	}
 
 	if value == nil {

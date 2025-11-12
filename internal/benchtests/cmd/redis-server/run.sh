@@ -8,9 +8,8 @@ if [ -z "$engine" ]; then
 fi
 
  # 200k ops
-TOTAL_REQ=200000
-# 100 parallel clients       
-CONNECTIONS=100
+TOTAL_REQ=200000              
+CONNECTIONS=10
  # 10 pipelined requests per connection          
 PIPELINE=10             
 THREADS=4                
@@ -38,7 +37,7 @@ for i in $(seq 1 $RUNS); do
     -p 6380 \
     -q \
     --csv |
-  awk -v ts="$timestamp" -v run="$i" -F',' '{print ts "," run "," $1 "," $2 "," $3}' >> "$OUTFILE"
+  awk -v ts="$timestamp" -v run="$i" -F',' '{print ts "," run "," $1 "," $2 "," $3}' | tee -a "$OUTFILE"
 done
 
 echo "All $RUNS runs completed."

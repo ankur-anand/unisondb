@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"slices"
+	"sync"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
@@ -47,6 +48,7 @@ type MemTable struct {
 	chunkedFlushed int
 	tsGenerator    *tsGenerator
 	bloomFilter    *bloom.BloomFilter
+	bloomMu        sync.RWMutex
 }
 
 // NewMemTable returns an initialized mem-table.
@@ -103,7 +105,9 @@ func (table *MemTable) Put(key []byte, val y.ValueStruct) error {
 	table.skipList.Put(putKey, val)
 	table.bytesStored = table.bytesStored + len(key) + len(val.Value)
 
+	table.bloomMu.Lock()
 	table.bloomFilter.Add(key)
+	table.bloomMu.Unlock()
 
 	return nil
 }
@@ -133,7 +137,11 @@ func (table *MemTable) GetFirstOffset() *wal.Offset {
 }
 
 func (table *MemTable) Get(key []byte) y.ValueStruct {
-	if !table.bloomFilter.Test(key) {
+	table.bloomMu.RLock()
+	exists := table.bloomFilter.Test(key)
+	table.bloomMu.RUnlock()
+
+	if !exists {
 		return y.ValueStruct{}
 	}
 	return table.skipList.Get(y.KeyWithTs(key, 0))
@@ -141,7 +149,11 @@ func (table *MemTable) Get(key []byte) y.ValueStruct {
 
 // GetRowYValue returns all the mem table entries associated with the provided rowKey.
 func (table *MemTable) GetRowYValue(rowKey []byte) []y.ValueStruct {
-	if !table.bloomFilter.Test(rowKey) {
+	table.bloomMu.RLock()
+	exists := table.bloomFilter.Test(rowKey)
+	table.bloomMu.RUnlock()
+
+	if !exists {
 		return nil
 	}
 

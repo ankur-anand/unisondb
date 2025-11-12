@@ -56,6 +56,8 @@ func main() {
 		se, err = store.NewBadgerStore(*dataDir)
 	case "bolt":
 		se, err = store.NewBoltStore(*namespace, *dataDir)
+	case "lmdb":
+		se, err = store.NewLMDBStore(*namespace, *dataDir)
 	default:
 		log.Fatalf("unknown engine: %s", *engine)
 	}
@@ -65,6 +67,26 @@ func main() {
 	}
 
 	defer se.Close()
+
+	if *engine == "unison" {
+		if unisonStore, ok := se.(*store.KVAlchemy); ok {
+			go func() {
+				ticker := time.NewTicker(10 * time.Second)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						count := unisonStore.SealedMemTableCount()
+						slog.Info("sealed memtable status",
+							"count", count,
+							"ops_received", unisonStore.TotalOpsCount())
+					}
+				}
+			}()
+		}
+	}
 
 	go func() {
 		http.ListenAndServe("localhost:6060", nil)

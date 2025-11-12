@@ -17,6 +17,7 @@ func NewUnisonDB(dir, namespace string) (*KVAlchemy, error) {
 	cfg.WalConfig.SyncInterval = 1 * time.Second
 	cfg.BTreeFlushInterval = 10 * time.Second
 	cfg.DisableEntryTypeCheck = true
+	//cfg.DBEngine = dbkernel.BoltDBEngine
 	engine, err := dbkernel.NewStorageEngine(dir, namespace, cfg)
 	return &KVAlchemy{
 		namespace: namespace,
@@ -38,4 +39,8 @@ func (k *KVAlchemy) Get(key []byte) ([]byte, error) {
 
 func (k *KVAlchemy) TotalOpsCount() uint64 {
 	return k.engine.OpsReceivedCount()
+}
+
+func (k *KVAlchemy) SealedMemTableCount() int {
+	return k.engine.SealedMemTableCount()
 }
