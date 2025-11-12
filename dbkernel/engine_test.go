@@ -1204,7 +1204,7 @@ func TestEngine_SealedMemTableCount_Concurrent(t *testing.T) {
 	namespace := "test_sealed_concurrent"
 
 	config := NewDefaultEngineConfig()
-	config.ArenaSize = 1 << 10
+	config.ArenaSize = 2 << 20
 
 	engine, err := NewStorageEngine(dir, namespace, config)
 	require.NoError(t, err, "NewStorageEngine should not error")
@@ -1239,7 +1239,7 @@ func TestEngine_SealedMemTableCount_NoRotation(t *testing.T) {
 	namespace := "test_no_rotation"
 
 	config := NewDefaultEngineConfig()
-	config.ArenaSize = 1 << 20
+	config.ArenaSize = 2 << 20
 
 	engine, err := NewStorageEngine(dir, namespace, config)
 	require.NoError(t, err, "NewStorageEngine should not error")
