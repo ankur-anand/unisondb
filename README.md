@@ -70,7 +70,7 @@ This benchmark compares the **write and read performance** of three databases â€
 - **Throughput**: Requests per second for `SET` (write) and `GET` (read) operations
 - **Latency**: p50 latency in milliseconds
 - **Workload**: 50 iterations of mixed `SET` and `GET` operations (200k ops per run)
-- **Concurrency**: 100 parallel clients, 10 pipelined requests, 4 threads
+- **Concurrency**: 10 parallel clients, 10 pipelined requests, 4 threads
 - **Payload Size**: 1KB
 
 ### Test Environment
@@ -85,7 +85,7 @@ All three databases were tested under identical conditions to highlight differen
 
 ### Results
 
-<img src="docs/ubb_compare.png" alt="UnisonDB, BadgerDB, BoltDB Comparison" />
+<img src="docs/ubbl_compare.png" alt="UnisonDB, BadgerDB, BoltDB, LMDB Comparison" />
 
 ## Performance Testing: Local Replication
 
@@ -413,27 +413,6 @@ Replication in UnisonDB is **WAL-based streaming** - designed around the WALFS r
 * Real-time streaming - Active tail following for low latency
 
 <img src="./docs/replication_flow.png">
-
-### SET Throughput: Design Tradeoffs
-
-* UnisonDB shows lower SET throughput than pure LSM databases â€” by design.
-* Writes are globally ordered under a lock to ensure replication-safe WAL entries.
-* This favors consistency and durability over raw speed.
-* Still, UnisonDB is nearly 2x faster than BoltDB, a pure B+Tree store.
-* Even with ordered writes, it outperforms BoltDB while offering stronger replication guarantees.
-
-<img src="./docs/tradeoff.jpg" width="400">
-
-#### When UnisonDB Wins:
-
-* Read-heavy workloads (edge nodes, replicas)
-* Predictable latency requirements (no background compaction)
-* Replication is critical (built-in, transactional)
-
-#### When to Choose LSM Instead:
-
-* Pure write throughput is #1 priority.
-* Read amplification is acceptable
 
 ---
 

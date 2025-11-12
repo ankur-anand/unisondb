@@ -4,15 +4,16 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 
 # Check if file arguments are provided
-if len(sys.argv) < 4:
-    print("Usage: python compare_plot.py <unisondb_csv> <badgerdb_csv> <boltdb_csv>")
+if len(sys.argv) < 5:
+    print("Usage: python compare_plot.py <unisondb_csv> <badgerdb_csv> <boltdb_csv> <lmdb_csv>")
     sys.exit(1)
 
 # Define benchmark file paths
 files = {
     "UnisonDB": sys.argv[1],
     "BadgerDB": sys.argv[2],
-    "BoltDB": sys.argv[3]
+    "BoltDB": sys.argv[3],
+    "LMDB": sys.argv[4]
 }
 
 def parse_set_benchmark(filepath):
@@ -41,7 +42,8 @@ def parse_set_benchmark(filepath):
 colors = {
     "UnisonDB": "blue",
     "BadgerDB": "green",
-    "BoltDB": "red"
+    "BoltDB": "red",
+    "LMDB": "orange"
 }
 
 plt.figure(figsize=(7, 5))

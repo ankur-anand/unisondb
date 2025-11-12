@@ -3,6 +3,7 @@ module github.com/ankur-anand/unisondb/internal/benchtests
 go 1.24.0
 
 require (
+	github.com/PowerDNS/lmdb-go v1.9.3
 	github.com/ankur-anand/unisondb v0.0.0-00010101000000-000000000000
 	github.com/brianvoe/gofakeit/v7 v7.8.1
 	github.com/dgraph-io/badger/v4 v4.6.0
@@ -19,7 +20,6 @@ require (
 )
 
 require (
-	github.com/PowerDNS/lmdb-go v1.9.3 // indirect
 	github.com/bits-and-blooms/bitset v1.24.2 // indirect
 	github.com/bits-and-blooms/bloom/v3 v3.7.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect

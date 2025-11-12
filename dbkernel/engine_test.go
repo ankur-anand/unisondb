@@ -19,6 +19,7 @@ import (
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.etcd.io/bbolt"
 )
 
@@ -1160,4 +1161,102 @@ func TestEngineChangeNotifier(t *testing.T) {
 	mc.mu.Lock()
 	assert.Equal(t, len(mc.changes), 4, "total 4 change notifications should be inserted")
 	mc.mu.Unlock()
+}
+
+func TestEngine_SealedMemTableCount(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "test_sealed_count"
+
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20 // 1MB
+
+	engine, err := NewStorageEngine(dir, namespace, config)
+	require.NoError(t, err, "NewStorageEngine should not error")
+	defer engine.Close(context.Background())
+
+	count := engine.SealedMemTableCount()
+	assert.Equal(t, 0, count, "should start with 0 sealed memtables")
+
+	engine.mu.Lock()
+	engine.rotateMemTable()
+	engine.mu.Unlock()
+
+	count = engine.SealedMemTableCount()
+	assert.Equal(t, 1, count, "should have 1 sealed memtable after rotation")
+
+	engine.mu.Lock()
+	engine.rotateMemTable()
+	engine.mu.Unlock()
+
+	count = engine.SealedMemTableCount()
+	assert.Equal(t, 2, count, "should have 2 sealed memtables after second rotation")
+
+	engine.mu.Lock()
+	engine.rotateMemTable()
+	engine.mu.Unlock()
+
+	count = engine.SealedMemTableCount()
+	assert.Equal(t, 3, count, "should have 3 sealed memtables after third rotation")
+
+	engine.wg.Wait()
+
+	count = engine.SealedMemTableCount()
+	assert.Equal(t, 0, count, "should have 0 sealed memtables after all flushes complete")
+}
+
+func TestEngine_SealedMemTableCount_Concurrent(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "test_sealed_concurrent"
+
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 10
+
+	engine, err := NewStorageEngine(dir, namespace, config)
+	require.NoError(t, err, "NewStorageEngine should not error")
+	defer engine.Close(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 100; i++ {
+			key := []byte("test_key")
+			value := make([]byte, 100)
+			err := engine.PutKV(key, value)
+			if err != nil {
+				t.Logf("PutKV error: %v", err)
+			}
+		}
+	}()
+
+	for i := 0; i < 50; i++ {
+		count := engine.SealedMemTableCount()
+		assert.GreaterOrEqual(t, count, 0, "count should never be negative")
+	}
+
+	<-done
+
+	count := engine.SealedMemTableCount()
+	assert.GreaterOrEqual(t, count, 0, "final count should never be negative")
+}
+
+func TestEngine_SealedMemTableCount_NoRotation(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "test_no_rotation"
+
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+
+	engine, err := NewStorageEngine(dir, namespace, config)
+	require.NoError(t, err, "NewStorageEngine should not error")
+	defer engine.Close(context.Background())
+
+	for i := 0; i < 10; i++ {
+		key := []byte("test_key")
+		value := []byte("small_value")
+		err := engine.PutKV(key, value)
+		require.NoError(t, err)
+	}
+
+	count := engine.SealedMemTableCount()
+	assert.Equal(t, 0, count, "should have 0 sealed memtables without rotation")
 }
