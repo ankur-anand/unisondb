@@ -61,6 +61,10 @@ curl -X PUT http://localhost:4000/api/v1/default/kv/mykey \
 5. [Backup and Restore](https://unisondb.io/docs/operations/backup-restore/)
 6. [Deployment Topologies](https://unisondb.io/docs/deployment/)
 
+UnisonDB implements a pluggable storage backend architecture supporting two BTree implementations:
+  - [BoltDB](https://github.com/etcd-io/bbolt): Single-file, ACID-compliant BTree.
+  - [LMDB](https://en.wikipedia.org/wiki/Lightning_Memory-Mapped_Database): Memory-mapped ACID-compliant BTree with copy-on-write semantics.
+
 ## Redis-Compatible Benchmark: UnisonDB vs BadgerDB vs BoltDB
 
 This benchmark compares the **write and read performance** of three databases — **UnisonDB**, **BadgerDB**, and **BoltDB** — using a Redis-compatible interface and the official [`redis-benchmark`](https://redis.io/docs/latest/operate/oss_and_stack/management/optimization/benchmarks/) tool.
@@ -79,9 +83,11 @@ This benchmark compares the **write and read performance** of three databases �
 Chip: Apple M2 Pro
 Total Number of Cores: 10 (6 performance and 4 efficiency)
 Memory: 16 GB
+Unisondb Btree Backend - LMDB
 ```
 
 All three databases were tested under identical conditions to highlight differences in write path efficiency, read performance, and I/O characteristics. The Redis-compatible server implementation can be found in `internal/benchtests/cmd/redis-server/`.
+
 
 ### Results
 
