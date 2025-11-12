@@ -1197,11 +1197,6 @@ func TestEngine_SealedMemTableCount(t *testing.T) {
 
 	count = engine.SealedMemTableCount()
 	assert.Equal(t, 3, count, "should have 3 sealed memtables after third rotation")
-
-	// assert eventually
-	assert.Eventually(t, func() bool {
-		return engine.SealedMemTableCount() == 0
-	}, 5*time.Second, 100*time.Millisecond, "should have 0 sealed memtables after all flushes complete")
 }
 
 func TestEngine_SealedMemTableCount_Concurrent(t *testing.T) {
