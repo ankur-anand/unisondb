@@ -185,8 +185,8 @@ func (c *GrpcStreamerClient) receiveWALRecords(client v1.WalStreamerService_Stre
 		if len(res.Records) > 0 {
 			lastRecord := res.Records[len(res.Records)-1]
 			offset := &dbkernel.Offset{
-				SegmentID: lastRecord.Offset.SegmentId,
-				Offset:    int64(lastRecord.Offset.Offset),
+				SegmentID: lastRecord.SegmentId,
+				Offset:    int64(lastRecord.Offset),
 			}
 
 			select {

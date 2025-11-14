@@ -184,9 +184,12 @@ func (s *GrpcStreamer) streamWalRecords(ctx context.Context,
 		if len(batch) == 0 {
 			return nil
 		}
-		if err := s.flushBatch(batch, g); err != nil {
+		toFlush := batch
+		if err := s.flushBatch(toFlush, g); err != nil {
+			replicator.ReleaseRecords(toFlush)
 			return err
 		}
+		replicator.ReleaseRecords(toFlush)
 		batch = make([]*v1.WALRecord, 0, batchSize*2)
 		totalBatchSize = 0
 		return nil

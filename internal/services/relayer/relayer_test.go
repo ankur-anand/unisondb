@@ -94,10 +94,11 @@ func (m *mockStreamer) StreamWAL(ctx context.Context) error {
 			return err
 		}
 
-		err = m.walIOHandler.Write(&v1.WALRecord{Record: value, Offset: &v1.RecordPosition{
+		err = m.walIOHandler.Write(&v1.WALRecord{
+			Record:    value,
 			SegmentId: offset.SegmentID,
 			Offset:    uint64(offset.Offset),
-		}})
+		})
 		if err != nil {
 			return err
 		}
@@ -213,10 +214,11 @@ func TestRateLimitedWalIO_ContextCancellation(t *testing.T) {
 	limiter := rate.NewLimiter(rate.Limit(1), 1)
 	rlWalIO := NewRateLimitedWalIO(ctx, mock, limiter)
 
-	record := &v1.WALRecord{Offset: &v1.RecordPosition{
+	record := &v1.WALRecord{
 		SegmentId: 0,
 		Offset:    0,
-	}, Record: []byte("test-record")}
+		Record:    []byte("test-record"),
+	}
 
 	err := rlWalIO.Write(record)
 	assert.NoError(t, err)
@@ -254,9 +256,9 @@ func TestRateLimitedWalIO_WriteBatch(t *testing.T) {
 		rlWalIO := NewRateLimitedWalIO(ctx, mock, limiter)
 
 		records := []*v1.WALRecord{
-			{Offset: &v1.RecordPosition{SegmentId: 0, Offset: 0}, Record: []byte("record1")},
-			{Offset: &v1.RecordPosition{SegmentId: 0, Offset: 1}, Record: []byte("record2")},
-			{Offset: &v1.RecordPosition{SegmentId: 0, Offset: 2}, Record: []byte("record3")},
+			{SegmentId: 0, Offset: 0, Record: []byte("record1")},
+			{SegmentId: 0, Offset: 1, Record: []byte("record2")},
+			{SegmentId: 0, Offset: 2, Record: []byte("record3")},
 		}
 
 		err := rlWalIO.WriteBatch(records)
@@ -287,8 +289,9 @@ func TestRateLimitedWalIO_WriteBatch(t *testing.T) {
 		records := make([]*v1.WALRecord, 10)
 		for i := 0; i < 10; i++ {
 			records[i] = &v1.WALRecord{
-				Offset: &v1.RecordPosition{SegmentId: 0, Offset: uint64(i)},
-				Record: []byte(fmt.Sprintf("record%d", i)),
+				SegmentId: 0,
+				Offset:    uint64(i),
+				Record:    []byte(fmt.Sprintf("record%d", i)),
 			}
 		}
 
@@ -302,8 +305,9 @@ func TestRateLimitedWalIO_WriteBatch(t *testing.T) {
 		records2 := make([]*v1.WALRecord, 5)
 		for i := 0; i < 5; i++ {
 			records2[i] = &v1.WALRecord{
-				Offset: &v1.RecordPosition{SegmentId: 0, Offset: uint64(10 + i)},
-				Record: []byte(fmt.Sprintf("record%d", 10+i)),
+				SegmentId: 0,
+				Offset:    uint64(10 + i),
+				Record:    []byte(fmt.Sprintf("record%d", 10+i)),
 			}
 		}
 
@@ -324,7 +328,7 @@ func TestRateLimitedWalIO_WriteBatch(t *testing.T) {
 		rlWalIO := NewRateLimitedWalIO(ctx, mock, limiter)
 
 		firstRecord := []*v1.WALRecord{
-			{Offset: &v1.RecordPosition{SegmentId: 0, Offset: 0}, Record: []byte("record0")},
+			{SegmentId: 0, Offset: 0, Record: []byte("record0")},
 		}
 		err := rlWalIO.WriteBatch(firstRecord)
 		assert.NoError(t, err)
@@ -332,8 +336,9 @@ func TestRateLimitedWalIO_WriteBatch(t *testing.T) {
 		largeRecords := make([]*v1.WALRecord, 10)
 		for i := 0; i < 10; i++ {
 			largeRecords[i] = &v1.WALRecord{
-				Offset: &v1.RecordPosition{SegmentId: 0, Offset: uint64(i + 1)},
-				Record: []byte(fmt.Sprintf("record%d", i+1)),
+				SegmentId: 0,
+				Offset:    uint64(i + 1),
+				Record:    []byte(fmt.Sprintf("record%d", i+1)),
 			}
 		}
 
@@ -365,11 +370,9 @@ func TestRateLimitedWalIO_WriteBatch(t *testing.T) {
 				records := make([]*v1.WALRecord, recordsPerBatch)
 				for i := 0; i < recordsPerBatch; i++ {
 					records[i] = &v1.WALRecord{
-						Offset: &v1.RecordPosition{
-							SegmentId: uint32(workerID),
-							Offset:    uint64(i),
-						},
-						Record: []byte(fmt.Sprintf("worker%d-record%d", workerID, i)),
+						SegmentId: uint32(workerID),
+						Offset:    uint64(i),
+						Record:    []byte(fmt.Sprintf("worker%d-record%d", workerID, i)),
 					}
 				}
 				err := rlWalIO.WriteBatch(records)
@@ -403,11 +406,9 @@ func TestWalIOHandler_WriteBatch(t *testing.T) {
 			encodedKV := []byte(kv + ":" + value)
 
 			record := &v1.WALRecord{
-				Offset: &v1.RecordPosition{
-					SegmentId: 0,
-					Offset:    uint64(i),
-				},
-				Record: encodedKV,
+				SegmentId: 0,
+				Offset:    uint64(i),
+				Record:    encodedKV,
 			}
 			records[i] = record
 		}

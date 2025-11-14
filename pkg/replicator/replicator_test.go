@@ -83,8 +83,8 @@ outer:
 	wg.Wait()
 	lastRecord := recvRecords[len(recvRecords)-1]
 	lastOffset := &dbkernel.Offset{
-		SegmentID: lastRecord.Offset.SegmentId,
-		Offset:    int64(lastRecord.Offset.Offset),
+		SegmentID: lastRecord.SegmentId,
+		Offset:    int64(lastRecord.Offset),
 	}
 	r, err := engine.NewReaderWithStart(lastOffset)
 	assert.NoError(t, err)
@@ -151,8 +151,8 @@ collect:
 
 	for i, record := range all {
 		offset := &dbkernel.Offset{
-			SegmentID: record.Offset.SegmentId,
-			Offset:    int64(record.Offset.Offset),
+			SegmentID: record.SegmentId,
+			Offset:    int64(record.Offset),
 		}
 		assert.True(t, isOffsetGreater(offset, startOffset),
 			"record %d offset %v should be > %v", i, offset, startOffset)
@@ -214,4 +214,94 @@ func TestReplicator_SendFuncBlockedCtxDone(t *testing.T) {
 	err = rep.replicateFromReader(ctx, recvChan)
 	assert.NoError(t, err)
 	assert.Nil(t, rep.reader, "reader should be nil after close")
+}
+
+func TestReplicator_ReleasesBatchWhenCtxDone(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "pool_release"
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() { _ = engine.Close(context.Background()) })
+
+	assert.NoError(t, engine.PutKV([]byte("k"), []byte("v")))
+
+	rep := NewReplicator(engine, 1, time.Second, nil, "pool-check")
+	// force sendFunc to hit ReleaseRecords path
+	close(rep.ctxDone)
+
+	recordsChan := make(chan []*v1.WALRecord)
+	err = rep.replicateFromReader(context.Background(), recordsChan)
+	assert.NoError(t, err)
+
+	select {
+	case <-recordsChan:
+		t.Fatalf("no records should be delivered when ctxDone is closed")
+	default:
+	}
+
+	recycled := acquireWalRecord()
+	assert.Nil(t, recycled.Record, "record payload should be cleared")
+	assert.Equal(t, uint32(0), recycled.SegmentId, "segment id should reset")
+	assert.Equal(t, uint64(0), recycled.Offset, "offset should reset")
+	releaseWalRecord(recycled)
+}
+
+func TestReplicator_SendFuncNoDuplicateOffsets(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "pool_dedupe"
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() { _ = engine.Close(context.Background()) })
+
+	const totalWrites = 7
+	rep := NewReplicator(engine, 2, 50*time.Millisecond, nil, "pool-dedupe")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	recordsChan := make(chan []*v1.WALRecord, 4)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		_ = rep.Replicate(ctx, recordsChan)
+	}()
+	go func() {
+		wg.Wait()
+		close(recordsChan)
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	for i := 0; i < totalWrites; i++ {
+		key := []byte("key-" + strconv.Itoa(i))
+		value := []byte("value-" + strconv.Itoa(i))
+		assert.NoError(t, engine.PutKV(key, value))
+	}
+
+	seen := make(map[string]struct{})
+
+	cancelled := false
+	for batch := range recordsChan {
+		if len(batch) == 0 {
+			continue
+		}
+		for _, record := range batch {
+			key := strconv.FormatUint(uint64(record.SegmentId), 10) + ":" + strconv.FormatUint(record.Offset, 10)
+			if _, exists := seen[key]; exists {
+				t.Fatalf("duplicate WAL record offset detected: %s", key)
+			}
+			seen[key] = struct{}{}
+		}
+		ReleaseRecords(batch)
+		if len(seen) >= totalWrites {
+			if !cancelled {
+				cancel()
+				cancelled = true
+			}
+		}
+	}
+
+	assert.Equal(t, totalWrites, len(seen), "should see each WAL offset exactly once")
 }
