@@ -19,8 +19,8 @@ It is a **reactive**, [**log-native**](https://www.unisondb.io/docs/architecture
 ## Key Features
 - **Multi-Modal Storage**: Key-Value, Wide-Column, and Large Objects (LOB)
 - **Streaming Replication**: WAL-based replication with sub-second fan-out to 100+ edge replicas
-- **Real-Time Notifications**: ZeroMQ-based change notifications with sub-millisecond latency
-- **Durable & Fast**: B+Tree storage with Write-Ahead Logging
+- **Real-Time Notifications**: ZeroMQ-based(Side-car) change notifications with sub-millisecond latency
+- **Durable**: B+Tree storage with Write-Ahead Logging
 - **Edge-First Design**: Optimized for edge computing and local-first architectures
 - **Namespace Isolation**: Multi-tenancy support with namespace-based isolation
 
@@ -60,6 +60,7 @@ curl -X PUT http://localhost:4000/api/v1/default/kv/mykey \
 4. [HTTP API Reference](https://unisondb.io/docs/api/http-api/)
 5. [Backup and Restore](https://unisondb.io/docs/operations/backup-restore/)
 6. [Deployment Topologies](https://unisondb.io/docs/deployment/)
+7. [Rough Roadmap](https://github.com/ankur-anand/unisondb/wiki/Roadmap)
 
 UnisonDB implements a pluggable storage backend architecture supporting two BTree implementations:
   - [BoltDB](https://github.com/etcd-io/bbolt): Single-file, ACID-compliant BTree.
@@ -97,32 +98,22 @@ All three databases were tested under identical conditions to highlight differen
 
 ### Test Setup
 
-We validated the WAL-based replication architecture using the `pkg/replicator` component in a local test environment. 
-We Fuzzed the Write Path with all supported operations including Put, BatchPut, Delete, and row-column mutations.
-This tests the core replication mechanics without network overhead.
+We validated the WAL-based replication architecture using the `pkg/replicator` component. It Uses the same redis-compatible
+bench tool but this time the server is started a `n=[100,200,500,750,1000]` goroutine that is an independent WAL reader, capturing critical performance metrics:
 
-> Server Running on Digitalocean s-8vcpu-16gb-480gb-intel
+1. Physical Latency Tracking: Measures p50, p90, p99, and max latencies Vs Relayer.
+2. SET, GET Latency vs Relayer
+3. SET, GET Throughput Vs Relayer.
 
-### Test Parameters
+### Results
 
-* 1000 Concurrent Readers: Simulates heavy read load alongside writes
-* 1000 Operations per Second: Sustained write throughput
-* Mixed Workload: Combines small metadata updates (100B) with larger payloads (100KB)
-* Isolation Testing: Validates transaction isolation under concurrent access patterns
+<img src="docs/relayer_set_get.png" alt="relayer_set_get" width="500" height="200" /> <img src="docs/relayer_latency_granular.png" alt="relayer_latency_granular" width="500" height="200" />
 
-Each replication stream operates as an independent WAL reader, capturing critical performance metrics:
-
-Physical Latency Tracking: Measures p50, p90, p99, and max latencies using timestamps
+### Test Replication Flow
 
 <img src="./docs/replication_test.png">
 
-### Replication and Fuzzer(write path) Latency Under Pressure
-
-<img src="./docs/latency.jpg" width="400"> <img src="./docs/fuzzing_latency.jpg" width="400">
-
-### Replication Throughput
-
-<img src="./docs/replication_throughput.jpg" width="600">
+---
 
 ## Why UnisonDB
 
