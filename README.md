@@ -107,7 +107,8 @@ bench tool but this time the server is started a `n=[100,200,500,750,1000]` goro
 
 ### Results
 
-<img src="docs/relayer_set_get.png" alt="relayer_set_get" width="500" height="200" /> <img src="docs/relayer_latency_granular.png" alt="relayer_latency_granular" width="500" height="200" />
+<img src="docs/relayer_set_get.png" alt="relayer_set_get" width="500" /> 
+<img src="docs/relayer_latency_granular.png" alt="relayer_latency_granular" width="500" />
 
 ### Test Replication Flow
 
