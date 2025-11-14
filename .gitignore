@@ -27,6 +27,5 @@ venv
 certs
 !doc/*.svg
 !docs/*.png
-unisondb
 *.log*
 
