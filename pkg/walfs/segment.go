@@ -38,6 +38,8 @@ var (
 	trailerMarker = []byte{0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED, 0xFA, 0xCE}
 )
 
+const trailerWord uint64 = 0xCEFAEDFEEFBEADDE
+
 const (
 	StateOpen = iota
 	StateClosing
@@ -427,6 +429,8 @@ func (seg *Segment) scanForLastOffset(path string, mmapData mmap.MMap) int64 {
 }
 
 // alignUp returns the next multiple of alignSize greater than or equal to n.
+//
+//go:inline
 func alignUp(n int64) int64 {
 	return (n + alignMask) & ^alignMask
 }
@@ -647,9 +651,16 @@ func (seg *Segment) Read(offset int64) ([]byte, RecordPosition, error) {
 	// validating  the trailer before reading data
 	// we are ensuring no oob access even if length is corrupted.
 	trailerOffset := offset + recordHeaderSize + dataSize
-	trailer := seg.mmapData[trailerOffset : trailerOffset+recordTrailerMarkerSize]
+	end := trailerOffset + recordTrailerMarkerSize
+	if end > seg.mmapSize {
+		return nil, NilRecordPosition, ErrIncompleteChunk
+	}
 
-	if !bytes.Equal(trailer, trailerMarker) {
+	// previously we were doing byte which did show in pprof as runtime.memequal
+	// switching to uint64 comparison removed it altogether.
+	word := binary.LittleEndian.Uint64(seg.mmapData[trailerOffset:end])
+	// validating trailer marker to detect torn/incomplete writes.
+	if word != trailerWord {
 		return nil, NilRecordPosition, ErrIncompleteChunk
 	}
 
@@ -755,6 +766,8 @@ func (seg *Segment) HasActiveReaders() bool {
 }
 
 // WriteOffset returns the current write offset of the segment.
+//
+//go:inline
 func (seg *Segment) WriteOffset() int64 {
 	return seg.writeOffset.Load()
 }
