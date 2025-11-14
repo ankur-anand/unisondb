@@ -203,10 +203,13 @@ func (x *StreamWalRecordsResponse) GetServerTimestamp() *timestamppb.Timestamp {
 
 // WAL Record Format
 type WALRecord struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Offset        *RecordPosition        `protobuf:"bytes,1,opt,name=offset,proto3" json:"offset,omitempty"`
-	Record        []byte                 `protobuf:"bytes,2,opt,name=record,proto3" json:"record,omitempty"`
-	Crc32Checksum uint32                 `protobuf:"fixed32,3,opt,name=crc32_checksum,json=crc32Checksum,proto3" json:"crc32_checksum,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// segment of the wal
+	SegmentId uint32 `protobuf:"fixed32,1,opt,name=segment_id,json=segmentId,proto3" json:"segment_id,omitempty"`
+	// offset within the segment
+	Offset        uint64 `protobuf:"fixed64,2,opt,name=offset,proto3" json:"offset,omitempty"`
+	Record        []byte `protobuf:"bytes,3,opt,name=record,proto3" json:"record,omitempty"`
+	Crc32Checksum uint32 `protobuf:"fixed32,4,opt,name=crc32_checksum,json=crc32Checksum,proto3" json:"crc32_checksum,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -241,11 +244,18 @@ func (*WALRecord) Descriptor() ([]byte, []int) {
 	return file_unisondb_streamer_v1_streamer_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *WALRecord) GetOffset() *RecordPosition {
+func (x *WALRecord) GetSegmentId() uint32 {
+	if x != nil {
+		return x.SegmentId
+	}
+	return 0
+}
+
+func (x *WALRecord) GetOffset() uint64 {
 	if x != nil {
 		return x.Offset
 	}
-	return nil
+	return 0
 }
 
 func (x *WALRecord) GetRecord() []byte {
@@ -258,61 +268,6 @@ func (x *WALRecord) GetRecord() []byte {
 func (x *WALRecord) GetCrc32Checksum() uint32 {
 	if x != nil {
 		return x.Crc32Checksum
-	}
-	return 0
-}
-
-// position within the WAL
-type RecordPosition struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// segment of the wal
-	SegmentId uint32 `protobuf:"fixed32,1,opt,name=segment_id,json=segmentId,proto3" json:"segment_id,omitempty"`
-	// offset within the segment
-	Offset        uint64 `protobuf:"fixed64,2,opt,name=offset,proto3" json:"offset,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *RecordPosition) Reset() {
-	*x = RecordPosition{}
-	mi := &file_unisondb_streamer_v1_streamer_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *RecordPosition) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*RecordPosition) ProtoMessage() {}
-
-func (x *RecordPosition) ProtoReflect() protoreflect.Message {
-	mi := &file_unisondb_streamer_v1_streamer_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use RecordPosition.ProtoReflect.Descriptor instead.
-func (*RecordPosition) Descriptor() ([]byte, []int) {
-	return file_unisondb_streamer_v1_streamer_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *RecordPosition) GetSegmentId() uint32 {
-	if x != nil {
-		return x.SegmentId
-	}
-	return 0
-}
-
-func (x *RecordPosition) GetOffset() uint64 {
-	if x != nil {
-		return x.Offset
 	}
 	return 0
 }
@@ -344,20 +299,15 @@ var file_unisondb_streamer_v1_streamer_proto_rawDesc = string([]byte{
 	0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x1a,
 	0x2e, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x2e, 0x70, 0x72, 0x6f, 0x74, 0x6f, 0x62, 0x75, 0x66,
 	0x2e, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x52, 0x0f, 0x73, 0x65, 0x72, 0x76,
-	0x65, 0x72, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x22, 0x88, 0x01, 0x0a, 0x09,
-	0x57, 0x41, 0x4c, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x12, 0x3c, 0x0a, 0x06, 0x6f, 0x66, 0x66,
-	0x73, 0x65, 0x74, 0x18, 0x01, 0x20, 0x01, 0x28, 0x0b, 0x32, 0x24, 0x2e, 0x75, 0x6e, 0x69, 0x73,
-	0x6f, 0x6e, 0x64, 0x62, 0x2e, 0x73, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x65, 0x72, 0x2e, 0x76, 0x31,
-	0x2e, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x50, 0x6f, 0x73, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x52,
-	0x06, 0x6f, 0x66, 0x66, 0x73, 0x65, 0x74, 0x12, 0x16, 0x0a, 0x06, 0x72, 0x65, 0x63, 0x6f, 0x72,
-	0x64, 0x18, 0x02, 0x20, 0x01, 0x28, 0x0c, 0x52, 0x06, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x12,
-	0x25, 0x0a, 0x0e, 0x63, 0x72, 0x63, 0x33, 0x32, 0x5f, 0x63, 0x68, 0x65, 0x63, 0x6b, 0x73, 0x75,
-	0x6d, 0x18, 0x03, 0x20, 0x01, 0x28, 0x07, 0x52, 0x0d, 0x63, 0x72, 0x63, 0x33, 0x32, 0x43, 0x68,
-	0x65, 0x63, 0x6b, 0x73, 0x75, 0x6d, 0x22, 0x47, 0x0a, 0x0e, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64,
-	0x50, 0x6f, 0x73, 0x69, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x1d, 0x0a, 0x0a, 0x73, 0x65, 0x67, 0x6d,
-	0x65, 0x6e, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x07, 0x52, 0x09, 0x73, 0x65,
-	0x67, 0x6d, 0x65, 0x6e, 0x74, 0x49, 0x64, 0x12, 0x16, 0x0a, 0x06, 0x6f, 0x66, 0x66, 0x73, 0x65,
-	0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x06, 0x52, 0x06, 0x6f, 0x66, 0x66, 0x73, 0x65, 0x74, 0x32,
+	0x65, 0x72, 0x54, 0x69, 0x6d, 0x65, 0x73, 0x74, 0x61, 0x6d, 0x70, 0x22, 0x81, 0x01, 0x0a, 0x09,
+	0x57, 0x41, 0x4c, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x12, 0x1d, 0x0a, 0x0a, 0x73, 0x65, 0x67,
+	0x6d, 0x65, 0x6e, 0x74, 0x5f, 0x69, 0x64, 0x18, 0x01, 0x20, 0x01, 0x28, 0x07, 0x52, 0x09, 0x73,
+	0x65, 0x67, 0x6d, 0x65, 0x6e, 0x74, 0x49, 0x64, 0x12, 0x16, 0x0a, 0x06, 0x6f, 0x66, 0x66, 0x73,
+	0x65, 0x74, 0x18, 0x02, 0x20, 0x01, 0x28, 0x06, 0x52, 0x06, 0x6f, 0x66, 0x66, 0x73, 0x65, 0x74,
+	0x12, 0x16, 0x0a, 0x06, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x18, 0x03, 0x20, 0x01, 0x28, 0x0c,
+	0x52, 0x06, 0x72, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x12, 0x25, 0x0a, 0x0e, 0x63, 0x72, 0x63, 0x33,
+	0x32, 0x5f, 0x63, 0x68, 0x65, 0x63, 0x6b, 0x73, 0x75, 0x6d, 0x18, 0x04, 0x20, 0x01, 0x28, 0x07,
+	0x52, 0x0d, 0x63, 0x72, 0x63, 0x33, 0x32, 0x43, 0x68, 0x65, 0x63, 0x6b, 0x73, 0x75, 0x6d, 0x32,
 	0xf9, 0x01, 0x0a, 0x12, 0x57, 0x61, 0x6c, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d, 0x65, 0x72, 0x53,
 	0x65, 0x72, 0x76, 0x69, 0x63, 0x65, 0x12, 0x73, 0x0a, 0x10, 0x53, 0x74, 0x72, 0x65, 0x61, 0x6d,
 	0x57, 0x61, 0x6c, 0x52, 0x65, 0x63, 0x6f, 0x72, 0x64, 0x73, 0x12, 0x2d, 0x2e, 0x75, 0x6e, 0x69,
@@ -393,29 +343,27 @@ func file_unisondb_streamer_v1_streamer_proto_rawDescGZIP() []byte {
 	return file_unisondb_streamer_v1_streamer_proto_rawDescData
 }
 
-var file_unisondb_streamer_v1_streamer_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_unisondb_streamer_v1_streamer_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_unisondb_streamer_v1_streamer_proto_goTypes = []any{
 	(*StreamWalRecordsRequest)(nil),  // 0: unisondb.streamer.v1.StreamWalRecordsRequest
 	(*GetLatestOffsetRequest)(nil),   // 1: unisondb.streamer.v1.GetLatestOffsetRequest
 	(*GetLatestOffsetResponse)(nil),  // 2: unisondb.streamer.v1.GetLatestOffsetResponse
 	(*StreamWalRecordsResponse)(nil), // 3: unisondb.streamer.v1.StreamWalRecordsResponse
 	(*WALRecord)(nil),                // 4: unisondb.streamer.v1.WALRecord
-	(*RecordPosition)(nil),           // 5: unisondb.streamer.v1.RecordPosition
-	(*timestamppb.Timestamp)(nil),    // 6: google.protobuf.Timestamp
+	(*timestamppb.Timestamp)(nil),    // 5: google.protobuf.Timestamp
 }
 var file_unisondb_streamer_v1_streamer_proto_depIdxs = []int32{
 	4, // 0: unisondb.streamer.v1.StreamWalRecordsResponse.records:type_name -> unisondb.streamer.v1.WALRecord
-	6, // 1: unisondb.streamer.v1.StreamWalRecordsResponse.server_timestamp:type_name -> google.protobuf.Timestamp
-	5, // 2: unisondb.streamer.v1.WALRecord.offset:type_name -> unisondb.streamer.v1.RecordPosition
-	0, // 3: unisondb.streamer.v1.WalStreamerService.StreamWalRecords:input_type -> unisondb.streamer.v1.StreamWalRecordsRequest
-	1, // 4: unisondb.streamer.v1.WalStreamerService.GetLatestOffset:input_type -> unisondb.streamer.v1.GetLatestOffsetRequest
-	3, // 5: unisondb.streamer.v1.WalStreamerService.StreamWalRecords:output_type -> unisondb.streamer.v1.StreamWalRecordsResponse
-	2, // 6: unisondb.streamer.v1.WalStreamerService.GetLatestOffset:output_type -> unisondb.streamer.v1.GetLatestOffsetResponse
-	5, // [5:7] is the sub-list for method output_type
-	3, // [3:5] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	5, // 1: unisondb.streamer.v1.StreamWalRecordsResponse.server_timestamp:type_name -> google.protobuf.Timestamp
+	0, // 2: unisondb.streamer.v1.WalStreamerService.StreamWalRecords:input_type -> unisondb.streamer.v1.StreamWalRecordsRequest
+	1, // 3: unisondb.streamer.v1.WalStreamerService.GetLatestOffset:input_type -> unisondb.streamer.v1.GetLatestOffsetRequest
+	3, // 4: unisondb.streamer.v1.WalStreamerService.StreamWalRecords:output_type -> unisondb.streamer.v1.StreamWalRecordsResponse
+	2, // 5: unisondb.streamer.v1.WalStreamerService.GetLatestOffset:output_type -> unisondb.streamer.v1.GetLatestOffsetResponse
+	4, // [4:6] is the sub-list for method output_type
+	2, // [2:4] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_unisondb_streamer_v1_streamer_proto_init() }
@@ -430,7 +378,7 @@ func file_unisondb_streamer_v1_streamer_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_unisondb_streamer_v1_streamer_proto_rawDesc), len(file_unisondb_streamer_v1_streamer_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

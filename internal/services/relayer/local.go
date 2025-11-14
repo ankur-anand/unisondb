@@ -52,9 +52,14 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 	ticker := time.NewTicker(metricsTickInterval)
 	defer ticker.Stop()
 	namespace := engine.Namespace()
+	doneCh := make(chan struct{})
+	go func() {
+		<-ctx.Done()
+		close(doneCh)
+	}()
 	for {
 		select {
-		case <-ctx.Done():
+		case <-doneCh:
 			var segmentLag int
 			segment := -1
 			if n.lastOffset != nil {
@@ -72,19 +77,25 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 			return nil
 		case records := <-walReceiver:
 			if len(records) == 0 {
+				replicator.ReleaseRecords(records)
 				continue
+			}
+			nowMs := dbkernel.HLCNow()
+			lastRecord := records[len(records)-1]
+			if lastRecord == nil || lastRecord.Record == nil {
+				replicator.ReleaseRecords(records)
+				continue
+			}
+
+			lastFBRecord := logrecord.GetRootAsLogRecord(lastRecord.Record, 0)
+			physicalLatencyMs := nowMs - lastFBRecord.Hlc()
+			if err := hist.RecordValue(float64(physicalLatencyMs) / 1000.0); err != nil {
+				replicator.ReleaseRecords(records)
+				return err
 			}
 			for _, record := range records {
 				fbRecord := logrecord.GetRootAsLogRecord(record.Record, 0)
 				receivedLSN := fbRecord.Lsn()
-				remoteHLC := fbRecord.Hlc()
-				nowMs := dbkernel.HLCNow()
-				physicalLatencyMs := nowMs - remoteHLC
-				// Add latency to histogram in seconds
-				err := hist.RecordValue(float64(physicalLatencyMs) / 1000.0)
-				if err != nil {
-					return err
-				}
 				if receivedLSN != n.lsn+1 {
 					panic(fmt.Sprintf("received wrong LSN %d, want %d", receivedLSN, n.lsn+1))
 				}
@@ -92,9 +103,10 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 			}
 			n.replicatedCount += len(records)
 			n.lastOffset = &dbkernel.Offset{
-				Offset:    int64(records[len(records)-1].Offset.Offset),
-				SegmentID: records[len(records)-1].Offset.SegmentId,
+				Offset:    int64(records[len(records)-1].Offset),
+				SegmentID: records[len(records)-1].SegmentId,
 			}
+			replicator.ReleaseRecords(records)
 
 		case err := <-replicatorErrors:
 			if errors.Is(err, context.Canceled) || errors.Is(err, io.EOF) {

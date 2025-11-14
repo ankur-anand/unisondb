@@ -259,7 +259,17 @@ func (r *Reader) Next() ([]byte, Offset, error) {
 		return nil, walfs.NilRecordPosition, io.EOF
 	}
 
-	start := time.Now()
+	// only sample every N reads
+	// this doesn't give perfect latency measurement but is good enough to get overall picture
+	// without adding too much overhead in hot path.
+	// time.Now is only called when we are measuring.
+	measure := r.readCount&samplingMask == 0
+
+	var start time.Time
+	if measure {
+		start = time.Now()
+	}
+
 	data, pos, err := r.appendReader.Next()
 
 	if err != nil {
@@ -282,9 +292,8 @@ func (r *Reader) Next() ([]byte, Offset, error) {
 	}
 
 	r.readCount++
-	// Successful read
-	dur := time.Since(start)
-	if r.readCount&samplingMask == 0 || dur > 10*time.Millisecond {
+	if measure {
+		dur := time.Since(start)
 		r.taggedScope.Histogram(metricsWalReadDuration, readLatencyBuckets).RecordDuration(dur)
 	}
 

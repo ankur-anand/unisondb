@@ -78,8 +78,8 @@ type walIOHandler struct {
 
 func (w walIOHandler) Write(data *v1.WALRecord) error {
 	return w.replica.ApplyRecord(data.Record, dbkernel.Offset{
-		SegmentID: data.Offset.SegmentId,
-		Offset:    int64(data.Offset.Offset),
+		SegmentID: data.SegmentId,
+		Offset:    int64(data.Offset),
 	})
 }
 
@@ -94,8 +94,8 @@ func (w walIOHandler) WriteBatch(records []*v1.WALRecord) error {
 	for i, record := range records {
 		encodedWals[i] = record.Record
 		offsets[i] = dbkernel.Offset{
-			SegmentID: record.Offset.SegmentId,
-			Offset:    int64(record.Offset.Offset),
+			SegmentID: record.SegmentId,
+			Offset:    int64(record.Offset),
 		}
 	}
 

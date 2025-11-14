@@ -119,14 +119,16 @@ func (r *Replicator) Replicate(ctx context.Context, recordsChan chan<- []*v1.WAL
 
 // replicateFromReader reads the underlying wal until an err is encountered.
 func (r *Replicator) replicateFromReader(ctx context.Context, recordsChan chan<- []*v1.WALRecord) error {
-	var batch []*v1.WALRecord
+	batch := make([]*v1.WALRecord, 0, r.batchSize)
 	sendFunc := func() {
 		if len(batch) > 0 {
 			mKeyReplicatorRecordsTotal.WithLabelValues(r.namespace, r.replicatorEngine).Add(float64(len(batch)))
+			out := batch
 			select {
-			case recordsChan <- batch:
-				batch = []*v1.WALRecord{}
+			case recordsChan <- out:
+				batch = make([]*v1.WALRecord, 0, r.batchSize)
 			case <-r.ctxDone:
+				ReleaseRecords(out)
 				if r.reader != nil {
 					r.reader.Close()
 				}
@@ -155,12 +157,10 @@ func (r *Replicator) replicateFromReader(ctx context.Context, recordsChan chan<-
 			return err
 		}
 
-		walRecord := &v1.WALRecord{
-			Offset: &v1.RecordPosition{Offset: uint64(pos.Offset), SegmentId: pos.SegmentID},
-			Record: value,
-			// TODO: Get From the WAL Reader itself. Don't calculate here.
-			//Crc32Checksum: crc32.Checksum(value, crcTable),
-		}
+		walRecord := acquireWalRecord()
+		walRecord.Offset = uint64(pos.Offset)
+		walRecord.SegmentId = pos.SegmentID
+		walRecord.Record = value
 
 		batch = append(batch, walRecord)
 		r.lastOffset = pos

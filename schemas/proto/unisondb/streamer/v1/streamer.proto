@@ -32,15 +32,10 @@ message StreamWalRecordsResponse {
 
 // WAL Record Format
 message WALRecord {
-  RecordPosition offset = 1;
-  bytes record = 2;
-  fixed32 crc32_checksum = 3;
-}
-
-// position within the WAL
-message RecordPosition {
   // segment of the wal
   fixed32 segment_id = 1;
   // offset within the segment
   fixed64 offset = 2;
+  bytes record = 3;
+  fixed32 crc32_checksum = 4;
 }

@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"log"
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/tests/util"
 )
 
 type KVAlchemy struct {
@@ -12,13 +14,26 @@ type KVAlchemy struct {
 	engine    *dbkernel.Engine
 }
 
-func NewUnisonDB(dir, namespace string) (*KVAlchemy, error) {
+func NewUnisonDB(ctx context.Context, dir, namespace string, relayerCount int) (*KVAlchemy, error) {
 	cfg := dbkernel.NewDefaultEngineConfig()
+	cfg.WriteNotifyCoalescing.Enabled = true
+	cfg.WriteNotifyCoalescing.Duration = 50 * time.Millisecond
 	cfg.WalConfig.SyncInterval = 1 * time.Second
 	cfg.BTreeFlushInterval = 10 * time.Second
 	cfg.DisableEntryTypeCheck = true
-	//cfg.DBEngine = dbkernel.BoltDBEngine
 	engine, err := dbkernel.NewStorageEngine(dir, namespace, cfg)
+	if relayerCount > 0 {
+		go func() {
+			startTime := time.Now()
+			hist, err := util.StartNLocalRelayer(ctx, engine, relayerCount, 1*time.Minute)
+			if err != nil {
+				log.Fatal(err)
+			}
+			<-ctx.Done()
+			util.ReportReplicationStats(hist, engine.Namespace(), startTime)
+
+		}()
+	}
 	return &KVAlchemy{
 		namespace: namespace,
 		engine:    engine,

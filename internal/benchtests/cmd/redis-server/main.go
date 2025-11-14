@@ -31,10 +31,11 @@ type Storage interface {
 }
 
 var (
-	dataDir   = flag.String("dir", "./data", "data directory")
-	namespace = flag.String("namespace", "default", "namespace")
-	port      = flag.Int("port", 6380, "server port")
-	engine    = flag.String("engine", "unison", "database engine")
+	dataDir      = flag.String("dir", "./data", "data directory")
+	namespace    = flag.String("namespace", "default", "namespace")
+	port         = flag.Int("port", 6380, "server port")
+	engine       = flag.String("engine", "unison", "database engine")
+	relayerCount = flag.Int("relayers", 0, "number of local relayers to spawn for unison engine")
 )
 
 func main() {
@@ -51,7 +52,7 @@ func main() {
 	var err error
 	switch *engine {
 	case "unison":
-		se, err = store.NewUnisonDB(*dataDir, *namespace)
+		se, err = store.NewUnisonDB(ctx, *dataDir, *namespace, *relayerCount)
 	case "badger":
 		se, err = store.NewBadgerStore(*dataDir)
 	case "bolt":
