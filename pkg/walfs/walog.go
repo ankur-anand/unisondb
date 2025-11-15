@@ -30,6 +30,19 @@ type DeletionPredicate func(segID SegmentID) bool
 
 type WALogOptions func(*WALog)
 
+// DirectorySyncer syncs a directory path to stable storage.
+type DirectorySyncer interface {
+	SyncDir(dir string) error
+}
+
+// DirectorySyncFunc adapts a function to act as a DirectorySyncer.
+type DirectorySyncFunc func(dir string) error
+
+// SyncDir implements DirectorySyncer.
+func (f DirectorySyncFunc) SyncDir(dir string) error {
+	return f(dir)
+}
+
 // WithMaxSegmentSize options sets the MaxSize of the Segment file.
 func WithMaxSegmentSize(size int64) WALogOptions {
 	return func(sm *WALog) {
@@ -86,6 +99,15 @@ func WithAutoCleanupPolicy(maxAge time.Duration, minSegments, maxSegments int, e
 	}
 }
 
+// WithDirectorySyncer overrides the directory syncer used for new segment files.
+func WithDirectorySyncer(syncer DirectorySyncer) WALogOptions {
+	return func(sm *WALog) {
+		if syncer != nil {
+			sm.dirSyncer = syncer
+		}
+	}
+}
+
 // WALog manages the lifecycle of each individual segments, including creation, rotation,
 // recovery, and read/write operations.
 type WALog struct {
@@ -118,6 +140,7 @@ type WALog struct {
 	enableAutoCleanup   bool
 	deletionMu          sync.Mutex
 	pendingDeletion     map[SegmentID]*Segment
+	dirSyncer           DirectorySyncer
 }
 
 // NewWALog returns an initialized WALog that manages the segments in the provided dir with the given ext.
@@ -139,6 +162,7 @@ func NewWALog(dir string, ext string, opts ...WALogOptions) (*WALog, error) {
 		enableAutoCleanup:   false,
 		pendingDeletion:     make(map[SegmentID]*Segment),
 		rotationCallback:    func() {},
+		dirSyncer:           DirectorySyncFunc(syncDir),
 	}
 
 	for _, opt := range opts {
@@ -155,7 +179,33 @@ func NewWALog(dir string, ext string, opts ...WALogOptions) (*WALog, error) {
 
 // openSegment opens segment with the provided ID.
 func (wl *WALog) openSegment(id uint32) (*Segment, error) {
-	return OpenSegmentFile(wl.dir, wl.ext, id, WithSegmentSize(wl.maxSegmentSize), WithSyncOption(wl.forceSyncEveryWrite))
+	segmentPath := SegmentFileName(wl.dir, wl.ext, id)
+
+	isNew, err := isNewSegment(segmentPath)
+	if err != nil {
+		return nil, fmt.Errorf("checking segment %d state: %w", id, err)
+	}
+
+	seg, err := OpenSegmentFile(
+		wl.dir,
+		wl.ext,
+		id,
+		WithSegmentSize(wl.maxSegmentSize),
+		WithSyncOption(wl.forceSyncEveryWrite),
+		WithSegmentDirectorySyncer(wl.dirSyncer),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if isNew {
+		if err := wl.dirSyncer.SyncDir(wl.dir); err != nil {
+			_ = seg.Close()
+			return nil, fmt.Errorf("fsync wal directory: %w", err)
+		}
+	}
+
+	return seg, nil
 }
 
 func (wl *WALog) recoverSegments() error {
@@ -258,6 +308,12 @@ func (wl *WALog) Close() error {
 		err := seg.Close()
 		if err != nil {
 			cErr = errors.Join(cErr, err)
+		}
+	}
+
+	if wl.dirSyncer != nil {
+		if err := wl.dirSyncer.SyncDir(wl.dir); err != nil {
+			cErr = errors.Join(cErr, fmt.Errorf("fsync wal directory: %w", err))
 		}
 	}
 	return cErr
@@ -515,7 +571,7 @@ func (wl *WALog) BackupLastRotatedSegment(backupDir string) (string, error) {
 		return "", errors.New("backup destination must differ from WAL directory")
 	}
 
-	if err := copySegmentFile(srcPath, dstPath); err != nil {
+	if err := copySegmentFile(srcPath, dstPath, wl.dirSyncer); err != nil {
 		return "", fmt.Errorf("backup segment %d: %w", segment.ID(), err)
 	}
 
@@ -579,7 +635,7 @@ func (wl *WALog) BackupSegmentsAfter(afterID SegmentID, backupDir string) (map[S
 			return nil, errors.New("backup destination must differ from WAL directory")
 		}
 
-		if err := copySegmentFile(srcPath, dstPath); err != nil {
+		if err := copySegmentFile(srcPath, dstPath, wl.dirSyncer); err != nil {
 			return nil, fmt.Errorf("backup segment %d: %w", seg.ID(), err)
 		}
 
@@ -589,7 +645,7 @@ func (wl *WALog) BackupSegmentsAfter(afterID SegmentID, backupDir string) (map[S
 	return backups, nil
 }
 
-func copySegmentFile(srcPath, dstPath string) error {
+func copySegmentFile(srcPath, dstPath string, syncer DirectorySyncer) error {
 	src, err := os.Open(srcPath)
 	if err != nil {
 		return fmt.Errorf("open source segment: %w", err)
@@ -623,6 +679,14 @@ func copySegmentFile(srcPath, dstPath string) error {
 	if err := os.Rename(tmpPath, dstPath); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("finalize backup: %w", err)
+	}
+
+	dir := filepath.Dir(dstPath)
+	if syncer == nil {
+		syncer = DirectorySyncFunc(syncDir)
+	}
+	if err := syncer.SyncDir(dir); err != nil {
+		return fmt.Errorf("sync backup directory: %w", err)
 	}
 
 	return nil
@@ -769,6 +833,20 @@ func (wl *WALog) CleanupStalePendingSegments() {
 	}
 	wl.snapshotSegments()
 	wl.writeMu.Unlock()
+}
+
+// https://man7.org/linux/man-pages/man2/fsync.2.html
+// Calling fsync() does not necessarily ensure that the entry in the
+// directory containing the file has also reached disk.  For that an
+// explicit fsync() on a file descriptor for the directory is also
+// needed.
+func syncDir(dir string) error {
+	df, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer df.Close()
+	return df.Sync()
 }
 
 // Reader represents a high-level sequential reader over a WALog.

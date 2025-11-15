@@ -17,6 +17,7 @@ import (
 
 	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSegmentManager_RecoverSegments_Sealing(t *testing.T) {
@@ -2005,4 +2006,113 @@ func TestBackupSegmentsAfter_VerifyOrdering(t *testing.T) {
 	for i := 0; i < len(segmentIDs)-1; i++ {
 		assert.Less(t, segmentIDs[i], segmentIDs[i+1], "segments should be in order")
 	}
+}
+
+type recordingSyncer struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func newRecordingSyncer() *recordingSyncer {
+	return &recordingSyncer{}
+}
+
+func (r *recordingSyncer) SyncDir(dir string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, dir)
+	return nil
+}
+
+func (r *recordingSyncer) Calls() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.calls...)
+}
+
+func (r *recordingSyncer) Reset() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = nil
+}
+
+func TestWALogSyncsDirectoryOnlyForNewSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	syncer := newRecordingSyncer()
+
+	wal, err := walfs.NewWALog(dir, ".wal", walfs.WithDirectorySyncer(syncer))
+	require.NoError(t, err)
+	require.Equal(t, []string{dir}, syncer.Calls())
+
+	require.NoError(t, wal.RotateSegment())
+	require.Equal(t, []string{dir, dir}, syncer.Calls())
+	require.NoError(t, wal.Close())
+	require.Equal(t, []string{dir, dir, dir}, syncer.Calls())
+
+	syncer.Reset()
+
+	walRecovered, err := walfs.NewWALog(dir, ".wal", walfs.WithDirectorySyncer(syncer))
+	require.NoError(t, err)
+	require.Len(t, syncer.Calls(), 0)
+	require.NoError(t, walRecovered.Close())
+	require.Equal(t, []string{dir}, syncer.Calls())
+}
+
+func TestSegmentDeletionSyncsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	syncer := newRecordingSyncer()
+
+	wal, err := walfs.NewWALog(dir, ".wal", walfs.WithDirectorySyncer(syncer))
+	require.NoError(t, err)
+	defer wal.Close()
+
+	_, err = wal.Write([]byte("hello"))
+	require.NoError(t, err)
+	require.NoError(t, wal.RotateSegment())
+
+	before := len(syncer.Calls())
+
+	segments := wal.Segments()
+	seg := segments[1]
+	seg.MarkForDeletion()
+
+	require.Equal(t, before+1, len(syncer.Calls()))
+	require.Equal(t, dir, syncer.Calls()[len(syncer.Calls())-1])
+}
+
+func TestBackupSyncsDestinationDirectory(t *testing.T) {
+	dir := t.TempDir()
+	backupDir := filepath.Join(dir, "backup")
+	syncer := newRecordingSyncer()
+
+	wal, err := walfs.NewWALog(dir, ".wal", walfs.WithDirectorySyncer(syncer))
+	require.NoError(t, err)
+	defer wal.Close()
+
+	_, err = wal.Write([]byte("hello"))
+	require.NoError(t, err)
+	require.NoError(t, wal.RotateSegment())
+
+	before := len(syncer.Calls())
+
+	_, err = wal.BackupLastRotatedSegment(backupDir)
+	require.NoError(t, err)
+
+	calls := syncer.Calls()
+	require.Equal(t, before+1, len(calls))
+	require.Equal(t, backupDir, calls[len(calls)-1])
+}
+
+func TestCloseSyncsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	syncer := newRecordingSyncer()
+
+	wal, err := walfs.NewWALog(dir, ".wal", walfs.WithDirectorySyncer(syncer))
+	require.NoError(t, err)
+	require.Equal(t, []string{dir}, syncer.Calls())
+
+	require.NoError(t, wal.Close())
+
+	require.Equal(t, []string{dir, dir}, syncer.Calls())
 }

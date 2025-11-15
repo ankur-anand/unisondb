@@ -220,12 +220,22 @@ type Segment struct {
 	inMemorySealed atomic.Bool
 	writeMu        sync.RWMutex
 	syncOption     MsyncOption
+	dirSyncer      DirectorySyncer
 }
 
 // WithSyncOption sets the sync option for the Segment.
 func WithSyncOption(opt MsyncOption) func(*Segment) {
 	return func(s *Segment) {
 		s.syncOption = opt
+	}
+}
+
+// WithSegmentDirectorySyncer sets the directory syncer used after destructive operations.
+func WithSegmentDirectorySyncer(syncer DirectorySyncer) func(*Segment) {
+	return func(s *Segment) {
+		if syncer != nil {
+			s.dirSyncer = syncer
+		}
 	}
 }
 
@@ -252,6 +262,7 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		mmapSize:      segmentSize,
 		syncOption:    MsyncNone,
 		activeReaders: newReaderTracker(),
+		dirSyncer:     DirectorySyncFunc(syncDir),
 	}
 	s.state.Store(StateOpen)
 	s.closeCond = sync.NewCond(&sync.Mutex{})
@@ -848,8 +859,19 @@ func (seg *Segment) cleanup() {
 	if err := seg.Close(); err != nil {
 		slog.Error("[walfs]", slog.String("message", "Failed to close segment"), slog.String("path", seg.path), slog.Any("error", err))
 	}
-	if err := os.Remove(seg.path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		slog.Error("[walfs]", slog.String("message", "Failed to delete segment"), slog.String("path", seg.path), slog.Any("error", err))
+	if err := os.Remove(seg.path); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			slog.Error("[walfs]", slog.String("message", "Failed to delete segment"), slog.String("path", seg.path), slog.Any("error", err))
+		}
+	} else if seg.dirSyncer != nil {
+		dir := filepath.Dir(seg.path)
+		if err := seg.dirSyncer.SyncDir(dir); err != nil {
+			slog.Error("[walfs]",
+				slog.String("message", "Failed to sync WAL directory after deletion"),
+				slog.String("path", dir),
+				slog.Any("error", err),
+			)
+		}
 	}
 	slog.Info("[walfs]", slog.String("message", "Removed segment"), slog.Int("segment_id", int(seg.id)))
 }
