@@ -33,6 +33,18 @@ UnisonDB is built for **distributed edge-first architectures** systems where **d
 By **co-locating data with the services that use it**, UnisonDB removes the traditional boundary between the database and the application layer.
 Applications can react to local changes instantly, while UnisonDB’s WAL-based replication ensures eventual consistency across all replicas globally.
 
+## Fan-Out Scaling
+
+UnisonDB can fan out updates to 100+ edge nodes in just a few milliseconds from a single upstream—and because it supports multi-hop relaying, 
+that reach compounds naturally. Each hop carries the network + application latency of its link;
+
+In a simple 2-hop topology:
+- **Hop 1:** Primary → 100 hubs (≈250–500ms)
+- **Hop 2:** Each hub → 100 downstream edge nodes (similar latency)
+- **Total reach:** 100 + 10,000 = 10,100 nodes
+
+Even at 60k–80k `SET` ops/sec with 1 KB values, UnisonDB can propagate those updates across 10,000+ nodes within seconds—without Kafka, Pub/Sub, CDC pipelines, or heavyweight brokers. (See the [Relayer vs Latency benchmarks](#performance-testing-local-replication) below for measured numbers.)
+
 ## Quick Start
 
 ```bash
