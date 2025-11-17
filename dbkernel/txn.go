@@ -84,7 +84,7 @@ func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.
 	}
 
 	encoded := record.FBEncode(512)
-	offset, err := e.walIO.Append(encoded)
+	offset, err := e.walIO.Append(encoded, index)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +150,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 
 	encoded := record.FBEncode(len(kvEncoded) + 128)
 	// Write to WAL
-	offset, err := t.engine.walIO.Append(encoded)
+	offset, err := t.engine.walIO.Append(encoded, index)
 
 	if err != nil {
 		t.err = err
@@ -214,7 +214,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 	encoded := record.FBEncode(len(rce) + 128)
 
 	// Write to WAL
-	offset, err := t.engine.walIO.Append(encoded)
+	offset, err := t.engine.walIO.Append(encoded, index)
 
 	if err != nil {
 		t.err = err
@@ -262,7 +262,7 @@ func (t *Txn) Commit() error {
 	encoded := record.FBEncode(len(kv) + 128)
 
 	// Write to WAL
-	offset, err := t.engine.walIO.Append(encoded)
+	offset, err := t.engine.walIO.Append(encoded, index)
 
 	if err != nil {
 		t.err = err

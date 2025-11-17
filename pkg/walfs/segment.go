@@ -62,7 +62,7 @@ const (
 	// default Segment size of 16MB.
 	segmentSize  = 16 * 1024 * 1024
 	fileModePerm = 0644
-	// each index entry stores offset + length (16 bytes)
+	// each index entry stores offset + length (16 bytes).
 	indexEntrySize = 16
 
 	// size of the trailer used to detect torn writes.
@@ -110,9 +110,12 @@ type SegmentHeader struct {
 	// at 40
 	Flags uint32
 
-	// at 44–55
+	// at 44 -51
+	FirstLogIndex uint64
 	// - Reserved for future use
-	_ [12]byte
+	// 52-55
+	_ [4]byte
+
 	// at 56 byte: - CRC32 of first 56 bytes
 	CRC uint32
 	// at 60 - padding to align to 64B
@@ -148,6 +151,7 @@ func decodeSegmentHeader(buf []byte) (*SegmentHeader, error) {
 		WriteOffset:    int64(binary.LittleEndian.Uint64(buf[24:32])),
 		EntryCount:     int64(binary.LittleEndian.Uint64(buf[32:40])),
 		Flags:          binary.LittleEndian.Uint32(buf[40:44]),
+		FirstLogIndex:  binary.LittleEndian.Uint64(buf[44:52]),
 	}
 	return meta, nil
 }
@@ -237,9 +241,10 @@ type Segment struct {
 	syncOption     MsyncOption
 	dirSyncer      DirectorySyncer
 
-	indexPath    string
-	indexEntries []segmentIndexEntry
-	indexFlush   sync.WaitGroup
+	indexPath     string
+	indexEntries  []segmentIndexEntry
+	indexFlush    sync.WaitGroup
+	firstLogIndex uint64
 }
 
 // WithSyncOption sets the sync option for the Segment.
@@ -325,6 +330,10 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		}
 	}
 	s.writeOffset.Store(offset)
+
+	if !isNew {
+		s.firstLogIndex = binary.LittleEndian.Uint64(mmapData[44:52])
+	}
 
 	if err := s.setupIndexFile(dirPath, extName, isNew); err != nil {
 		_ = mmapData.Unmap()
@@ -623,7 +632,7 @@ func alignUp(n int64) int64 {
 // Write writes the provided slice of bytes to the open mmap file.
 // It appends data to the segment and returns the offset where
 // the record was written in the given segment.
-func (seg *Segment) Write(data []byte) (RecordPosition, error) {
+func (seg *Segment) Write(data []byte, logIndex uint64) (RecordPosition, error) {
 	if seg.closed.Load() || seg.state.Load() != StateOpen {
 		return NilRecordPosition, ErrClosed
 	}
@@ -637,6 +646,8 @@ func (seg *Segment) Write(data []byte) (RecordPosition, error) {
 	}
 
 	offset := seg.writeOffset.Load()
+
+	seg.writeFirstIndexEntry(logIndex)
 
 	headerSize := int64(recordHeaderSize)
 	dataSize := int64(len(data))
@@ -691,13 +702,22 @@ func (seg *Segment) Write(data []byte) (RecordPosition, error) {
 	}, nil
 }
 
+func (seg *Segment) writeFirstIndexEntry(logIndex uint64) {
+	if seg.firstLogIndex == 0 {
+		seg.firstLogIndex = logIndex
+		binary.LittleEndian.PutUint64(seg.mmapData[44:52], logIndex)
+		crc := crc32.Checksum(seg.mmapData[0:56], crcTable)
+		binary.LittleEndian.PutUint32(seg.mmapData[56:60], crc)
+	}
+}
+
 // WriteBatch writes multiple records to the segment in a single operation.
 // Returns a slice of RecordPositions for successfully written records and the number written.
 // If the segment fills up mid-batch, it returns positions for records that fit,
 // the count of records written, and ErrSegmentFull.
 // Callers should retry remaining records in a new segment.
 // nolint: funlen
-func (seg *Segment) WriteBatch(records [][]byte) ([]RecordPosition, int, error) {
+func (seg *Segment) WriteBatch(records [][]byte, logIndexes []uint64) ([]RecordPosition, int, error) {
 	if len(records) == 0 {
 		return nil, 0, nil
 	}
@@ -712,6 +732,11 @@ func (seg *Segment) WriteBatch(records [][]byte) ([]RecordPosition, int, error) 
 	flags := binary.LittleEndian.Uint32(seg.mmapData[40:44])
 	if IsSealed(flags) {
 		return nil, 0, ErrSegmentSealed
+	}
+
+	// firstLogIndex if this is the first write to the segment
+	if seg.firstLogIndex == 0 && logIndexes != nil && len(logIndexes) > 0 {
+		seg.writeFirstIndexEntry(logIndexes[0])
 	}
 
 	startOffset := seg.writeOffset.Load()
@@ -987,6 +1012,12 @@ func (seg *Segment) GetEntryCount() int64 {
 		panic(err)
 	}
 	return meta.EntryCount
+}
+
+func (seg *Segment) FirstLogIndex() uint64 {
+	seg.writeMu.RLock()
+	defer seg.writeMu.RUnlock()
+	return seg.firstLogIndex
 }
 
 // GetFlags returns the flags stored in segment header.

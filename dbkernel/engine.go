@@ -460,7 +460,7 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 	encoded := record.FBEncode(hintSize)
 
 	// Write to WAL
-	offset, err := e.walIO.Append(encoded)
+	offset, err := e.walIO.Append(encoded, index)
 	if err != nil {
 		return err
 	}
@@ -526,7 +526,7 @@ func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [
 	encoded := record.FBEncode(hintSize)
 
 	// Write to WAL
-	offset, err := e.walIO.Append(encoded)
+	offset, err := e.walIO.Append(encoded, index)
 	if err != nil {
 		return err
 	}

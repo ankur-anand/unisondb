@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"context"
 	"hash/crc32"
+	"path/filepath"
 	"testing"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/internal/logcodec"
+	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTxnNew(t *testing.T) {
@@ -340,4 +344,52 @@ func Test_RowColumn_Txn(t *testing.T) {
 		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "GetKV operation should succeed")
 	}
 	assert.Equal(t, txn3.CommitOffset(), engine.CurrentOffset(), "Commit operation should succeed")
+}
+
+func TestTxnWalLogIndexesPersist(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "txn_wal_indexes"
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	require.NoError(t, err)
+
+	txn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+	require.NoError(t, err)
+	require.NoError(t, txn.AppendKVTxn([]byte("txn-key"), []byte("txn-value")))
+	require.NoError(t, txn.Commit())
+	require.NoError(t, engine.Close(context.Background()))
+
+	walDir := filepath.Join(baseDir, namespace, "wal")
+	walog, err := walfs.NewWALog(walDir, ".seg")
+	require.NoError(t, err)
+	defer walog.Close()
+
+	expectedLSNs := []uint64{1, 2, 3}
+	requireSegmentFirstIndex(t, walog, expectedLSNs[0])
+
+	for _, lsn := range expectedLSNs {
+		got := readTxnWalRecordLSN(t, walog, lsn)
+		require.Equal(t, lsn, got)
+	}
+}
+
+func readTxnWalRecordLSN(t *testing.T, walog *walfs.WALog, idx uint64) uint64 {
+	t.Helper()
+
+	segID, slot, err := walog.SegmentForIndex(idx)
+	require.NoError(t, err)
+
+	indexEntries, err := walog.SegmentIndex(segID)
+	require.NoError(t, err)
+	require.Less(t, slot, len(indexEntries))
+
+	entry := indexEntries[slot]
+	segment := walog.Segments()[segID]
+	data, _, err := segment.Read(entry.Offset)
+	require.NoError(t, err)
+
+	copyData := append([]byte(nil), data...)
+	fbRecord := logrecord.GetRootAsLogRecord(copyData, 0)
+	decoded := logcodec.DeserializeFBRootLogRecord(fbRecord)
+	return decoded.LSN
 }

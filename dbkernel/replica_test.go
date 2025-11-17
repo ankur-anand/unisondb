@@ -13,9 +13,11 @@ import (
 
 	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
+	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
@@ -574,4 +576,151 @@ func TestReplicaWALHandler_ApplyRecords(t *testing.T) {
 		err := replicator.ApplyRecords(nil, nil)
 		assert.NoError(t, err, "empty batch should not error")
 	})
+}
+
+func TestReplicaApplyRecordPersistsLogIndex(t *testing.T) {
+	baseDir := t.TempDir()
+	leaderDir := filepath.Join(baseDir, "leader")
+	followerDir := filepath.Join(baseDir, "follower")
+	leaderNamespace := "replica_log_index_leader"
+	followerNamespace := "replica_log_index_follower"
+
+	leader, err := dbkernel.NewStorageEngine(leaderDir, leaderNamespace, dbkernel.NewDefaultEngineConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if leader != nil {
+			_ = leader.Close(context.Background())
+		}
+	})
+
+	follower, err := dbkernel.NewStorageEngine(followerDir, followerNamespace, dbkernel.NewDefaultEngineConfig())
+	require.NoError(t, err)
+	handler := dbkernel.NewReplicaWALHandler(follower)
+
+	require.NoError(t, leader.PutKV([]byte("key"), []byte("value")))
+
+	reader, err := leader.NewReader()
+	require.NoError(t, err)
+	defer reader.Close()
+
+	walEncoded, offset, err := reader.Next()
+	require.NoError(t, err)
+	encodedCopy := append([]byte(nil), walEncoded...)
+
+	fbRecord := logrecord.GetRootAsLogRecord(encodedCopy, 0)
+	lsn := fbRecord.Lsn()
+
+	require.NoError(t, handler.ApplyRecord(encodedCopy, offset))
+	require.NoError(t, follower.Close(context.Background()))
+	follower = nil
+
+	walDir := filepath.Join(followerDir, followerNamespace, "wal")
+	walog, err := walfs.NewWALog(walDir, ".seg")
+	require.NoError(t, err)
+	defer walog.Close()
+
+	requireSegmentFirstIndex(t, walog, lsn)
+
+	segID, slot, err := walog.SegmentForIndex(lsn)
+	require.NoError(t, err)
+	indexEntries, err := walog.SegmentIndex(segID)
+	require.NoError(t, err)
+	require.Less(t, slot, len(indexEntries))
+
+	data, _, err := walog.Segments()[segID].Read(indexEntries[slot].Offset)
+	require.NoError(t, err)
+	copyData := append([]byte(nil), data...)
+	recordFB := logrecord.GetRootAsLogRecord(copyData, 0)
+	decoded := logcodec.DeserializeFBRootLogRecord(recordFB)
+	require.Equal(t, lsn, decoded.LSN)
+}
+
+func TestReplicaApplyRecordsPersistLogIndex(t *testing.T) {
+	baseDir := t.TempDir()
+	leaderDir := filepath.Join(baseDir, "leader_batch")
+	followerDir := filepath.Join(baseDir, "follower_batch")
+	leaderNamespace := "replica_batch_leader"
+	followerNamespace := "replica_batch_follower"
+
+	leader, err := dbkernel.NewStorageEngine(leaderDir, leaderNamespace, dbkernel.NewDefaultEngineConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if leader != nil {
+			_ = leader.Close(context.Background())
+		}
+	})
+
+	follower, err := dbkernel.NewStorageEngine(followerDir, followerNamespace, dbkernel.NewDefaultEngineConfig())
+	require.NoError(t, err)
+	handler := dbkernel.NewReplicaWALHandler(follower)
+
+	const writeCount = 5
+	for i := 0; i < writeCount; i++ {
+		key := fmt.Sprintf("batch-log-index-%d", i)
+		val := fmt.Sprintf("value-%d", i)
+		require.NoError(t, leader.PutKV([]byte(key), []byte(val)))
+	}
+
+	reader, err := leader.NewReader()
+	require.NoError(t, err)
+	defer reader.Close()
+
+	var encodedBatch [][]byte
+	var offsetBatch []dbkernel.Offset
+	var lsns []uint64
+
+	for len(encodedBatch) < writeCount {
+		walEncoded, offset, err := reader.Next()
+		require.NoError(t, err)
+		dataCopy := append([]byte(nil), walEncoded...)
+		encodedBatch = append(encodedBatch, dataCopy)
+		offsetBatch = append(offsetBatch, offset)
+		fbRecord := logrecord.GetRootAsLogRecord(dataCopy, 0)
+		lsns = append(lsns, fbRecord.Lsn())
+	}
+
+	require.NoError(t, handler.ApplyRecords(encodedBatch, offsetBatch))
+	require.NoError(t, follower.Close(context.Background()))
+	follower = nil
+
+	walDir := filepath.Join(followerDir, followerNamespace, "wal")
+	walog, err := walfs.NewWALog(walDir, ".seg")
+	require.NoError(t, err)
+	defer walog.Close()
+
+	requireSegmentFirstIndex(t, walog, lsns[0])
+
+	for _, lsn := range lsns {
+		segID, slot, err := walog.SegmentForIndex(lsn)
+		require.NoError(t, err)
+		indexEntries, err := walog.SegmentIndex(segID)
+		require.NoError(t, err)
+		require.Less(t, slot, len(indexEntries))
+
+		data, _, err := walog.Segments()[segID].Read(indexEntries[slot].Offset)
+		require.NoError(t, err)
+		recordCopy := append([]byte(nil), data...)
+		fb := logrecord.GetRootAsLogRecord(recordCopy, 0)
+		decoded := logcodec.DeserializeFBRootLogRecord(fb)
+		require.Equal(t, lsn, decoded.LSN)
+	}
+}
+
+func requireSegmentFirstIndex(t *testing.T, walog *walfs.WALog, expected uint64) {
+	t.Helper()
+	segments := walog.Segments()
+	require.NotEmpty(t, segments, "wal has no segments")
+
+	for segID, seg := range segments {
+		if seg.GetEntryCount() == 0 {
+			continue
+		}
+		first := seg.FirstLogIndex()
+		require.NotZerof(t, first, "segment %d has entries but zero FirstLogIndex", segID)
+		if first == expected {
+			return
+		}
+	}
+
+	t.Fatalf("no segment persisted FirstLogIndex %d", expected)
 }

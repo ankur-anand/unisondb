@@ -154,7 +154,7 @@ func (w *WalIO) Read(pos *Offset) ([]byte, error) {
 }
 
 // Append writes the provided data as a new record to the active WAL segment.
-func (w *WalIO) Append(data []byte) (*Offset, error) {
+func (w *WalIO) Append(data []byte, logIndex uint64) (*Offset, error) {
 	w.taggedScope.Counter(metricWalWriteTotal).Inc(1)
 	startTime := time.Now()
 	defer func() {
@@ -162,7 +162,7 @@ func (w *WalIO) Append(data []byte) (*Offset, error) {
 		w.taggedScope.Histogram(metricWalWriteDuration, writeLatencyBuckets).RecordDuration(duration)
 	}()
 	w.taggedScope.Counter(metricWalBytesWrittenTotal).Inc(int64(len(data)))
-	off, err := w.appendLog.Write(data)
+	off, err := w.appendLog.Write(data, logIndex)
 	if errors.Is(err, walfs.ErrFsync) {
 		log.Fatalf("[wal] write to log file failed: %v", err)
 	}
@@ -178,7 +178,7 @@ func (w *WalIO) Append(data []byte) (*Offset, error) {
 // BatchAppend writes multiple records to the active WAL segment in a single batch operation.
 // This is more efficient than calling Append multiple times as it reduces lock contention
 // and can optimize disk I/O operations.
-func (w *WalIO) BatchAppend(records [][]byte) ([]*Offset, error) {
+func (w *WalIO) BatchAppend(records [][]byte, logIndexes []uint64) ([]*Offset, error) {
 	if len(records) == 0 {
 		return nil, nil
 	}
@@ -196,7 +196,7 @@ func (w *WalIO) BatchAppend(records [][]byte) ([]*Offset, error) {
 	}
 	w.taggedScope.Counter(metricWalBytesWrittenTotal).Inc(totalBytes)
 
-	offsets, err := w.appendLog.WriteBatch(records)
+	offsets, err := w.appendLog.WriteBatch(records, logIndexes)
 	if errors.Is(err, walfs.ErrFsync) {
 		log.Fatalf("[wal] batch write to log file failed: %v", err)
 	}

@@ -167,7 +167,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 				value.PrevTxnWalIndex = lastOffset.Encode()
 			}
 			encoded := value.FBEncode(len(value.Entries[0]))
-			offset, err := memTable.wIO.Append(encoded)
+			offset, err := memTable.wIO.Append(encoded, 0)
 			assert.NoError(t, err)
 			lastOffset = offset
 		}
@@ -186,7 +186,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		}
 
 		encoded := lastRecord.FBEncode(2*len(key) + 30)
-		offset, err := memTable.wIO.Append(encoded)
+		offset, err := memTable.wIO.Append(encoded, 0)
 		assert.NoError(t, err)
 		lastOffset = offset
 
@@ -251,7 +251,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 				value.PrevTxnWalIndex = lastOffset.Encode()
 			}
 			encoded := value.FBEncode(len(value.Entries[0]))
-			offset, err := memTable.wIO.Append(encoded)
+			offset, err := memTable.wIO.Append(encoded, 0)
 			assert.NoError(t, err)
 			lastOffset = offset
 		}
@@ -270,7 +270,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		}
 
 		encoded := lastRecord.FBEncode(2*len(key) + 30)
-		offset, err := memTable.wIO.Append(encoded)
+		offset, err := memTable.wIO.Append(encoded, 0)
 		assert.NoError(t, err)
 		lastOffset = offset
 
