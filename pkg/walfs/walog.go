@@ -492,6 +492,19 @@ func (wl *WALog) Current() *Segment {
 	return wl.currentSegment
 }
 
+// SegmentIndex returns the physical index entries for a segment. For sealed segments the
+// returned slice is complete. For the active segment, the slice reflects the entries written so far.
+func (wl *WALog) SegmentIndex(id SegmentID) ([]IndexEntry, error) {
+	wl.writeMu.RLock()
+	defer wl.writeMu.RUnlock()
+
+	seg, ok := wl.segments[id]
+	if !ok {
+		return nil, fmt.Errorf("%w: segment %d", ErrSegmentNotFound, id)
+	}
+	return seg.IndexEntries(), nil
+}
+
 // RotateSegment rotates the current segment and create a new active segment.
 func (wl *WALog) RotateSegment() error {
 	wl.writeMu.Lock()
