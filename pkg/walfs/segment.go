@@ -469,7 +469,7 @@ func (seg *Segment) flushIndexAsync() {
 		if err := seg.flushIndexToFile(entriesCopy); err != nil {
 			slog.Error("[walfs]",
 				slog.String("message", "failed to flush index"),
-				slog.Int("segment_id", int(seg.id)),
+				slog.Uint64("segment_id", uint64(seg.id)),
 				slog.Any("error", err))
 		}
 	}(seg.indexPath)
