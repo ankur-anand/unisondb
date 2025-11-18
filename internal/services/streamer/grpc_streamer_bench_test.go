@@ -15,6 +15,7 @@ import (
 
 	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/grpcutils"
+	"github.com/ankur-anand/unisondb/internal/keycodec"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
@@ -254,7 +255,7 @@ func benchmarkContinuousWriteAndStream(b *testing.B, writeRPS int, duration time
 	client := v1.NewWalStreamerServiceClient(conn)
 
 	type writeRecord struct {
-		key       []byte
+		key       string
 		timestamp time.Time
 	}
 	writeChan := make(chan writeRecord, writeRPS*2)
@@ -284,7 +285,7 @@ func benchmarkContinuousWriteAndStream(b *testing.B, writeRPS int, duration time
 		go func() {
 			for wr := range writeChan {
 				writeMapMu.Lock()
-				writeMap[string(wr.key)] = wr.timestamp
+				writeMap[wr.key] = wr.timestamp
 				writeMapMu.Unlock()
 			}
 		}()
@@ -303,15 +304,15 @@ func benchmarkContinuousWriteAndStream(b *testing.B, writeRPS int, duration time
 
 				for _, entry := range logEntry.Entries {
 					kvEntry := logcodec.DeserializeKVEntry(entry)
-					key := kvEntry.Key
+					encodedKey := string(kvEntry.Key)
 					writeMapMu.Lock()
-					if writeTime, exists := writeMap[string(key)]; exists {
+					if writeTime, exists := writeMap[encodedKey]; exists {
 						latency := receiveTime.Sub(writeTime)
 						latenciesMu.Lock()
 						latencies = append(latencies, latency)
 						latenciesMu.Unlock()
 						recordsRead.Add(1)
-						delete(writeMap, string(key))
+						delete(writeMap, encodedKey)
 					}
 					writeMapMu.Unlock()
 				}
@@ -335,17 +336,19 @@ writeLoop:
 		case <-timeout:
 			break writeLoop
 		case <-ticker.C:
-			key := []byte(gofakeit.UUID())
+			rawKey := []byte(gofakeit.UUID())
 			value := bytes.Repeat([]byte("x"), valueSize)
 			writeTime := time.Now()
 
-			if err := se.PutKV(key, value); err != nil {
+			if err := se.PutKV(rawKey, value); err != nil {
 				recordsFailed.Add(1)
 				continue
 			}
 
+			encodedKey := string(keycodec.KeyKV(rawKey))
+
 			select {
-			case writeChan <- writeRecord{key: key, timestamp: writeTime}:
+			case writeChan <- writeRecord{key: encodedKey, timestamp: writeTime}:
 			default:
 
 			}
@@ -570,16 +573,18 @@ writeLoop:
 		case <-timeout:
 			break writeLoop
 		case <-ticker.C:
-			key := gofakeit.UUID()
+			rawKey := []byte(gofakeit.UUID())
 			value := bytes.Repeat([]byte("x"), valueSize)
 			writeTime := time.Now()
 
-			if err := se.PutKV([]byte(key), value); err != nil {
+			if err := se.PutKV(rawKey, value); err != nil {
 				continue
 			}
 
+			encodedKey := string(keycodec.KeyKV(rawKey))
+
 			select {
-			case writeChan <- writeRecord{key: key, timestamp: writeTime}:
+			case writeChan <- writeRecord{key: encodedKey, timestamp: writeTime}:
 			default:
 
 			}
