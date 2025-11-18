@@ -89,7 +89,7 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset Offse
 	}
 
 	wh.engine.writeSeenCounter.Add(1)
-	offset, err := wh.engine.walIO.Append(encodedWal)
+	offset, err := wh.engine.walIO.Append(encodedWal, decoded.Lsn())
 	if err != nil {
 		return err
 	}
@@ -157,6 +157,7 @@ func (wh *ReplicaWALHandler) ApplyRecords(encodedWals [][]byte, receivedOffsets 
 
 	expectedLSN := wh.engine.writeSeenCounter.Load() + 1
 	decodedRecords := make([]*logrecord.LogRecord, len(encodedWals))
+	logIndexes := make([]uint64, len(encodedWals))
 
 	for i, encodedWal := range encodedWals {
 		if receivedOffsets[i].Offset == 0 {
@@ -175,9 +176,10 @@ func (wh *ReplicaWALHandler) ApplyRecords(encodedWals [][]byte, receivedOffsets 
 			return fmt.Errorf("%w at index %d: got %d, expected %d", ErrInvalidLSN, i, decoded.Lsn(), expectedLSN+uint64(i))
 		}
 		decodedRecords[i] = decoded
+		logIndexes[i] = decoded.Lsn()
 	}
 
-	offsets, err := wh.engine.walIO.BatchAppend(encodedWals)
+	offsets, err := wh.engine.walIO.BatchAppend(encodedWals, logIndexes)
 	if err != nil {
 		return err
 	}

@@ -7,6 +7,7 @@ import (
 	"hash/crc32"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,8 +15,10 @@ import (
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/memtable"
+	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/pkg/umetrics"
+	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/brianvoe/gofakeit/v7"
 	"github.com/stretchr/testify/assert"
@@ -1254,4 +1257,59 @@ func TestEngine_SealedMemTableCount_NoRotation(t *testing.T) {
 
 	count := engine.SealedMemTableCount()
 	assert.Equal(t, 0, count, "should have 0 sealed memtables without rotation")
+}
+
+func TestStorageEnginePersistsWalLogIndexes(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "wal_index_engine"
+
+	engine, err := NewStorageEngine(dir, namespace, NewDefaultEngineConfig())
+	require.NoError(t, err)
+
+	for i := 0; i < 3; i++ {
+		require.NoError(t, engine.PutKV([]byte(fmt.Sprintf("key-%d", i)), []byte("value")))
+	}
+
+	require.NoError(t, engine.Close(context.Background()))
+
+	walDir := filepath.Join(dir, namespace, walDirName)
+	walog, err := walfs.NewWALog(walDir, ".seg")
+	require.NoError(t, err)
+	defer walog.Close()
+
+	foundFirst := false
+	for segID, seg := range walog.Segments() {
+		count := uint64(seg.GetEntryCount())
+		if count == 0 {
+			continue
+		}
+		first := seg.FirstLogIndex()
+		require.NotZerof(t, first, "segment %d has entries but no FirstLogIndex recorded", segID)
+		foundFirst = true
+		for i := uint64(0); i < count; i++ {
+			idx := first + i
+			lsn := readWalRecordLSN(t, walog, idx)
+			require.Equalf(t, idx, lsn, "segment %d entry %d", segID, i)
+		}
+	}
+	require.True(t, foundFirst, "expected at least one segment with persisted WAL entries")
+}
+
+func readWalRecordLSN(t *testing.T, walog *walfs.WALog, idx uint64) uint64 {
+	segID, slot, err := walog.SegmentForIndex(idx)
+	require.NoError(t, err)
+
+	indexEntries, err := walog.SegmentIndex(segID)
+	require.NoError(t, err)
+	require.True(t, slot < len(indexEntries))
+
+	entry := indexEntries[slot]
+	segment := walog.Segments()[segID]
+	data, _, err := segment.Read(entry.Offset)
+	require.NoError(t, err)
+
+	copyData := append([]byte(nil), data...)
+	fbRecord := logrecord.GetRootAsLogRecord(copyData, 0)
+	decoded := logcodec.DeserializeFBRootLogRecord(fbRecord)
+	return decoded.LSN
 }

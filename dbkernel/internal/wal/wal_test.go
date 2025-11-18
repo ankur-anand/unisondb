@@ -46,7 +46,7 @@ func TestWalIO_Suite(t *testing.T) {
 
 	appendData := gofakeit.LetterN(10)
 	t.Run("wal_append_read", func(t *testing.T) {
-		pos, err := walInstance.Append([]byte(appendData))
+		pos, err := walInstance.Append([]byte(appendData), 0)
 		assert.NoError(t, err)
 		assert.NotNil(t, pos)
 
@@ -71,7 +71,7 @@ func TestWalIO_Suite(t *testing.T) {
 
 	t.Run("wal_reader_with_start", func(t *testing.T) {
 		appendData2 := gofakeit.LetterN(10)
-		pos, err := walInstance.Append([]byte(appendData2))
+		pos, err := walInstance.Append([]byte(appendData2), 0)
 		assert.NoError(t, err)
 		assert.NotNil(t, pos)
 
@@ -108,7 +108,7 @@ func TestWalIO_Suite(t *testing.T) {
 				defer wg.Done()
 				for j := 0; j < numOps; j++ {
 					data := gofakeit.LetterN(128)
-					pos, err := walInstance.Append([]byte(data))
+					pos, err := walInstance.Append([]byte(data), 0)
 					assert.NoError(t, err, "append should not fail")
 					assert.NotNil(t, pos, "append should return a valid position")
 
@@ -168,7 +168,7 @@ func TestWalIO_Suite(t *testing.T) {
 			}
 
 			fbRecord := record.FBEncode(len(encodedKV))
-			prevOffset, err = walInstance.Append(fbRecord)
+			prevOffset, err = walInstance.Append(fbRecord, 0)
 			assert.NoError(t, err)
 			assert.NotNil(t, prevOffset)
 			if firstOffset != nil {
@@ -218,7 +218,7 @@ func TestWalIO_Suite(t *testing.T) {
 
 		fbRecord := record.FBEncode(len(encodedKV))
 
-		offset, err := walInstance.Append(fbRecord)
+		offset, err := walInstance.Append(fbRecord, 0)
 		assert.NoError(t, err)
 		assert.NotNil(t, offset)
 
@@ -252,7 +252,7 @@ func TestWalIO_Suite(t *testing.T) {
 
 		fbRecord := record.FBEncode(len(encodedKV))
 
-		offset, err := walInstance.Append(fbRecord)
+		offset, err := walInstance.Append(fbRecord, 0)
 		assert.NoError(t, err)
 		assert.NotNil(t, offset)
 
@@ -270,7 +270,7 @@ func TestWalIO_BackupSegmentsAfter(t *testing.T) {
 
 	payload := bytes.Repeat([]byte("x"), 8*1024)
 	for i := 0; i < 200; i++ {
-		_, err := walInstance.Append(payload)
+		_, err := walInstance.Append(payload, 0)
 		require.NoError(t, err)
 	}
 
@@ -297,7 +297,7 @@ func TestReader_CloseMidway(t *testing.T) {
 	defer walInstance.Close()
 
 	for i := 0; i < 5; i++ {
-		_, err := walInstance.Append([]byte(gofakeit.LetterN(10)))
+		_, err := walInstance.Append([]byte(gofakeit.LetterN(10)), 0)
 		assert.NoError(t, err)
 	}
 
@@ -320,7 +320,7 @@ func TestReader_AutoCloseOnEOF(t *testing.T) {
 	assert.NoError(t, err)
 	defer walInstance.Close()
 
-	_, err = walInstance.Append([]byte("single-entry"))
+	_, err = walInstance.Append([]byte("single-entry"), 0)
 	assert.NoError(t, err)
 
 	reader, err := walInstance.NewReader()
@@ -348,7 +348,7 @@ func TestWalIO_BatchAppend(t *testing.T) {
 			[]byte(gofakeit.LetterN(30)),
 		}
 
-		offsets, err := walInstance.BatchAppend(records)
+		offsets, err := walInstance.BatchAppend(records, nil)
 		assert.NoError(t, err)
 		assert.Len(t, offsets, 3, "should return 3 offsets")
 
@@ -362,7 +362,7 @@ func TestWalIO_BatchAppend(t *testing.T) {
 	t.Run("batch_append_empty", func(t *testing.T) {
 		walInstance := setupWalTest(t)
 
-		offsets, err := walInstance.BatchAppend([][]byte{})
+		offsets, err := walInstance.BatchAppend([][]byte{}, nil)
 		assert.NoError(t, err)
 		assert.Nil(t, offsets, "should return nil for empty batch")
 	})
@@ -371,7 +371,7 @@ func TestWalIO_BatchAppend(t *testing.T) {
 		walInstance := setupWalTest(t)
 
 		records := [][]byte{[]byte(gofakeit.LetterN(15))}
-		offsets, err := walInstance.BatchAppend(records)
+		offsets, err := walInstance.BatchAppend(records, nil)
 		assert.NoError(t, err)
 		assert.Len(t, offsets, 1)
 
@@ -389,7 +389,7 @@ func TestWalIO_BatchAppend(t *testing.T) {
 			records[i] = []byte(gofakeit.LetterN(50))
 		}
 
-		offsets, err := walInstance.BatchAppend(records)
+		offsets, err := walInstance.BatchAppend(records, nil)
 		assert.NoError(t, err)
 		assert.Len(t, offsets, batchSize)
 
@@ -413,10 +413,10 @@ func TestWalIO_BatchAppend(t *testing.T) {
 			[]byte("record4"),
 		}
 
-		offsets1, err := walInstance.BatchAppend(batch1)
+		offsets1, err := walInstance.BatchAppend(batch1, nil)
 		assert.NoError(t, err)
 
-		offsets2, err := walInstance.BatchAppend(batch2)
+		offsets2, err := walInstance.BatchAppend(batch2, nil)
 		assert.NoError(t, err)
 
 		allOffsets := append(offsets1, offsets2...)
@@ -456,7 +456,7 @@ func TestWalIO_BatchAppend(t *testing.T) {
 						records[i] = []byte(gofakeit.LetterN(20))
 					}
 
-					offsets, err := walInstance.BatchAppend(records)
+					offsets, err := walInstance.BatchAppend(records, nil)
 					assert.NoError(t, err)
 					assert.Len(t, offsets, recordsPerBatch)
 					totalWritten.Add(int32(len(offsets)))

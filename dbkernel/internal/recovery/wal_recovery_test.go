@@ -63,7 +63,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 
 	}
 	for _, record := range records {
-		_, err := walInstance.Append(record)
+		_, err := walInstance.Append(record, 0)
 		assert.NoError(t, err)
 	}
 
@@ -89,7 +89,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 
 		encoded := value.FBEncode(1024)
 
-		offset, err := walInstance.Append(encoded)
+		offset, err := walInstance.Append(encoded, 0)
 		assert.NoError(t, err)
 		lastOffset = offset
 	}
@@ -109,7 +109,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 	}
 
 	encoded = lastRecord.FBEncode(1024)
-	lastOffset, err = walInstance.Append(encoded)
+	lastOffset, err = walInstance.Append(encoded, 0)
 	assert.NoError(t, err)
 	allCommitedKeys[key] = struct{}{}
 
@@ -169,7 +169,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 
 			encoded := value.FBEncode(1024)
 			assert.NoError(t, err)
-			offset, err := walInstance.Append(encoded)
+			offset, err := walInstance.Append(encoded, 0)
 			assert.NoError(t, err)
 			lastOff = offset
 		}
@@ -210,7 +210,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 				value.PrevTxnWalIndex = lastOffset.Encode()
 			}
 			encoded := value.FBEncode(1024)
-			offset, err := walInstance.Append(encoded)
+			offset, err := walInstance.Append(encoded, 0)
 			assert.NoError(t, err)
 			lastOffset = offset
 		}
@@ -232,7 +232,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		}
 
 		encoded := lastRecord.FBEncode(1024)
-		lastOffset, err = walInstance.Append(encoded)
+		lastOffset, err = walInstance.Append(encoded, 0)
 		assert.NoError(t, err)
 
 		recoveryInstance := &walRecovery{
@@ -274,7 +274,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 				value.PrevTxnWalIndex = lastOffset.Encode()
 			}
 			encoded := value.FBEncode(1024)
-			offset, err := walInstance.Append(encoded)
+			offset, err := walInstance.Append(encoded, 0)
 			assert.NoError(t, err)
 			lastOffset = offset
 		}
@@ -334,7 +334,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		}
 
 		encoded := record.FBEncode(1024)
-		offset, err := walInstance.Append(encoded)
+		offset, err := walInstance.Append(encoded, 0)
 		assert.NoError(t, err)
 		lastOffset = offset
 
@@ -373,7 +373,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 			Entries:         nil,
 		}
 
-		lastOffset, err = walInstance.Append(startRecord.FBEncode(1024))
+		lastOffset, err = walInstance.Append(startRecord.FBEncode(1024), 0)
 		assert.NoError(t, err, "failed to append start record")
 
 		deleteKeys := make([]string, 0)
@@ -391,7 +391,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 				PrevTxnWalIndex: lastOffset.Encode(),
 			}
 			encoded := record.FBEncode(1024)
-			lastOffset, err = walInstance.Append(encoded)
+			lastOffset, err = walInstance.Append(encoded, 0)
 			assert.NoError(t, err)
 		}
 
@@ -405,7 +405,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		}
 
 		encoded = record.FBEncode(1024)
-		lastOffset, err = walInstance.Append(encoded)
+		lastOffset, err = walInstance.Append(encoded, 0)
 		assert.NoError(t, err)
 
 		recovery := &walRecovery{
@@ -437,7 +437,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 
 		var lastOffset *wal.Offset
 		for _, record := range rowRecords {
-			offset, err := walInstance.Append(record)
+			offset, err := walInstance.Append(record, 0)
 			assert.NoError(t, err)
 			lastOffset = offset
 		}
@@ -473,7 +473,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 			Entries:       [][]byte{encoded},
 		}
 
-		lastOffset, err := walInstance.Append(record.FBEncode(1024))
+		lastOffset, err := walInstance.Append(record.FBEncode(1024), 0)
 		assert.NoError(t, err)
 		recoveryInstance := &walRecovery{
 			store: db,
@@ -512,7 +512,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 			Entries:       encoded,
 		}
 
-		lastOffset, err := walInstance.Append(record.FBEncode(1024))
+		lastOffset, err := walInstance.Append(record.FBEncode(1024), 0)
 		assert.NoError(t, err)
 		recoveryInstance := &walRecovery{
 			store: db,
@@ -548,7 +548,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 				record.PrevTxnWalIndex = lastOffset.Encode()
 			}
 
-			offset, err := walInstance.Append(record.FBEncode(1024))
+			offset, err := walInstance.Append(record.FBEncode(1024), 0)
 			assert.NoError(t, err)
 			lastOffset = offset
 		}
@@ -562,7 +562,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 			PrevTxnWalIndex: lastOffset.Encode(),
 		}
 
-		lastOffset, err = walInstance.Append(lastRecord.FBEncode(1024))
+		lastOffset, err = walInstance.Append(lastRecord.FBEncode(1024), 0)
 
 		recoveryInstance := &walRecovery{
 			store: db,
@@ -591,7 +591,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 
 			record.OperationType = logrecord.LogOperationTypeDelete
 
-			offset, err := walInstance.Append(record.FBEncode(1024))
+			offset, err := walInstance.Append(record.FBEncode(1024), 0)
 			assert.NoError(t, err)
 			lastOffset = offset
 		}
@@ -605,7 +605,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 			PrevTxnWalIndex: lastOffset.Encode(),
 		}
 
-		lastOffset, err = walInstance.Append(lastRecord.FBEncode(1024))
+		lastOffset, err = walInstance.Append(lastRecord.FBEncode(1024), 0)
 
 		recoveryInstance := NewWalRecovery(db, walInstance)
 

@@ -128,6 +128,7 @@ type WALog struct {
 	writeMu        sync.RWMutex
 	currentSegment *Segment
 	segments       map[SegmentID]*Segment
+	segmentRanges  []segmentRange
 
 	// in the read-path we will update the snapshot segment that reader can
 	// use exclusively.
@@ -143,6 +144,35 @@ type WALog struct {
 	dirSyncer           DirectorySyncer
 }
 
+type segmentRange struct {
+	id         SegmentID
+	firstIndex uint64
+	entryCount int64
+}
+
+func (wl *WALog) ensureSegmentRangesLocked() {
+	if len(wl.segmentRanges) == len(wl.segments) {
+		return
+	}
+	ranges := wl.segmentRanges[:0]
+	for id, seg := range wl.segments {
+		first := seg.FirstLogIndex()
+		if first == 0 {
+			continue
+		}
+		count := seg.GetEntryCount()
+		ranges = append(ranges, segmentRange{
+			id:         id,
+			firstIndex: first,
+			entryCount: count,
+		})
+	}
+	sort.Slice(ranges, func(i, j int) bool {
+		return ranges[i].firstIndex < ranges[j].firstIndex
+	})
+	wl.segmentRanges = ranges
+}
+
 // NewWALog returns an initialized WALog that manages the segments in the provided dir with the given ext.
 func NewWALog(dir string, ext string, opts ...WALogOptions) (*WALog, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -154,6 +184,7 @@ func NewWALog(dir string, ext string, opts ...WALogOptions) (*WALog, error) {
 		ext:                 ext,
 		maxSegmentSize:      segmentSize,
 		segments:            make(map[SegmentID]*Segment),
+		segmentRanges:       make([]segmentRange, 0),
 		forceSyncEveryWrite: MsyncNone,
 		bytesPerSync:        0,
 		segmentMaxAge:       0,
@@ -173,6 +204,8 @@ func NewWALog(dir string, ext string, opts ...WALogOptions) (*WALog, error) {
 	if err := manager.recoverSegments(); err != nil {
 		return nil, fmt.Errorf("segment recovery failed: %w", err)
 	}
+
+	manager.ensureSegmentRangesLocked()
 
 	return manager, nil
 }
@@ -321,7 +354,7 @@ func (wl *WALog) Close() error {
 
 // Write appends the given data as a new record to the active segment.
 // It returns RecordPosition indicating where the data was written.
-func (wl *WALog) Write(data []byte) (RecordPosition, error) {
+func (wl *WALog) Write(data []byte, logIndex uint64) (RecordPosition, error) {
 	wl.writeMu.Lock()
 	defer wl.writeMu.Unlock()
 
@@ -341,7 +374,7 @@ func (wl *WALog) Write(data []byte) (RecordPosition, error) {
 		}
 	}
 
-	pos, err := wl.currentSegment.Write(data)
+	pos, err := wl.currentSegment.Write(data, logIndex)
 	if err != nil {
 		return RecordPosition{}, fmt.Errorf("write failed: %w", err)
 	}
@@ -362,7 +395,7 @@ func (wl *WALog) Write(data []byte) (RecordPosition, error) {
 // WriteBatch appends multiple records to the active segment in a single batched operation.
 // If the batch cannot fit entirely in the current segment, it handles automatic rotation:
 // Returns a slice of RecordPositions for all successfully written records.
-func (wl *WALog) WriteBatch(records [][]byte) ([]RecordPosition, error) {
+func (wl *WALog) WriteBatch(records [][]byte, logIndexes []uint64) ([]RecordPosition, error) {
 	if len(records) == 0 {
 		return nil, nil
 	}
@@ -383,11 +416,19 @@ func (wl *WALog) WriteBatch(records [][]byte) ([]RecordPosition, error) {
 		}
 	}
 
+	return wl.writeBatchLocked(records, logIndexes)
+}
+
+func (wl *WALog) writeBatchLocked(records [][]byte, logIndexes []uint64) ([]RecordPosition, error) {
 	var allPositions []RecordPosition
 	remaining := records
 
 	for len(remaining) > 0 {
-		positions, written, batchErr := wl.currentSegment.WriteBatch(remaining)
+		var indexes []uint64
+		if logIndexes != nil {
+			indexes = logIndexes[len(records)-len(remaining):]
+		}
+		positions, written, batchErr := wl.currentSegment.WriteBatch(remaining, indexes)
 
 		if batchErr != nil && !errors.Is(batchErr, ErrSegmentFull) {
 			return allPositions, batchErr
@@ -420,6 +461,9 @@ func (wl *WALog) WriteBatch(records [][]byte) ([]RecordPosition, error) {
 		// segment is full - rotate and continue with remaining records
 		if errors.Is(batchErr, ErrSegmentFull) && written < len(remaining) {
 			remaining = remaining[written:]
+			if logIndexes != nil {
+				logIndexes = logIndexes[written:]
+			}
 			if rotateErr := wl.rotateSegment(); rotateErr != nil {
 				return allPositions, fmt.Errorf("failed to rotate segment during batch write: %w", rotateErr)
 			}
@@ -490,6 +534,39 @@ func (wl *WALog) Current() *Segment {
 	wl.writeMu.RLock()
 	defer wl.writeMu.RUnlock()
 	return wl.currentSegment
+}
+
+// SegmentIndex returns the physical index entries for a segment. For sealed segments the
+// returned slice is complete. For the active segment, the slice reflects the entries written so far.
+func (wl *WALog) SegmentIndex(id SegmentID) ([]IndexEntry, error) {
+	wl.writeMu.RLock()
+	defer wl.writeMu.RUnlock()
+
+	seg, ok := wl.segments[id]
+	if !ok {
+		return nil, fmt.Errorf("%w: segment %d", ErrSegmentNotFound, id)
+	}
+	return seg.IndexEntries(), nil
+}
+
+// SegmentForIndex returns the segment ID and slot containing the given log index.
+func (wl *WALog) SegmentForIndex(idx uint64) (SegmentID, int, error) {
+	wl.writeMu.RLock()
+	defer wl.writeMu.RUnlock()
+
+	wl.ensureSegmentRangesLocked()
+	for _, r := range wl.segmentRanges {
+		if r.firstIndex == 0 {
+			continue
+		}
+		high := r.firstIndex + uint64(r.entryCount)
+		if idx < r.firstIndex || idx >= high {
+			continue
+		}
+		slot := int(idx - r.firstIndex)
+		return r.id, slot, nil
+	}
+	return 0, 0, fmt.Errorf("log index %d not found", idx)
 }
 
 // RotateSegment rotates the current segment and create a new active segment.

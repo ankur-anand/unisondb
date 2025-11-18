@@ -21,6 +21,7 @@ func NewUnisonDB(ctx context.Context, dir, namespace string, relayerCount int) (
 	cfg.WalConfig.SyncInterval = 1 * time.Second
 	cfg.BTreeFlushInterval = 10 * time.Second
 	cfg.DisableEntryTypeCheck = true
+	cfg.ArenaSize = 16 * 1024 * 1024
 	engine, err := dbkernel.NewStorageEngine(dir, namespace, cfg)
 	if relayerCount > 0 {
 		go func() {

@@ -1,6 +1,7 @@
 package walfs
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -110,7 +111,7 @@ func BenchmarkSegment(b *testing.B) {
 							}
 							b.StartTimer()
 						}
-						if _, err := seg.Write(testData); err != nil {
+						if _, err := seg.Write(testData, 0); err != nil {
 							b.Fatal(err)
 						}
 					}
@@ -124,7 +125,7 @@ func BenchmarkSegment(b *testing.B) {
 					}
 					defer seg.Close()
 
-					pos, err := seg.Write(testData)
+					pos, err := seg.Write(testData, 0)
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -153,7 +154,7 @@ func BenchmarkSegment(b *testing.B) {
 
 					numEntries := min(100, maxWrites)
 					for i := 0; i < numEntries; i++ {
-						if _, err := seg.Write(testData); err != nil {
+						if _, err := seg.Write(testData, 0); err != nil {
 							b.Fatal(err)
 						}
 					}
@@ -234,7 +235,7 @@ func BenchmarkConcurrent(b *testing.B) {
 								b.Fatal("Segment is nil")
 							}
 
-							_, err := seg.Write(data)
+							_, err := seg.Write(data, 0)
 							if err == nil {
 								break
 							}
@@ -275,7 +276,7 @@ func BenchmarkConcurrent(b *testing.B) {
 				numbRewrites := min(100, calculateMaxEntries(dataSize)/2)
 
 				for i := 0; i < numbRewrites; i++ {
-					pos, err := seg.Write(data)
+					pos, err := seg.Write(data, 0)
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -299,7 +300,7 @@ func BenchmarkConcurrent(b *testing.B) {
 								}
 							}
 						} else {
-							pos, err := seg.Write(data)
+							pos, err := seg.Write(data, 0)
 							if err == nil {
 								positions.Store(globalRand.Intn(numbRewrites), pos)
 							}
@@ -356,7 +357,7 @@ func BenchmarkSyncLatency(b *testing.B) {
 						b.StartTimer()
 					}
 
-					if _, err := seg.Write(data); err != nil {
+					if _, err := seg.Write(data, 0); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -434,7 +435,7 @@ func BenchmarkWriteBatch(b *testing.B) {
 						b.StartTimer()
 					}
 
-					if _, _, err := seg.WriteBatch(records); err != nil && err != ErrSegmentFull {
+					if _, _, err := seg.WriteBatch(records, nil); err != nil && !errors.Is(err, ErrSegmentFull) {
 						b.Fatal(err)
 					}
 				}
@@ -483,7 +484,7 @@ func BenchmarkWriteVsWriteBatch(b *testing.B) {
 					b.StartTimer()
 				}
 
-				if _, err := seg.Write(data); err != nil {
+				if _, err := seg.Write(data, 0); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -525,8 +526,8 @@ func BenchmarkWriteVsWriteBatch(b *testing.B) {
 						b.StartTimer()
 					}
 
-					positions, written, err := seg.WriteBatch(records)
-					if err != nil && err != ErrSegmentFull {
+					positions, written, err := seg.WriteBatch(records, nil)
+					if err != nil && !errors.Is(err, ErrSegmentFull) {
 						b.Fatal(err)
 					}
 					writtenCount += written

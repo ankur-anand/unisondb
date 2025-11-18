@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestChunkPositionEncodeDecode(t *testing.T) {
@@ -51,7 +52,7 @@ func TestRead_CRCCheckBehavior_AfterCloseReopen(t *testing.T) {
 
 	seg, err := OpenSegmentFile(dir, ".wal", 1)
 	assert.NoError(t, err, "failed to open segment")
-	pos, err := seg.Write(data)
+	pos, err := seg.Write(data, 1)
 	assert.NoError(t, err, "failed to write data")
 	err = seg.SealSegment()
 	assert.NoError(t, err, "failed to seal segment")
@@ -105,7 +106,7 @@ func TestSegment_BasicOperations(t *testing.T) {
 
 	var positions []RecordPosition
 	for _, tt := range tests {
-		pos, err := seg.Write(tt.data)
+		pos, err := seg.Write(tt.data, 0)
 		assert.NoError(t, err)
 		positions = append(positions, pos)
 	}
@@ -128,6 +129,103 @@ func TestSegment_BasicOperations(t *testing.T) {
 	}
 }
 
+func TestSegmentHeaderStoresFirstLogIndex(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+	defer seg.Close()
+
+	_, err = seg.Write([]byte("record-1"), 42)
+	require.NoError(t, err)
+
+	require.NoError(t, seg.SealSegment())
+	require.NoError(t, seg.Close())
+
+	reopened, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+	defer reopened.Close()
+
+	meta, err := decodeSegmentHeader(reopened.mmapData[:segmentHeaderSize])
+	require.NoError(t, err)
+	assert.Equal(t, uint64(42), meta.FirstLogIndex)
+}
+
+func TestSegmentFirstLogIndexSetOnWrite(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+	defer seg.Close()
+
+	_, err = seg.Write([]byte("entry-a"), 101)
+	require.NoError(t, err)
+	_, err = seg.Write([]byte("entry-b"), 102)
+	require.NoError(t, err)
+
+	require.Equal(t, uint64(101), seg.firstLogIndex)
+	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
+	require.NoError(t, err)
+	assert.Equal(t, uint64(101), meta.FirstLogIndex)
+}
+
+func TestSegmentFirstLogIndexSetOnWriteBatch(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+	defer seg.Close()
+
+	records := [][]byte{[]byte("batch-1"), []byte("batch-2"), []byte("batch-3")}
+	indexes := []uint64{21, 22, 23}
+	_, _, err = seg.WriteBatch(records, indexes)
+	require.NoError(t, err)
+
+	require.Equal(t, uint64(21), seg.firstLogIndex)
+	meta, err := decodeSegmentHeader(seg.mmapData[:segmentHeaderSize])
+	require.NoError(t, err)
+	assert.Equal(t, uint64(21), meta.FirstLogIndex)
+}
+
+func TestSegmentFirstLogIndexPersistsWhenUnsealed(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+
+	_, err = seg.Write([]byte("one"), 500)
+	require.NoError(t, err)
+	require.NoError(t, seg.Close())
+
+	reopened, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+	defer reopened.Close()
+
+	meta, err := decodeSegmentHeader(reopened.mmapData[:segmentHeaderSize])
+	require.NoError(t, err)
+	assert.Equal(t, uint64(500), meta.FirstLogIndex)
+}
+
+func TestSegmentFirstLogIndexPersistsWhenSealed(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+
+	_, err = seg.Write([]byte("sealed-entry"), 777)
+	require.NoError(t, err)
+	require.NoError(t, seg.SealSegment())
+	require.NoError(t, seg.Close())
+
+	reopened, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+	defer reopened.Close()
+
+	meta, err := decodeSegmentHeader(reopened.mmapData[:segmentHeaderSize])
+	require.NoError(t, err)
+	assert.Equal(t, uint64(777), meta.FirstLogIndex)
+}
+
 func TestSegment_SequentialWrites(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -140,7 +238,7 @@ func TestSegment_SequentialWrites(t *testing.T) {
 	var positions []RecordPosition
 	for i := 0; i < 10; i++ {
 		data := []byte(fmt.Sprintf("entry-%d", i))
-		pos, err := seg.Write(data)
+		pos, err := seg.Write(data, uint64(1))
 		assert.NoError(t, err)
 		positions = append(positions, pos)
 	}
@@ -173,7 +271,7 @@ func TestSegment_ConcurrentReads(t *testing.T) {
 	testData := make([]RecordPosition, 100)
 	for i := 0; i < 100; i++ {
 		data := []byte(fmt.Sprintf("test-%d", i))
-		pos, err := seg.Write(data)
+		pos, err := seg.Write(data, uint64(1))
 		assert.NoError(t, err)
 		testData[i] = pos
 	}
@@ -212,7 +310,7 @@ func TestSegment_InvalidCRC(t *testing.T) {
 	assert.NoError(t, err)
 
 	data := []byte("corrupt me")
-	pos, err := seg.Write(data)
+	pos, err := seg.Write(data, uint64(1))
 	assert.NoError(t, err)
 
 	seg.mmapData[pos.Offset] ^= 0xFF
@@ -244,7 +342,7 @@ func TestSegment_CloseAndReopen(t *testing.T) {
 	assert.NoError(t, err)
 
 	testData := []byte("persist this")
-	pos, err := seg1.Write(testData)
+	pos, err := seg1.Write(testData, 1)
 	assert.NoError(t, err)
 
 	assert.NoError(t, seg1.Close())
@@ -274,7 +372,7 @@ func TestLargeWriteBoundary(t *testing.T) {
 		data[i] = byte(i % 256)
 	}
 
-	_, err = seg.Write(data)
+	_, err = seg.Write(data, 0)
 	assert.Error(t, err)
 }
 
@@ -311,7 +409,7 @@ func TestSegment_WriteRead_1KBTo1MB(t *testing.T) {
 		for j := range data {
 			data[j] = byte(i + j)
 		}
-		pos, err := seg.Write(data)
+		pos, err := seg.Write(data, 0)
 		assert.NoError(t, err)
 		positions = append(positions, pos)
 		original = append(original, data)
@@ -332,7 +430,7 @@ func TestSegment_CorruptHeader(t *testing.T) {
 	assert.NoError(t, err)
 
 	data := []byte("hello")
-	pos, err := seg.Write(data)
+	pos, err := seg.Write(data, 0)
 	assert.NoError(t, err)
 
 	copy(seg.mmapData[pos.Offset+4:pos.Offset+8], []byte{0xFF, 0xFF, 0xFF, 0xFF})
@@ -350,7 +448,7 @@ func TestSegment_CorruptData(t *testing.T) {
 	})
 
 	data := []byte("hello")
-	pos, err := seg.Write(data)
+	pos, err := seg.Write(data, uint64(1))
 	assert.NoError(t, err)
 	copy(seg.mmapData[pos.Offset+recordHeaderSize:], []byte{})
 	seg.writeOffset.Store(pos.Offset + recordHeaderSize - 1)
@@ -364,7 +462,7 @@ func TestSegment_ReadAfterClose(t *testing.T) {
 	assert.NoError(t, err)
 
 	data := []byte("data")
-	pos, err := seg.Write(data)
+	pos, err := seg.Write(data, uint64(1))
 	assert.NoError(t, err)
 
 	assert.NoError(t, seg.Close())
@@ -380,7 +478,7 @@ func TestSegment_WriteAfterClose(t *testing.T) {
 
 	assert.NoError(t, seg.Close())
 
-	_, err = seg.Write([]byte("should fail"))
+	_, err = seg.Write([]byte("should fail"), 0)
 	assert.ErrorIs(t, err, ErrClosed)
 }
 
@@ -390,7 +488,7 @@ func TestSegment_TruncatedRecovery(t *testing.T) {
 	assert.NoError(t, err)
 
 	data := []byte("valid")
-	_, err = seg1.Write(data)
+	_, err = seg1.Write(data, 0)
 	assert.NoError(t, err)
 
 	offset := seg1.WriteOffset()
@@ -421,12 +519,12 @@ func TestSegment_WriteAtExactBoundary(t *testing.T) {
 		data[i] = 'A'
 	}
 
-	_, err = seg.Write(data)
+	_, err = seg.Write(data, uint64(1))
 	assert.NoError(t, err)
 
 	assert.Equal(t, int64(segmentSize), seg.WriteOffset())
 
-	_, err = seg.Write([]byte("extra"))
+	_, err = seg.Write([]byte("extra"), 0)
 	assert.Error(t, err)
 }
 
@@ -448,7 +546,7 @@ func TestSegment_ConcurrentReadWhileWriting(t *testing.T) {
 		<-start
 		for i := 0; i < 100; i++ {
 			data := []byte(fmt.Sprintf("msg-%d", i))
-			_, err := seg.Write(data)
+			_, err := seg.Write(data, uint64(1))
 			assert.NoError(t, err)
 		}
 	}()
@@ -478,7 +576,7 @@ func TestSegment_SyncOnWriteOption(t *testing.T) {
 		assert.NoError(t, seg.Close())
 	})
 
-	_, err = seg.Write([]byte("sync test"))
+	_, err = seg.Write([]byte("sync test"), 0)
 	assert.NoError(t, err)
 }
 
@@ -533,7 +631,7 @@ func TestOpenSegmentFile_BadChecksum(t *testing.T) {
 	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
-	_, err = seg.Write([]byte("valid"))
+	_, err = seg.Write([]byte("valid"), 0)
 	assert.NoError(t, err)
 
 	offset := seg.WriteOffset()
@@ -595,7 +693,7 @@ func TestSegment_TrailerValidation(t *testing.T) {
 	})
 
 	data := []byte("trailer test")
-	pos, err := seg.Write(data)
+	pos, err := seg.Write(data, uint64(1))
 	assert.NoError(t, err)
 
 	trailerOffset := pos.Offset + int64(recordHeaderSize+len(data))
@@ -643,13 +741,13 @@ func TestSegment_SealAndPreventWrite(t *testing.T) {
 	assert.NoError(t, err)
 	t.Cleanup(func() { _ = seg.Close() })
 
-	_, err = seg.Write([]byte("hello"))
+	_, err = seg.Write([]byte("hello"), 0)
 	assert.NoError(t, err, "initial write should succeed")
 
 	err = seg.SealSegment()
 	assert.NoError(t, err, "sealing Segment should not fail")
 
-	_, err = seg.Write([]byte("how are you?"))
+	_, err = seg.Write([]byte("how are you?"), 0)
 	assert.ErrorIs(t, err, ErrSegmentSealed)
 
 	_ = seg.Close()
@@ -679,7 +777,7 @@ func TestSegmentOffsetBehavior(t *testing.T) {
 		assert.NoError(t, err)
 
 		data := []byte("sealed-data")
-		_, err = seg.Write(data)
+		_, err = seg.Write(data, uint64(1))
 		assert.NoError(t, err)
 		expectedOffset := seg.writeOffset.Load()
 
@@ -700,7 +798,7 @@ func TestSegmentOffsetBehavior(t *testing.T) {
 		assert.NoError(t, err)
 
 		data := []byte("valid")
-		_, err = seg.Write(data)
+		_, err = seg.Write(data, uint64(1))
 		assert.NoError(t, err)
 
 		offset := seg.writeOffset.Load()
@@ -771,7 +869,7 @@ func TestSegment_WriteRead_UnalignedEntriesAlignedOffsets(t *testing.T) {
 	var positions []RecordPosition
 
 	for _, data := range inputs {
-		pos, err := seg.Write(data)
+		pos, err := seg.Write(data, uint64(1))
 		assert.NoError(t, err)
 		positions = append(positions, pos)
 	}
@@ -802,7 +900,7 @@ func TestSegmentReader_Next_AlignedOffsets(t *testing.T) {
 	}
 
 	for _, data := range inputs {
-		_, err := seg.Write(data)
+		_, err := seg.Write(data, uint64(1))
 		assert.NoError(t, err)
 	}
 
@@ -832,10 +930,10 @@ func TestSegment_ScanStopsAt_Trailer_Corruption(t *testing.T) {
 	data1 := []byte("hello")
 	data2 := []byte("world")
 
-	pos1, err := seg.Write(data1)
+	pos1, err := seg.Write(data1, uint64(1))
 	assert.NoError(t, err)
 
-	pos2, err := seg.Write(data2)
+	pos2, err := seg.Write(data2, uint64(1))
 	assert.NoError(t, err)
 
 	headerSize := int64(recordHeaderSize)
@@ -865,7 +963,7 @@ func TestSegment_ParallelStreamReaders(t *testing.T) {
 	payload := []byte("concurrent-read-entry")
 	var positions []RecordPosition
 	for i := 0; i < 500; i++ {
-		pos, err := seg.Write(payload)
+		pos, err := seg.Write(payload, uint64(1))
 		assert.NoError(t, err)
 		positions = append(positions, pos)
 	}
@@ -898,7 +996,7 @@ func TestSegmentReader_ReferenceCountingAndDeletion(t *testing.T) {
 	seg, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	assert.NoError(t, err)
 
-	_, err = seg.Write([]byte("hello"))
+	_, err = seg.Write([]byte("hello"), 0)
 	assert.NoError(t, err)
 
 	reader1 := seg.NewReader()
@@ -931,7 +1029,7 @@ func TestSegmentReader_CleanupFallback(t *testing.T) {
 	seg, err := OpenSegmentFile(tmpDir, ".wal", 2)
 	assert.NoError(t, err)
 
-	_, err = seg.Write([]byte("world"))
+	_, err = seg.Write([]byte("world"), 0)
 	assert.NoError(t, err)
 
 	reader := seg.NewReader()
@@ -974,7 +1072,7 @@ func TestSegmentReader_PreventAccessAfterClose(t *testing.T) {
 	seg, err := OpenSegmentFile(tmpDir, ".wal", 3)
 	assert.NoError(t, err)
 
-	_, err = seg.Write([]byte("data"))
+	_, err = seg.Write([]byte("data"), 0)
 	assert.NoError(t, err)
 
 	reader := seg.NewReader()
@@ -1003,7 +1101,7 @@ func TestSegmentReader_LastRecordPosition(t *testing.T) {
 
 	var expectedOffsets []int64
 	for _, rec := range records {
-		pos, err := seg.Write(rec)
+		pos, err := seg.Write(rec, uint64(1))
 		assert.NoError(t, err)
 		expectedOffsets = append(expectedOffsets, pos.Offset)
 	}
@@ -1177,7 +1275,7 @@ func TestSegmentReader_WaitForNewData(t *testing.T) {
 	assert.ErrorIs(t, err, ErrNoNewData)
 
 	payload := []byte("new-wal-entry")
-	_, err = seg.Write(payload)
+	_, err = seg.Write(payload, uint64(1))
 	assert.NoError(t, err)
 
 	data, pos, err = reader.Next()
@@ -1209,10 +1307,10 @@ func TestSegmentReader_ReadAfterSealHasNewData(t *testing.T) {
 	entry1 := []byte("entry-before-seal-1")
 	entry2 := []byte("entry-before-seal-2")
 
-	_, err = seg.Write(entry1)
+	_, err = seg.Write(entry1, uint64(1))
 	assert.NoError(t, err)
 
-	_, err = seg.Write(entry2)
+	_, err = seg.Write(entry2, uint64(1))
 	assert.NoError(t, err)
 
 	err = seg.SealSegment()
@@ -1288,7 +1386,7 @@ func TestSegment_WriteBatch(t *testing.T) {
 		[]byte("record5-medium-size"),
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, len(records), written)
 	assert.Equal(t, len(records), len(positions))
@@ -1316,7 +1414,7 @@ func TestSegment_WriteBatch_Overflow(t *testing.T) {
 		records[i] = bytes.Repeat([]byte("x"), 100)
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.Error(t, err)
 	assert.Greater(t, written, 0)
 	assert.Less(t, written, len(records))
@@ -1337,7 +1435,7 @@ func TestSegment_WriteBatch_Empty(t *testing.T) {
 		assert.NoError(t, seg.Close())
 	})
 
-	positions, written, err := seg.WriteBatch([][]byte{})
+	positions, written, err := seg.WriteBatch([][]byte{}, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, 0, written)
 	assert.Nil(t, positions)
@@ -1355,7 +1453,7 @@ func TestSegment_WriteBatch_AfterSealed(t *testing.T) {
 	assert.NoError(t, err)
 
 	records := [][]byte{[]byte("test")}
-	_, _, err = seg.WriteBatch(records)
+	_, _, err = seg.WriteBatch(records, nil)
 	assert.ErrorIs(t, err, ErrSegmentSealed)
 }
 
@@ -1378,7 +1476,7 @@ func TestSegment_WriteBatch_RecordExceedsSegmentCapacity(t *testing.T) {
 		oversizedRecord,
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeds maximum segment capacity")
 	assert.Equal(t, 0, written, "no records should be written when one exceeds capacity")
@@ -1401,7 +1499,7 @@ func TestSegment_WriteBatch_EachRecordValidated(t *testing.T) {
 		bytes.Repeat([]byte("d"), 50),
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "record at index 2")
 	assert.Contains(t, err.Error(), "exceeds maximum segment capacity")
@@ -1440,7 +1538,7 @@ func TestSegment_WriteBatch_ReadbackAllRecords(t *testing.T) {
 		bytes.Repeat([]byte("v"), 4095),
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, len(records), written)
 	assert.Equal(t, len(records), len(positions))
@@ -1476,7 +1574,7 @@ func TestSegment_WriteBatch_ReadbackAtSegmentBoundary(t *testing.T) {
 		records[i] = bytes.Repeat([]byte{byte(i)}, 50)
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	if err != nil {
 		assert.ErrorIs(t, err, ErrSegmentFull)
 	}
@@ -1524,7 +1622,7 @@ func TestSegment_WriteBatch_HeaderUpdateAfterPartialWrite(t *testing.T) {
 		records[i] = bytes.Repeat([]byte("x"), 80)
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.Error(t, err)
 	assert.Greater(t, written, 0)
 	assert.Less(t, written, len(records))
@@ -1543,7 +1641,7 @@ func TestSegment_WriteBatch_HeaderUpdateAfterPartialWrite(t *testing.T) {
 	}
 
 	extraRecord := []byte("after-partial-write")
-	pos, err := seg.Write(extraRecord)
+	pos, err := seg.Write(extraRecord, uint64(1))
 	if err == nil {
 		data, _, readErr := seg.Read(pos.Offset)
 		assert.NoError(t, readErr)
@@ -1567,7 +1665,7 @@ func TestSegment_WriteBatch_HeaderCRCValidation(t *testing.T) {
 		[]byte("record3"),
 	}
 
-	_, written, err := seg.WriteBatch(records)
+	_, written, err := seg.WriteBatch(records, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, len(records), written)
 
@@ -1601,7 +1699,7 @@ func TestSegment_WriteBatch_MultipleConsecutiveBatches(t *testing.T) {
 		}
 		allRecords = append(allRecords, batch...)
 
-		positions, written, err := seg.WriteBatch(batch)
+		positions, written, err := seg.WriteBatch(batch, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, len(batch), written)
 		allPositions = append(allPositions, positions...)
@@ -1635,7 +1733,7 @@ func TestSegment_WriteBatch_ReadbackAfterCloseReopen(t *testing.T) {
 		[]byte("persistent-record-3"),
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, len(records), written)
 
@@ -1677,7 +1775,7 @@ func TestSegment_WriteBatch_ReadbackWithMixedSizes(t *testing.T) {
 		bytes.Repeat([]byte("L"), 2000),
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, len(records), written)
 
@@ -1709,7 +1807,7 @@ func TestSegment_WriteBatch_ZeroLengthRecords(t *testing.T) {
 		[]byte("record3"),
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, len(records), written)
 	assert.Equal(t, len(records), len(positions))
@@ -1750,7 +1848,7 @@ func TestSegment_WriteBatch_Concurrent(t *testing.T) {
 				records[j] = []byte{byte(id), byte(j)}
 			}
 
-			positions, written, err := seg.WriteBatch(records)
+			positions, written, err := seg.WriteBatch(records, nil)
 			if err != nil && err != ErrSegmentFull {
 				errors <- err
 				return
@@ -1794,7 +1892,7 @@ func TestSegment_WriteBatch_WithMSyncOnWrite(t *testing.T) {
 		[]byte("record3"),
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, len(records), written)
 	assert.Equal(t, len(records), len(positions))
@@ -1819,7 +1917,7 @@ func TestSegment_WriteBatch_PartialWriteExactCount(t *testing.T) {
 		records[i] = bytes.Repeat([]byte("x"), 50)
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.ErrorIs(t, err, ErrSegmentFull)
 	assert.Greater(t, written, 0)
 	assert.Less(t, written, len(records))
@@ -1850,7 +1948,7 @@ func TestSegment_WriteBatch_OversizedRecordNoStateChange(t *testing.T) {
 	oversizedRecord := make([]byte, 2048)
 	records := [][]byte{oversizedRecord}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeds maximum segment capacity")
 	assert.Equal(t, 0, written)
@@ -1861,7 +1959,7 @@ func TestSegment_WriteBatch_OversizedRecordNoStateChange(t *testing.T) {
 	assert.Equal(t, initialFlags, seg.GetFlags(), "flags should not change")
 
 	validRecord := []byte("valid-record")
-	pos, err := seg.Write(validRecord)
+	pos, err := seg.Write(validRecord, uint64(1))
 	assert.NoError(t, err)
 	assert.Equal(t, initialOffset, pos.Offset, "should write at original offset")
 }
@@ -1885,7 +1983,7 @@ func TestSegment_WriteBatch_MetadataConsistency(t *testing.T) {
 
 	time.Sleep(2 * time.Millisecond)
 
-	_, written, err := seg.WriteBatch(records)
+	_, written, err := seg.WriteBatch(records, nil)
 	assert.Error(t, err)
 	assert.Greater(t, written, 0)
 
@@ -1912,7 +2010,7 @@ func TestSegment_WriteBatch_WithClosedSegment(t *testing.T) {
 
 	assert.NoError(t, seg.Close())
 
-	_, written, err := seg.WriteBatch(records)
+	_, written, err := seg.WriteBatch(records, nil)
 	assert.ErrorIs(t, err, ErrClosed)
 	assert.Equal(t, 0, written)
 }
@@ -1936,7 +2034,7 @@ func TestSegment_WriteBatch_ExactlyFullSegment(t *testing.T) {
 		records[i] = bytes.Repeat([]byte("a"), dataLen)
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.NoError(t, err, "should write successfully")
 	assert.Equal(t, numRecords, written)
 	assert.Equal(t, numRecords, len(positions))
@@ -1945,7 +2043,7 @@ func TestSegment_WriteBatch_ExactlyFullSegment(t *testing.T) {
 	assert.LessOrEqual(t, finalOffset, segmentSize, "should not exceed segment size")
 	assert.Greater(t, finalOffset, segmentSize-200, "should be nearly full")
 
-	_, written2, err := seg.WriteBatch([][]byte{[]byte("extra")})
+	_, written2, err := seg.WriteBatch([][]byte{[]byte("extra")}, nil)
 	if err == nil {
 		assert.Equal(t, 1, written2, "should have written 1 record")
 	} else {
@@ -1970,7 +2068,7 @@ func TestSegment_WriteBatch_AlignmentVerification(t *testing.T) {
 		bytes.Repeat([]byte("z"), 101),
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, len(records), written)
 
@@ -2002,7 +2100,7 @@ func TestSegment_WriteBatch_CRCValidation(t *testing.T) {
 		bytes.Repeat([]byte("long"), 100),
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, len(records), written)
 
@@ -2044,7 +2142,7 @@ func TestSegment_WriteBatch_TrailerValidation(t *testing.T) {
 		[]byte("record3"),
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, len(records), written)
 
@@ -2067,7 +2165,7 @@ func TestSegment_WriteBatch_StateOpenCheck(t *testing.T) {
 
 	seg.state.Store(StateClosing)
 
-	_, written, err := seg.WriteBatch(records)
+	_, written, err := seg.WriteBatch(records, nil)
 	assert.ErrorIs(t, err, ErrClosed)
 	assert.Equal(t, 0, written)
 }
@@ -2086,7 +2184,7 @@ func TestSegment_WriteBatch_PaddingZeroed(t *testing.T) {
 		[]byte("abcdefg"),
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.NoError(t, err)
 	assert.Equal(t, len(records), written)
 
@@ -2119,7 +2217,7 @@ func TestSegment_WriteBatch_SegmentFullOnFirstRecord(t *testing.T) {
 	})
 
 	filler := bytes.Repeat([]byte("x"), 150)
-	_, err = seg.Write(filler)
+	_, err = seg.Write(filler, uint64(1))
 	assert.NoError(t, err)
 
 	records := [][]byte{
@@ -2127,7 +2225,7 @@ func TestSegment_WriteBatch_SegmentFullOnFirstRecord(t *testing.T) {
 		bytes.Repeat([]byte("z"), 50),
 	}
 
-	positions, written, err := seg.WriteBatch(records)
+	positions, written, err := seg.WriteBatch(records, nil)
 	assert.ErrorIs(t, err, ErrSegmentFull)
 	assert.Equal(t, 0, written, "no records should be written if first doesn't fit")
 	assert.Nil(t, positions)
