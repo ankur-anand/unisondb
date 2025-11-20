@@ -80,7 +80,7 @@ UnisonDB implements a pluggable storage backend architecture supporting two BTre
 
 ## Redis-Compatible Benchmark: UnisonDB vs BadgerDB vs BoltDB vs LMDB
 
-This benchmark compares the **write and read performance** of three databases — **UnisonDB**, **BadgerDB**, *LMDB** and **BoltDB** — using a Redis-compatible interface and the official [`redis-benchmark`](https://redis.io/docs/latest/operate/oss_and_stack/management/optimization/benchmarks/) tool.
+This benchmark compares the **write and read performance** of four databases — **UnisonDB**, **BadgerDB**, *LMDB** and **BoltDB** — using a Redis-compatible interface and the official [`redis-benchmark`](https://redis.io/docs/latest/operate/oss_and_stack/management/optimization/benchmarks/) tool.
 
 ### What We Measured
 
