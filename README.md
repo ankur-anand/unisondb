@@ -503,3 +503,8 @@ mkcert -key-file grpc.key -cert-file grpc.crt localhost 127.0.0.1 ::1
 ## License
 
 [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0)
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ankur-anand/unisondb&type=date&legend=top-left)](https://www.star-history.com/#ankur-anand/unisondb&type=date&legend=top-left)
+
