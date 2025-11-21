@@ -15,6 +15,16 @@ type RowEntry struct {
 	Columns map[string][]byte
 }
 
+type EventEntry struct {
+	Pipeline        string
+	SchemaID        string
+	EventID         string
+	Operation       logrecord.EventOperation
+	OccurredAt      uint64
+	PartitionValues map[string][]byte
+	Fields          map[string][]byte
+}
+
 type LogRecord struct {
 	LSN             uint64
 	HLC             uint64
