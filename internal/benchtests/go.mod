@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	github.com/PowerDNS/lmdb-go v1.9.3
 	github.com/ankur-anand/unisondb v0.0.0-00010101000000-000000000000
+	github.com/arl/statsviz v0.8.0
 	github.com/brianvoe/gofakeit/v7 v7.8.1
 	github.com/dgraph-io/badger/v4 v4.6.0
 	github.com/google/flatbuffers v25.9.23+incompatible
@@ -35,6 +36,7 @@ require (
 	github.com/gofrs/flock v0.13.0 // indirect
 	github.com/golang/mock v1.6.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/hashicorp/go-immutable-radix v1.3.1 // indirect
 	github.com/hashicorp/golang-lru v1.0.2 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect

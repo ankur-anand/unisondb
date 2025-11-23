@@ -9,7 +9,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	_ "net/http/pprof"
+	"net/http/pprof"
+
 	"os"
 	"os/signal"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/benchtests/cmd/redis-server/store"
 	"github.com/ankur-anand/unisondb/internal/etc"
+	"github.com/arl/statsviz"
 	"github.com/hashicorp/go-metrics"
 	"github.com/tidwall/redcon"
 )
@@ -90,7 +92,15 @@ func main() {
 	}
 
 	go func() {
-		http.ListenAndServe("localhost:6060", nil)
+		mux := http.NewServeMux()
+		statsviz.Register(mux)
+		mux.HandleFunc("/debug/pprof/", pprof.Index)
+		mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+		http.ListenAndServe("localhost:6060", mux)
 	}()
 
 	addr := net.JoinHostPort("", fmt.Sprintf("%d", *port))
