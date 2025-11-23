@@ -16,6 +16,7 @@ import (
 
 var (
 	ErrTxnAlreadyCommitted      = errors.New("txn already committed")
+	ErrTxnConflict              = errors.New("txn conflict with newer commit")
 	ErrKeyChangedForChunkedType = errors.New("chunked txn type cannot change key from first value")
 	ErrUnsupportedTxnType       = errors.New("unsupported txn type")
 	ErrEmptyColumns             = errors.New("empty column set")
@@ -49,6 +50,8 @@ type Txn struct {
 	chunkedValueChecksum uint32
 	txnOperation         logrecord.LogOperationType
 	txnEntryType         logrecord.LogEntryType
+	beginLSN             uint64
+	beginReleased        bool
 }
 
 // NewTxn returns a new initialized batch Txn.
@@ -88,6 +91,7 @@ func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.
 	if err != nil {
 		return nil, err
 	}
+	e.registerTxnBegin(index)
 
 	e.taggedScope.Counter(mTxnBeginTotal).Inc(1)
 	return &Txn{
@@ -95,6 +99,7 @@ func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.
 		prevOffset:      offset,
 		err:             err,
 		engine:          e,
+		beginLSN:        index,
 		checksum:        0,
 		startTime:       time.Now(),
 		valuesCount:     0,
@@ -107,6 +112,7 @@ func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.
 // AppendKVTxn append a key, value to the WAL as part of a Txn.
 func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 	if t.err != nil {
+		t.unregisterBegin()
 		return t.err
 	}
 
@@ -126,6 +132,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 
 	if t.txnOperation == logrecord.LogOperationTypeInsert && t.txnEntryType != logrecord.LogEntryTypeKV && !bytes.Equal(t.rowKey, key) {
 		t.err = ErrKeyChangedForChunkedType
+		t.unregisterBegin()
 		return t.err
 	}
 
@@ -154,6 +161,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 
 	if err != nil {
 		t.err = err
+		t.unregisterBeginLocked()
 		return err
 	}
 
@@ -180,6 +188,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 // Caller can set the Columns Key to empty value, if deleted needs to be part of same Txn.
 func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) error {
 	if t.err != nil {
+		t.unregisterBegin()
 		return t.err
 	}
 	if t.txnEntryType != logrecord.LogEntryTypeRow {
@@ -218,6 +227,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 
 	if err != nil {
 		t.err = err
+		t.unregisterBeginLocked()
 		return err
 	}
 
@@ -238,12 +248,20 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 // Commit the Txn.
 func (t *Txn) Commit() error {
 	if t.err != nil {
+		t.unregisterBegin()
 		return t.err
 	}
 
 	kv := logcodec.SerializeKVEntry(t.rowKey, nil)
+	keys := t.touchedKeys()
 	t.engine.mu.Lock()
 	defer t.engine.mu.Unlock()
+	defer t.unregisterBeginLocked()
+
+	if err := t.engine.checkKeyConflicts(keys, t.beginLSN); err != nil {
+		t.err = err
+		return err
+	}
 	index := t.engine.writeSeenCounter.Add(1)
 
 	record := logcodec.LogRecord{
@@ -290,6 +308,7 @@ func (t *Txn) Commit() error {
 		return mErr
 	}
 
+	t.engine.recordKeyVersions(keys, index)
 	t.err = ErrTxnAlreadyCommitted
 	return nil
 }
@@ -321,6 +340,44 @@ func (t *Txn) memWriteFull() error {
 
 	t.engine.writeOffset(t.prevOffset)
 	return nil
+}
+
+func (t *Txn) unregisterBeginLocked() {
+	if t.beginReleased {
+		return
+	}
+	t.engine.unregisterTxnBegin(t.beginLSN)
+	t.beginReleased = true
+}
+
+func (t *Txn) unregisterBegin() {
+	t.engine.mu.Lock()
+	defer t.engine.mu.Unlock()
+	t.unregisterBeginLocked()
+}
+
+// touchedKeys returns the set of keys affected by the current transaction.
+func (t *Txn) touchedKeys() [][]byte {
+	if t.txnEntryType == logrecord.LogEntryTypeChunked {
+		if len(t.rowKey) == 0 {
+			return nil
+		}
+		return [][]byte{t.rowKey}
+	}
+
+	seen := make(map[string]struct{}, len(t.memTableEntries))
+	keys := make([][]byte, 0, len(t.memTableEntries))
+	for _, entry := range t.memTableEntries {
+		k := entry.key
+		sk := string(k)
+		if _, ok := seen[sk]; ok {
+			continue
+		}
+		seen[sk] = struct{}{}
+		keys = append(keys, k)
+	}
+
+	return keys
 }
 
 func (t *Txn) TxnID() []byte {

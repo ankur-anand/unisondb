@@ -346,6 +346,128 @@ func Test_RowColumn_Txn(t *testing.T) {
 	assert.Equal(t, txn3.CommitOffset(), engine.CurrentOffset(), "Commit operation should succeed")
 }
 
+func TestTxn_CommitConflictDoesNotOverride(t *testing.T) {
+	newEngine := func(t *testing.T) *dbkernel.Engine {
+		t.Helper()
+		baseDir := t.TempDir()
+		namespace := t.Name()
+
+		conf := dbkernel.NewDefaultEngineConfig()
+		conf.BtreeConfig.Namespace = namespace
+
+		engine, err := dbkernel.NewStorageEngine(baseDir, namespace, conf)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			err := engine.Close(context.Background())
+			if err != nil {
+				t.Errorf("Failed to close engine: %v", err)
+			}
+		})
+
+		return engine
+	}
+
+	t.Run("older_txn_conflicts_with_newer_txn", func(t *testing.T) {
+		engine := newEngine(t)
+		key := []byte("conflict-key")
+
+		olderTxn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+		require.NoError(t, err)
+		require.NoError(t, olderTxn.AppendKVTxn(key, []byte("old-value")))
+
+		newerTxn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+		require.NoError(t, err)
+		require.NoError(t, newerTxn.AppendKVTxn(key, []byte("new-value")))
+		require.NoError(t, newerTxn.Commit())
+
+		err = olderTxn.Commit()
+		require.ErrorIs(t, err, dbkernel.ErrTxnConflict)
+
+		got, err := engine.GetKV(key)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("new-value"), got)
+	})
+
+	t.Run("older_txn_conflicts_with_non_txn_write", func(t *testing.T) {
+		engine := newEngine(t)
+		key := []byte("conflict-key-non-txn")
+
+		olderTxn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+		require.NoError(t, err)
+		require.NoError(t, olderTxn.AppendKVTxn(key, []byte("old-value")))
+
+		require.NoError(t, engine.PutKV(key, []byte("newer-non-txn-value")))
+
+		err = olderTxn.Commit()
+		require.ErrorIs(t, err, dbkernel.ErrTxnConflict)
+
+		got, err := engine.GetKV(key)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("newer-non-txn-value"), got)
+	})
+
+	t.Run("older_chunked_txn_conflicts_with_newer_chunked_txn", func(t *testing.T) {
+		engine := newEngine(t)
+		key := []byte("conflict-chunked-key")
+
+		olderTxn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
+		require.NoError(t, err)
+		require.NoError(t, olderTxn.AppendKVTxn(key, []byte("old-chunk")))
+
+		newerTxn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
+		require.NoError(t, err)
+		require.NoError(t, newerTxn.AppendKVTxn(key, []byte("new-chunk")))
+		require.NoError(t, newerTxn.Commit())
+
+		err = olderTxn.Commit()
+		require.ErrorIs(t, err, dbkernel.ErrTxnConflict)
+
+		got, err := engine.GetLOB(key)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("new-chunk"), got)
+	})
+
+	t.Run("older_row_txn_conflicts_with_newer_row_txn", func(t *testing.T) {
+		engine := newEngine(t)
+		key := []byte("conflict-row-key")
+
+		olderTxn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeRow)
+		require.NoError(t, err)
+		require.NoError(t, olderTxn.AppendColumnTxn(key, map[string][]byte{"c1": []byte("old")})) //nolint:dogsled
+
+		newerTxn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeRow)
+		require.NoError(t, err)
+		require.NoError(t, newerTxn.AppendColumnTxn(key, map[string][]byte{"c1": []byte("new")})) //nolint:dogsled
+		require.NoError(t, newerTxn.Commit())
+
+		err = olderTxn.Commit()
+		require.ErrorIs(t, err, dbkernel.ErrTxnConflict)
+
+		cols, err := engine.GetRowColumns(string(key), nil)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("new"), cols["c1"])
+	})
+
+	t.Run("older_row_txn_conflicts_with_non_txn_row_put", func(t *testing.T) {
+		engine := newEngine(t)
+		key := []byte("conflict-row-key-non-txn")
+
+		olderTxn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeRow)
+		require.NoError(t, err)
+		require.NoError(t, olderTxn.AppendColumnTxn(key, map[string][]byte{"c1": []byte("old")})) //nolint:dogsled
+
+		require.NoError(t, engine.PutColumnsForRow(key, map[string][]byte{"c1": []byte("newer")}))
+
+		err = olderTxn.Commit()
+		require.ErrorIs(t, err, dbkernel.ErrTxnConflict)
+
+		cols, err := engine.GetRowColumns(string(key), nil)
+		require.NoError(t, err)
+		assert.Equal(t, []byte("newer"), cols["c1"])
+	})
+
+}
+
 func TestTxnWalLogIndexesPersist(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "txn_wal_indexes"
