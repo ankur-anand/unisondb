@@ -133,6 +133,79 @@ func TestTransactionLifecycle_Row(t *testing.T) {
 	assert.Equal(t, []byte("valB"), row2Cols["colB"])
 }
 
+func TestTransactionCommitConflictWithNonTxnKV(t *testing.T) {
+	ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	beginReq := BeginTransactionRequest{Operation: "put", EntryType: "kv"}
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/begin", beginReq)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var beginResp BeginTransactionResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&beginResp))
+	txnID := beginResp.TxnID
+
+	appendReq := AppendKVRequest{Key: "kv-conflict", Value: encodeBase64([]byte("old"))}
+	rr = makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+txnID+"/kv", appendReq)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	// concurrent non-txn write
+	putReq := PutKVRequest{Value: encodeBase64([]byte("newer"))}
+	rr = makeRequest(t, ts.router, http.MethodPut, "/api/v1/test/kv/kv-conflict", putReq)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	rr = makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+txnID+"/commit", nil)
+	assert.Equal(t, http.StatusConflict, rr.Code)
+	var errResp map[string]string
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&errResp))
+	assert.Contains(t, errResp["error"], "txn conflict")
+
+	val, err := ts.engine.GetKV([]byte("kv-conflict"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("newer"), val)
+}
+
+func TestTransactionCommitConflictWithNonTxnRow(t *testing.T) {
+	ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	beginReq := BeginTransactionRequest{Operation: "put", EntryType: "row"}
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/begin", beginReq)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var beginResp BeginTransactionResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&beginResp))
+	txnID := beginResp.TxnID
+
+	appendReq := AppendRowRequest{
+		RowKey: "row-conflict",
+		Columns: map[string]string{
+			"c1": encodeBase64([]byte("old")),
+		},
+	}
+	rr = makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+txnID+"/row", appendReq)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	// concurrent non-txn row write
+	putRowReq := PutRowRequest{
+		Columns: map[string]string{
+			"c1": encodeBase64([]byte("newer")),
+		},
+	}
+	rr = makeRequest(t, ts.router, http.MethodPut, "/api/v1/test/row/row-conflict", putRowReq)
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	rr = makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+txnID+"/commit", nil)
+	assert.Equal(t, http.StatusConflict, rr.Code)
+	var errResp map[string]string
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&errResp))
+	assert.Contains(t, errResp["error"], "txn conflict")
+
+	rowCols, err := ts.engine.GetRowColumns("row-conflict", nil)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("newer"), rowCols["c1"])
+}
+
 func TestTransactionLifecycle_LOB(t *testing.T) {
 	ts, cleanup := setupTestServer(t)
 	defer cleanup()
@@ -180,6 +253,40 @@ func TestTransactionLifecycle_LOB(t *testing.T) {
 	value, err := ts.engine.GetLOB([]byte("large-key"))
 	require.NoError(t, err)
 	assert.Equal(t, largeData, value)
+}
+
+func TestParallelTransactionsConflictOnlyOneSucceeds(t *testing.T) {
+	ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	beginReq := BeginTransactionRequest{Operation: "put", EntryType: "kv"}
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/begin", beginReq)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var beginResp1 BeginTransactionResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&beginResp1))
+
+	rr = makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/begin", beginReq)
+	require.Equal(t, http.StatusOK, rr.Code)
+	var beginResp2 BeginTransactionResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&beginResp2))
+
+	appendReq := AppendKVRequest{Key: "race-key", Value: encodeBase64([]byte("txn1"))}
+	rr = makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+beginResp1.TxnID+"/kv", appendReq)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	appendReq = AppendKVRequest{Key: "race-key", Value: encodeBase64([]byte("txn2"))}
+	rr = makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+beginResp2.TxnID+"/kv", appendReq)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	rr2 := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+beginResp2.TxnID+"/commit", nil)
+	require.Equal(t, http.StatusOK, rr2.Code)
+
+	rr1 := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+beginResp1.TxnID+"/commit", nil)
+	require.Equal(t, http.StatusConflict, rr1.Code)
+
+	val, err := ts.engine.GetKV([]byte("race-key"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("txn2"), val)
 }
 
 func TestTransactionAbort(t *testing.T) {

@@ -4,11 +4,13 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
+	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/gorilla/mux"
 )
@@ -249,6 +251,10 @@ func (s *Service) handleCommitTransaction(w http.ResponseWriter, r *http.Request
 	defer state.mu.Unlock()
 
 	if err := state.txn.Commit(); err != nil {
+		if errors.Is(err, dbkernel.ErrTxnConflict) {
+			respondError(w, http.StatusConflict, fmt.Sprintf("failed to commit transaction: %v", err))
+			return
+		}
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to commit transaction: %v", err))
 		return
 	}
