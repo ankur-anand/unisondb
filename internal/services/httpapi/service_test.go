@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/gorilla/mux"
@@ -34,14 +35,18 @@ func setupTestServer(t *testing.T) (*testServer, func()) {
 }
 
 func setupTestServerWithConfig(t *testing.T, modify func(cfg *dbkernel.EngineConfig)) (*testServer, func()) {
+	return setupTestServerWithOptions(t, modify, nil)
+}
+
+func setupTestServerWithOptions(t *testing.T, modifyCfg func(cfg *dbkernel.EngineConfig), modifyService func(s *Service)) (*testServer, func()) {
 	t.Helper()
 
 	tmpDir := t.TempDir()
 
 	cfg := dbkernel.NewDefaultEngineConfig()
 	cfg.DBEngine = dbkernel.LMDBEngine
-	if modify != nil {
-		modify(cfg)
+	if modifyCfg != nil {
+		modifyCfg(cfg)
 	}
 
 	engine, err := dbkernel.NewStorageEngine(tmpDir, "test", cfg)
@@ -52,11 +57,15 @@ func setupTestServerWithConfig(t *testing.T, modify func(cfg *dbkernel.EngineCon
 	}
 
 	service := NewService(engines)
+	if modifyService != nil {
+		modifyService(service)
+	}
 	router := mux.NewRouter()
 	router.HandleFunc("/health", service.HandleHealth).Methods(http.MethodGet)
 	service.RegisterRoutes(router)
 
 	cleanup := func() {
+		service.Close()
 		engine.Close(context.Background())
 	}
 
@@ -1196,8 +1205,82 @@ func TestRequestSizeLimit_Transaction_AppendLOB(t *testing.T) {
 
 	ts.router.ServeHTTP(rr, httpReq)
 
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
-	assert.Contains(t, rr.Body.String(), "failed to read request body")
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rr.Code)
+	assert.Contains(t, rr.Body.String(), "request body too large")
+}
+
+func TestTransactionReaper_IdleTimeout(t *testing.T) {
+	ts, cleanup := setupTestServerWithOptions(t, nil, func(s *Service) {
+		s.txnIdleTimeout = 10 * time.Millisecond
+		s.txnMaxLifetime = time.Minute
+		s.txnReapInterval = 5 * time.Millisecond
+	})
+	defer cleanup()
+
+	beginReq := BeginTransactionRequest{Operation: "put", EntryType: "kv"}
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/begin", beginReq)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var beginResp BeginTransactionResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&beginResp))
+
+	state, err := ts.service.getTransaction(beginResp.TxnID)
+	require.NoError(t, err)
+
+	state.mu.Lock()
+	state.lastWrite = time.Now().Add(-time.Hour)
+	state.mu.Unlock()
+
+	ts.service.cleanupStaleTransactions(time.Now())
+
+	_, err = ts.service.getTransaction(beginResp.TxnID)
+	require.Error(t, err)
+}
+
+func TestTransactionReaper_MaxLifetime(t *testing.T) {
+	ts, cleanup := setupTestServerWithOptions(t, nil, func(s *Service) {
+		s.txnIdleTimeout = time.Minute
+		s.txnMaxLifetime = 10 * time.Millisecond
+		s.txnReapInterval = 5 * time.Millisecond
+	})
+	defer cleanup()
+
+	beginReq := BeginTransactionRequest{Operation: "put", EntryType: "kv"}
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/begin", beginReq)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var beginResp BeginTransactionResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&beginResp))
+
+	ts.service.cleanupStaleTransactions(time.Now().Add(20 * time.Millisecond))
+
+	_, err := ts.service.getTransaction(beginResp.TxnID)
+	require.Error(t, err)
+}
+
+func TestAbortTransactionReturnsNotFoundAfterAbort(t *testing.T) {
+	ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	beginReq := BeginTransactionRequest{Operation: "put", EntryType: "kv"}
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/begin", beginReq)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	var beginResp BeginTransactionResponse
+	require.NoError(t, json.NewDecoder(rr.Body).Decode(&beginResp))
+
+	appendReq := AppendKVRequest{Key: "abort-key", Value: encodeBase64([]byte("value"))}
+	rr = makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+beginResp.TxnID+"/kv", appendReq)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	rr = makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+beginResp.TxnID+"/abort", nil)
+	require.Equal(t, http.StatusOK, rr.Code)
+
+	_, err := ts.engine.GetKV([]byte("abort-key"))
+	assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound)
+
+	rr = makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+beginResp.TxnID+"/commit", nil)
+	require.Equal(t, http.StatusNotFound, rr.Code)
 }
 
 func TestRequestSizeLimit_SmallRequest_Success(t *testing.T) {
@@ -1354,7 +1437,7 @@ func TestReadOnlyMode_HTTPAPIPutKV(t *testing.T) {
 
 	rr := makeRequest(t, ts.router, http.MethodPut, "/api/v1/test/kv/new-key", reqBody)
 
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Equal(t, http.StatusForbidden, rr.Code)
 
 	var errResp map[string]string
 	err := json.NewDecoder(rr.Body).Decode(&errResp)
@@ -1376,7 +1459,7 @@ func TestReadOnlyMode_HTTPAPIBatchPutKV(t *testing.T) {
 
 	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/kv/batch", reqBody)
 
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Equal(t, http.StatusForbidden, rr.Code)
 
 	var errResp map[string]string
 	err := json.NewDecoder(rr.Body).Decode(&errResp)
@@ -1390,7 +1473,7 @@ func TestReadOnlyMode_HTTPAPIDeleteKV(t *testing.T) {
 
 	rr := makeRequest(t, ts.router, http.MethodDelete, "/api/v1/test/kv/existing-key", nil)
 
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Equal(t, http.StatusForbidden, rr.Code)
 
 	var errResp map[string]string
 	err := json.NewDecoder(rr.Body).Decode(&errResp)
@@ -1409,7 +1492,7 @@ func TestReadOnlyMode_HTTPAPIBatchDeleteKV(t *testing.T) {
 
 	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/kv/batch", reqBody)
 
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Equal(t, http.StatusForbidden, rr.Code)
 
 	var errResp map[string]string
 	err := json.NewDecoder(rr.Body).Decode(&errResp)
@@ -1429,7 +1512,7 @@ func TestReadOnlyMode_HTTPAPIPutRow(t *testing.T) {
 
 	rr := makeRequest(t, ts.router, http.MethodPut, "/api/v1/test/row/new-row", reqBody)
 
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Equal(t, http.StatusForbidden, rr.Code)
 
 	var errResp map[string]string
 	err := json.NewDecoder(rr.Body).Decode(&errResp)
@@ -1443,7 +1526,7 @@ func TestReadOnlyMode_HTTPAPIDeleteRow(t *testing.T) {
 
 	rr := makeRequest(t, ts.router, http.MethodDelete, "/api/v1/test/row/existing-row", nil)
 
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Equal(t, http.StatusForbidden, rr.Code)
 
 	var errResp map[string]string
 	err := json.NewDecoder(rr.Body).Decode(&errResp)
@@ -1463,7 +1546,7 @@ func TestReadOnlyMode_HTTPAPIDeleteColumns(t *testing.T) {
 
 	rr := makeRequest(t, ts.router, http.MethodDelete, "/api/v1/test/row/existing-row/columns", reqBody)
 
-	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.Equal(t, http.StatusForbidden, rr.Code)
 
 	var errResp map[string]string
 	err := json.NewDecoder(rr.Body).Decode(&errResp)
@@ -1490,7 +1573,7 @@ func TestReadOnlyMode_HTTPAPIBatchRows(t *testing.T) {
 
 		rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/row/batch", reqBody)
 
-		assert.Equal(t, http.StatusInternalServerError, rr.Code)
+		assert.Equal(t, http.StatusForbidden, rr.Code)
 
 		var errResp map[string]string
 		err := json.NewDecoder(rr.Body).Decode(&errResp)
@@ -1508,7 +1591,7 @@ func TestReadOnlyMode_HTTPAPIBatchRows(t *testing.T) {
 
 		rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/row/batch", reqBody)
 
-		assert.Equal(t, http.StatusInternalServerError, rr.Code)
+		assert.Equal(t, http.StatusForbidden, rr.Code)
 
 		var errResp map[string]string
 		err := json.NewDecoder(rr.Body).Decode(&errResp)

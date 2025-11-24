@@ -16,6 +16,7 @@ import (
 
 var (
 	ErrTxnAlreadyCommitted      = errors.New("txn already committed")
+	ErrTxnAborted               = errors.New("txn aborted")
 	ErrTxnConflict              = errors.New("txn conflict with newer commit")
 	ErrKeyChangedForChunkedType = errors.New("chunked txn type cannot change key from first value")
 	ErrUnsupportedTxnType       = errors.New("unsupported txn type")
@@ -382,6 +383,12 @@ func (t *Txn) touchedKeys() [][]byte {
 
 func (t *Txn) TxnID() []byte {
 	return t.txnID
+}
+
+// Abort releases txn bookkeeping without committing.
+func (t *Txn) Abort() {
+	t.unregisterBegin()
+	t.err = ErrTxnAborted
 }
 
 func (t *Txn) Checksum() uint32 {

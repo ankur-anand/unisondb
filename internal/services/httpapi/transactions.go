@@ -69,7 +69,6 @@ func (s *Service) handleBeginTransaction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Parse entry type
 	var entryType logrecord.LogEntryType
 	switch req.EntryType {
 	case "kv":
@@ -85,7 +84,7 @@ func (s *Service) handleBeginTransaction(w http.ResponseWriter, r *http.Request)
 
 	txn, err := engine.NewTxn(opType, entryType)
 	if err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to create transaction: %v", err))
+		respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to create transaction: %v", err))
 		return
 	}
 
@@ -96,6 +95,7 @@ func (s *Service) handleBeginTransaction(w http.ResponseWriter, r *http.Request)
 		txn:       txn,
 		namespace: namespace,
 		createdAt: time.Now(),
+		lastWrite: time.Now(),
 	}
 	s.storeTransaction(txnID, state)
 
@@ -137,10 +137,11 @@ func (s *Service) handleAppendKV(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := state.txn.AppendKVTxn([]byte(req.Key), value); err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to append to transaction: %v", err))
+		respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to append to transaction: %v", err))
 		return
 	}
 
+	state.lastWrite = time.Now()
 	respondJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
@@ -148,7 +149,6 @@ func (s *Service) handleAppendRow(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	txnID := vars["txnId"]
 
-	// Get transaction
 	state, err := s.getTransaction(txnID)
 	if err != nil {
 		respondError(w, http.StatusNotFound, err.Error())
@@ -186,10 +186,11 @@ func (s *Service) handleAppendRow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := state.txn.AppendColumnTxn([]byte(req.RowKey), columns); err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to append to transaction: %v", err))
+		respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to append to transaction: %v", err))
 		return
 	}
 
+	state.lastWrite = time.Now()
 	respondJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
@@ -215,20 +216,26 @@ func (s *Service) handleAppendLOB(w http.ResponseWriter, r *http.Request) {
 	// Limit request body size to 1MB
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
 
-	// Read body in chunks and append to transaction
-	buffer := make([]byte, 32*1024) // 32KB chunks
+	// 32KB chunks in chunks and append to transaction
+	buffer := make([]byte, 32*1024)
 	for {
 		n, err := r.Body.Read(buffer)
 		if n > 0 {
 			if err := state.txn.AppendKVTxn([]byte(key), buffer[:n]); err != nil {
-				respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to append to transaction: %v", err))
+				respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to append to transaction: %v", err))
 				return
 			}
+			state.lastWrite = time.Now()
 		}
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				respondError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
 			respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to read request body: %v", err))
 			return
 		}
@@ -273,13 +280,17 @@ func (s *Service) handleAbortTransaction(w http.ResponseWriter, r *http.Request)
 	vars := mux.Vars(r)
 	txnID := vars["txnId"]
 
-	_, err := s.getTransaction(txnID)
+	state, err := s.getTransaction(txnID)
 	if err != nil {
 		respondError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	s.deleteTransaction(txnID)
+	state.mu.Lock()
+	state.txn.Abort()
+	state.lastWrite = time.Now()
+	state.mu.Unlock()
 
+	s.deleteTransaction(txnID)
 	respondJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
