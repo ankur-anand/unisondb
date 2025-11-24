@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -33,8 +34,13 @@ const (
 type Service struct {
 	engines map[string]*dbkernel.Engine
 	// map[string]*transactionState - txnID -> transaction state
-	transactions   sync.Map
-	healthResponse []byte
+	transactions    sync.Map
+	healthResponse  []byte
+	ctx             context.Context
+	cancel          context.CancelFunc
+	txnIdleTimeout  time.Duration
+	txnMaxLifetime  time.Duration
+	txnReapInterval time.Duration
 }
 
 // transactionState holds the state of an active transaction.
@@ -42,6 +48,7 @@ type transactionState struct {
 	txn       *dbkernel.Txn
 	namespace string
 	createdAt time.Time
+	lastWrite time.Time
 	mu        sync.Mutex
 }
 
@@ -59,9 +66,16 @@ func NewService(engines map[string]*dbkernel.Engine) *Service {
 
 	healthJSON, _ := json.Marshal(healthResp)
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	return &Service{
-		engines:        engines,
-		healthResponse: healthJSON,
+		engines:         engines,
+		healthResponse:  healthJSON,
+		ctx:             ctx,
+		cancel:          cancel,
+		txnIdleTimeout:  2 * time.Minute,
+		txnMaxLifetime:  15 * time.Minute,
+		txnReapInterval: time.Minute,
 	}
 }
 
@@ -99,6 +113,8 @@ func (s *Service) RegisterRoutes(router *mux.Router) {
 	api.HandleFunc("/checkpoint", s.handleGetCheckpoint).Methods(http.MethodGet)
 	api.HandleFunc("/wal/backup", s.handleBackupSegmentsAfter).Methods(http.MethodPost)
 	api.HandleFunc("/btree/backup", s.handleBackupBTree).Methods(http.MethodPost)
+
+	go s.reapStaleTransactions()
 }
 
 func (s *Service) getTransaction(txnID string) (*transactionState, error) {
@@ -115,6 +131,48 @@ func (s *Service) storeTransaction(txnID string, state *transactionState) {
 
 func (s *Service) deleteTransaction(txnID string) {
 	s.transactions.Delete(txnID)
+}
+
+func (s *Service) Close() {
+	s.cancel()
+}
+
+func (s *Service) reapStaleTransactions() {
+	ticker := time.NewTicker(s.txnReapInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case now := <-ticker.C:
+			s.cleanupStaleTransactions(now)
+		}
+	}
+}
+
+func (s *Service) cleanupStaleTransactions(now time.Time) {
+	s.transactions.Range(func(key, value any) bool {
+		state, ok := value.(*transactionState)
+		if !ok {
+			return true
+		}
+
+		lastWrite := state.lastWrite
+		if lastWrite.IsZero() {
+			lastWrite = state.createdAt
+		}
+
+		idle := now.Sub(lastWrite)
+		age := now.Sub(state.createdAt)
+
+		if idle >= s.txnIdleTimeout || age >= s.txnMaxLifetime {
+			state.mu.Lock()
+			state.txn.Abort()
+			state.mu.Unlock()
+			s.deleteTransaction(key.(string))
+		}
+		return true
+	})
 }
 
 func (s *Service) getEngine(namespace string) (*dbkernel.Engine, error) {
@@ -138,6 +196,25 @@ func respondJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 
 func respondError(w http.ResponseWriter, statusCode int, message string) {
 	respondJSON(w, statusCode, map[string]string{"error": message})
+}
+
+func statusFromEngineError(err error) int {
+	switch {
+	case errors.Is(err, dbkernel.ErrTxnConflict), errors.Is(err, dbkernel.ErrTxnAlreadyCommitted):
+		return http.StatusConflict
+	case errors.Is(err, dbkernel.ErrKeyNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, dbkernel.ErrEngineReadOnly):
+		return http.StatusForbidden
+	case errors.Is(err, dbkernel.ErrUnsupportedTxnType),
+		errors.Is(err, dbkernel.ErrEmptyColumns),
+		errors.Is(err, dbkernel.ErrKeyChangedForChunkedType):
+		return http.StatusBadRequest
+	case errors.Is(err, dbkernel.ErrTxnAborted):
+		return http.StatusGone
+	default:
+		return http.StatusInternalServerError
+	}
 }
 
 type PutKVRequest struct {
@@ -178,7 +255,7 @@ func (s *Service) handlePutKV(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := engine.PutKV([]byte(key), value); err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to put KV: %v", err))
+		respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to put KV: %v", err))
 		return
 	}
 
@@ -244,7 +321,7 @@ func (s *Service) handleDeleteKV(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := engine.DeleteKV([]byte(key)); err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete KV: %v", err))
+		respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to delete KV: %v", err))
 		return
 	}
 
@@ -316,7 +393,7 @@ func (s *Service) handleBatchKV(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := engine.BatchPutKV(keys, values); err != nil {
-			respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to batch put: %v", err))
+			respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to batch put: %v", err))
 			return
 		}
 
@@ -338,7 +415,7 @@ func (s *Service) handleBatchKV(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := engine.BatchDeleteKV(keys); err != nil {
-			respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to batch delete: %v", err))
+			respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to batch delete: %v", err))
 			return
 		}
 
@@ -397,7 +474,7 @@ func (s *Service) handlePutRow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := engine.PutColumnsForRow([]byte(rowKey), columns); err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to put row: %v", err))
+		respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to put row: %v", err))
 		return
 	}
 
@@ -484,7 +561,7 @@ func (s *Service) handleDeleteRow(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := engine.DeleteRow([]byte(rowKey)); err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete row: %v", err))
+		respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to delete row: %v", err))
 		return
 	}
 
@@ -539,7 +616,7 @@ func (s *Service) handleDeleteColumns(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := engine.DeleteColumnsForRow([]byte(rowKey), columns); err != nil {
-		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to delete columns: %v", err))
+		respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to delete columns: %v", err))
 		return
 	}
 
@@ -610,7 +687,7 @@ func (s *Service) handleBatchRows(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := engine.PutColumnsForRows(rowKeys, columnMaps); err != nil {
-			respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to batch put rows: %v", err))
+			respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to batch put rows: %v", err))
 			return
 		}
 
@@ -627,7 +704,7 @@ func (s *Service) handleBatchRows(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := engine.BatchDeleteRows(rowKeys); err != nil {
-			respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to batch delete rows: %v", err))
+			respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to batch delete rows: %v", err))
 			return
 		}
 

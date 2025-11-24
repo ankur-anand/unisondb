@@ -495,6 +495,23 @@ func TestTxnWalLogIndexesPersist(t *testing.T) {
 	}
 }
 
+func TestTxnAbortReleasesBegin(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "txn_abort"
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = engine.Close(context.Background())
+	})
+
+	txn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+	require.NoError(t, err)
+
+	txn.Abort()
+	require.ErrorIs(t, txn.Commit(), dbkernel.ErrTxnAborted)
+}
+
 func readTxnWalRecordLSN(t *testing.T, walog *walfs.WALog, idx uint64) uint64 {
 	t.Helper()
 

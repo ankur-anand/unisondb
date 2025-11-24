@@ -533,6 +533,9 @@ func (ms *Server) SetupHTTPServer(ctx context.Context) error {
 	httpAPIService := httpapi.NewService(ms.engines)
 	router.HandleFunc("/health", httpAPIService.HandleHealth).Methods(http.MethodGet)
 	httpAPIService.RegisterRoutes(router)
+	ms.DeferCallback = append(ms.DeferCallback, func(ctx context.Context) {
+		httpAPIService.Close()
+	})
 
 	slog.Info("[unisondb.cliapp]",
 		slog.String("event_type", "HTTP.API.registered"),
