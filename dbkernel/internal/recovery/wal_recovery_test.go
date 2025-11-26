@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
@@ -646,6 +647,56 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		}
 	})
 
+	t.Run("events_appended_to_wal_are_skipped_in_recovery", func(t *testing.T) {
+		eventWalDir := filepath.Join(tdir, "wal_event")
+		assert.NoError(t, os.MkdirAll(eventWalDir, 0777))
+		eventWal, err := wal.NewWalIO(eventWalDir, "event_namespace", wal.NewDefaultConfig())
+		assert.NoError(t, err)
+		defer eventWal.Close()
+
+		eventDBFile := filepath.Join(tdir, "event.db")
+		eventDB, err := kvdrivers2.NewLmdb(eventDBFile, kvdrivers2.Config{
+			Namespace: "event_namespace",
+			NoSync:    true,
+			MmapSize:  1 << 30,
+		})
+		assert.NoError(t, err)
+		defer eventDB.Close()
+
+		event := &logcodec.EventEntry{
+			Pipeline:        "event-pipeline",
+			SchemaID:        "schemas/events/v1",
+			EventID:         gofakeit.UUID(),
+			Operation:       logrecord.EventOperationInsert,
+			OccurredAt:      uint64(time.Now().UnixNano()),
+			PartitionValues: map[string][]byte{"event_date": []byte("2024-11-18")},
+			Fields:          map[string][]byte{"id": []byte("123")},
+		}
+		record := logcodec.LogRecord{
+			LSN:           9999,
+			HLC:           9999,
+			OperationType: logrecord.LogOperationTypeInsert,
+			TxnState:      logrecord.TransactionStateNone,
+			EntryType:     logrecord.LogEntryTypeEvent,
+			Entries:       [][]byte{logcodec.SerializeEventEntry(event)},
+		}
+		offset, err := eventWal.Append(record.FBEncode(512), record.LSN)
+		assert.NoError(t, err)
+
+		recoveryInstance := &walRecovery{
+			store: eventDB,
+			walIO: eventWal,
+		}
+		err = recoveryInstance.recoverWAL(nil)
+		assert.NoError(t, err)
+		assert.Equal(t, offset.Offset, recoveryInstance.lastRecoveredPos.Offset)
+		assert.Equal(t, offset.SegmentID, recoveryInstance.lastRecoveredPos.SegmentID)
+		assert.Equal(t, 1, recoveryInstance.recoveredCount)
+
+		_, err = eventDB.GetKV([]byte("non-existent"))
+		assert.Error(t, err, "event should not materialize any KV data during recovery")
+	})
+
 }
 
 func generateNChunkFBRecord(n uint64) (string, []logcodec.LogRecord, uint32) {
@@ -861,4 +912,87 @@ func generateNRowColumnFBRecordTxn(n uint64) ([]logcodec.LogRecord, map[string]m
 	}
 
 	return rowsEncoded, rowsEntries
+}
+
+func TestWalRecovery_Events_Mixed(t *testing.T) {
+	tdir := t.TempDir()
+	walDir := filepath.Join(tdir, "wal_events_mixed")
+	assert.NoError(t, os.MkdirAll(walDir, 0777))
+
+	walConfig := wal.NewDefaultConfig()
+	walInstance, err := wal.NewWalIO(walDir, testNamespace, walConfig)
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		err := walInstance.Close()
+		assert.NoError(t, err)
+	})
+
+	dbFile := filepath.Join(tdir, "events_mixed.db")
+	db, err := kvdrivers2.NewLmdb(dbFile, kvdrivers2.Config{
+		Namespace: testNamespace,
+		NoSync:    true,
+		MmapSize:  1 << 30,
+	})
+	assert.NoError(t, err)
+	t.Cleanup(func() {
+		err := db.Close()
+		assert.NoError(t, err)
+	})
+
+	var lastOffset *wal.Offset
+	expectedCount := 0
+
+	appendEvent := func(lsn uint64) {
+		event := &logcodec.EventEntry{
+			Pipeline:   "test-pipeline",
+			SchemaID:   "test-schema",
+			EventID:    gofakeit.UUID(),
+			Operation:  logrecord.EventOperationInsert,
+			OccurredAt: uint64(time.Now().UnixNano()),
+			Fields:     map[string][]byte{"key": []byte(gofakeit.Word())},
+		}
+		record := logcodec.LogRecord{
+			LSN:           lsn,
+			HLC:           lsn,
+			OperationType: logrecord.LogOperationTypeInsert,
+			TxnState:      logrecord.TransactionStateNone,
+			EntryType:     logrecord.LogEntryTypeEvent,
+			Entries:       [][]byte{logcodec.SerializeEventEntry(event)},
+		}
+		off, err := walInstance.Append(record.FBEncode(512), lsn)
+		assert.NoError(t, err)
+		lastOffset = off
+		expectedCount++
+	}
+
+	appendKV := func(lsn uint64) {
+		key := gofakeit.UUID()
+		val := gofakeit.Word()
+		encoded := logcodec.SerializeKVEntry([]byte(key), []byte(val))
+		record := logcodec.LogRecord{
+			LSN:           lsn,
+			HLC:           lsn,
+			OperationType: logrecord.LogOperationTypeInsert,
+			TxnState:      logrecord.TransactionStateNone,
+			EntryType:     logrecord.LogEntryTypeKV,
+			Entries:       [][]byte{encoded},
+		}
+		off, err := walInstance.Append(record.FBEncode(512), lsn)
+		assert.NoError(t, err)
+		lastOffset = off
+		expectedCount++
+	}
+
+	appendEvent(1)
+	appendKV(2)
+	appendEvent(3)
+	appendKV(4)
+	appendEvent(5)
+
+	recoveryInstance := NewWalRecovery(db, walInstance)
+	err = recoveryInstance.Recover(nil)
+	assert.NoError(t, err)
+
+	assert.Equal(t, expectedCount, recoveryInstance.RecoveredCount(), "Recovered count should match total records")
+	assert.Equal(t, *lastOffset, *recoveryInstance.LastRecoveredOffset(), "Last recovered position should match last appended offset")
 }
