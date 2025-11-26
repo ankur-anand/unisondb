@@ -12,24 +12,20 @@ func SerializeEventEntry(entry *EventEntry) []byte {
 	}
 	builder := flatbuffers.NewBuilder(256)
 
-	pipelineOffset := builder.CreateString(entry.Pipeline)
-	schemaOffset := builder.CreateString(entry.SchemaID)
 	eventIDOffset := builder.CreateString(entry.EventID)
-
-	partitionVector := buildColumnDataVector(builder, entry.PartitionValues, logrecord.EventEntryStartPartitionValuesVector)
-	fieldsVector := buildColumnDataVector(builder, entry.Fields, logrecord.EventEntryStartFieldsVector)
+	eventTypeOffset := builder.CreateString(entry.EventType)
+	payloadOffset := builder.CreateByteVector(entry.Payload)
+	metadataVector := buildKeyValueVector(builder, entry.Metadata)
 
 	logrecord.EventEntryStart(builder)
-	logrecord.EventEntryAddPipeline(builder, pipelineOffset)
-	logrecord.EventEntryAddSchemaId(builder, schemaOffset)
 	logrecord.EventEntryAddEventId(builder, eventIDOffset)
-	logrecord.EventEntryAddOperation(builder, entry.Operation)
+	logrecord.EventEntryAddEventType(builder, eventTypeOffset)
 	logrecord.EventEntryAddOccurredAt(builder, entry.OccurredAt)
-	if partitionVector != 0 {
-		logrecord.EventEntryAddPartitionValues(builder, partitionVector)
+	if entry.Payload != nil {
+		logrecord.EventEntryAddPayload(builder, payloadOffset)
 	}
-	if fieldsVector != 0 {
-		logrecord.EventEntryAddFields(builder, fieldsVector)
+	if metadataVector != 0 {
+		logrecord.EventEntryAddMetadata(builder, metadataVector)
 	}
 	builder.Finish(logrecord.EventEntryEnd(builder))
 
@@ -40,47 +36,43 @@ func SerializeEventEntry(entry *EventEntry) []byte {
 func DeserializeEventEntry(buf []byte) EventEntry {
 	fbEntry := logrecord.GetRootAsEventEntry(buf, 0)
 	entry := EventEntry{
-		Pipeline:        string(fbEntry.Pipeline()),
-		SchemaID:        string(fbEntry.SchemaId()),
-		EventID:         string(fbEntry.EventId()),
-		Operation:       fbEntry.Operation(),
-		OccurredAt:      fbEntry.OccurredAt(),
-		PartitionValues: make(map[string][]byte, fbEntry.PartitionValuesLength()),
-		Fields:          make(map[string][]byte, fbEntry.FieldsLength()),
+		EventID:    string(fbEntry.EventId()),
+		EventType:  string(fbEntry.EventType()),
+		OccurredAt: fbEntry.OccurredAt(),
+		Payload:    fbEntry.PayloadBytes(),
+		Metadata:   make([]KeyValueEntry, fbEntry.MetadataLength()),
 	}
 
-	col := new(logrecord.ColumnData)
-	for i := 0; i < fbEntry.PartitionValuesLength(); i++ {
-		if fbEntry.PartitionValues(col, i) {
-			entry.PartitionValues[string(col.Name())] = col.ValueBytes()
-		}
-	}
-	for i := 0; i < fbEntry.FieldsLength(); i++ {
-		if fbEntry.Fields(col, i) {
-			entry.Fields[string(col.Name())] = col.ValueBytes()
+	kv := new(logrecord.KeyValueEntry)
+	for i := 0; i < fbEntry.MetadataLength(); i++ {
+		if fbEntry.Metadata(kv, i) {
+			entry.Metadata[i] = KeyValueEntry{
+				Key:   kv.KeyBytes(),
+				Value: kv.ValueBytes(),
+			}
 		}
 	}
 
 	return entry
 }
 
-func buildColumnDataVector(builder *flatbuffers.Builder, columns map[string][]byte, start func(*flatbuffers.Builder, int) flatbuffers.UOffsetT) flatbuffers.UOffsetT {
-	if len(columns) == 0 {
+func buildKeyValueVector(builder *flatbuffers.Builder, entries []KeyValueEntry) flatbuffers.UOffsetT {
+	if len(entries) == 0 {
 		return 0
 	}
-	offsets := make([]flatbuffers.UOffsetT, 0, len(columns))
-	for name, value := range columns {
-		nameOffset := builder.CreateString(name)
-		valueOffset := builder.CreateByteVector(value)
-		logrecord.ColumnDataStart(builder)
-		logrecord.ColumnDataAddName(builder, nameOffset)
-		logrecord.ColumnDataAddValue(builder, valueOffset)
-		offsets = append(offsets, logrecord.ColumnDataEnd(builder))
+	offsets := make([]flatbuffers.UOffsetT, 0, len(entries))
+	for _, entry := range entries {
+		keyOffset := builder.CreateByteVector(entry.Key)
+		valueOffset := builder.CreateByteVector(entry.Value)
+		logrecord.KeyValueEntryStart(builder)
+		logrecord.KeyValueEntryAddKey(builder, keyOffset)
+		logrecord.KeyValueEntryAddValue(builder, valueOffset)
+		offsets = append(offsets, logrecord.KeyValueEntryEnd(builder))
 	}
-	start(builder, len(columns))
-	//  fb builds vectors backwards.
+	logrecord.EventEntryStartMetadataVector(builder, len(entries))
+	// fb builds vectors backwards.
 	for i := len(offsets) - 1; i >= 0; i-- {
 		builder.PrependUOffsetT(offsets[i])
 	}
-	return builder.EndVector(len(columns))
+	return builder.EndVector(len(entries))
 }

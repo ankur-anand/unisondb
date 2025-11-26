@@ -1,6 +1,7 @@
 package logcodec
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -12,18 +13,21 @@ import (
 )
 
 func TestEventEntrySerialization(t *testing.T) {
+	// Create a sample payload (JSON for this example)
+	payload, _ := json.Marshal(map[string]any{
+		"order_id":    "123",
+		"customer_id": "42",
+		"amount":      99.99,
+	})
+
 	event := &EventEntry{
-		Pipeline:   "orders-pipeline",
-		SchemaID:   "schemas/orders/v1",
 		EventID:    gofakeit.UUID(),
-		Operation:  logrecord.EventOperationInsert,
+		EventType:  "order.created",
 		OccurredAt: uint64(time.Now().UnixNano()),
-		PartitionValues: map[string][]byte{
-			"event_date": []byte("2024-11-18"),
-		},
-		Fields: map[string][]byte{
-			"order_id":    []byte("123"),
-			"customer_id": []byte("42"),
+		Payload:    payload,
+		Metadata: []KeyValueEntry{
+			{Key: []byte("schema_id"), Value: []byte("schemas/orders/v1")},
+			{Key: []byte("partition.date"), Value: []byte("2024-11-18")},
 		},
 	}
 
@@ -41,62 +45,81 @@ func TestEventEntrySerialization(t *testing.T) {
 	require.Len(t, decoded.Entries, 1)
 
 	decodedEvent := DeserializeEventEntry(decoded.Entries[0])
-	assert.Equal(t, event.Pipeline, decodedEvent.Pipeline)
-	assert.Equal(t, event.SchemaID, decodedEvent.SchemaID)
 	assert.Equal(t, event.EventID, decodedEvent.EventID)
-	assert.Equal(t, event.Operation, decodedEvent.Operation)
+	assert.Equal(t, event.EventType, decodedEvent.EventType)
 	assert.Equal(t, event.OccurredAt, decodedEvent.OccurredAt)
-	assert.Equal(t, event.PartitionValues, decodedEvent.PartitionValues)
-	assert.Equal(t, event.Fields, decodedEvent.Fields)
+	assert.Equal(t, event.Payload, decodedEvent.Payload)
+	require.Len(t, decodedEvent.Metadata, 2)
+	assert.Equal(t, event.Metadata[0].Key, decodedEvent.Metadata[0].Key)
+	assert.Equal(t, event.Metadata[0].Value, decodedEvent.Metadata[0].Value)
+	assert.Equal(t, event.Metadata[1].Key, decodedEvent.Metadata[1].Key)
+	assert.Equal(t, event.Metadata[1].Value, decodedEvent.Metadata[1].Value)
 }
 
-func TestDeserializeEventEntryWithoutOptionalVectors(t *testing.T) {
+func TestDeserializeEventEntryWithoutOptionalFields(t *testing.T) {
 	builder := flatbuffers.NewBuilder(64)
-	pipeline := builder.CreateString("minimal-pipeline")
-	schema := builder.CreateString("schemas/test/v1")
 	eventID := builder.CreateString("evt-1")
+	eventType := builder.CreateString("user.deleted")
 
 	logrecord.EventEntryStart(builder)
-	logrecord.EventEntryAddPipeline(builder, pipeline)
-	logrecord.EventEntryAddSchemaId(builder, schema)
 	logrecord.EventEntryAddEventId(builder, eventID)
-	logrecord.EventEntryAddOperation(builder, logrecord.EventOperationDelete)
+	logrecord.EventEntryAddEventType(builder, eventType)
 	logrecord.EventEntryAddOccurredAt(builder, 42)
 	builder.Finish(logrecord.EventEntryEnd(builder))
 
 	decoded := DeserializeEventEntry(builder.FinishedBytes())
-	assert.Equal(t, "minimal-pipeline", decoded.Pipeline)
-	assert.Equal(t, "schemas/test/v1", decoded.SchemaID)
 	assert.Equal(t, "evt-1", decoded.EventID)
-	assert.Equal(t, logrecord.EventOperationDelete, decoded.Operation)
+	assert.Equal(t, "user.deleted", decoded.EventType)
 	assert.Equal(t, uint64(42), decoded.OccurredAt)
-	assert.Empty(t, decoded.PartitionValues)
-	assert.Empty(t, decoded.Fields)
+	assert.Nil(t, decoded.Payload)
+	assert.Empty(t, decoded.Metadata)
 }
 
 func TestSerializeEventEntryNil(t *testing.T) {
 	assert.Nil(t, SerializeEventEntry(nil))
 }
 
-func TestSerializeEventEntryWithEmptyMaps(t *testing.T) {
+func TestSerializeEventEntryMinimal(t *testing.T) {
 	event := &EventEntry{
-		Pipeline:        "p",
-		SchemaID:        "sid",
-		EventID:         "eid",
-		Operation:       logrecord.EventOperationUpdate,
-		OccurredAt:      999,
-		PartitionValues: nil,
-		Fields:          map[string][]byte{},
+		EventID:    "minimal-event",
+		EventType:  "test.event",
+		OccurredAt: 999,
+		Payload:    nil,
+		Metadata:   nil,
 	}
 
 	serialized := SerializeEventEntry(event)
 	decoded := DeserializeEventEntry(serialized)
 
-	assert.Equal(t, event.Pipeline, decoded.Pipeline)
-	assert.Equal(t, event.SchemaID, decoded.SchemaID)
 	assert.Equal(t, event.EventID, decoded.EventID)
-	assert.Equal(t, event.Operation, decoded.Operation)
+	assert.Equal(t, event.EventType, decoded.EventType)
 	assert.Equal(t, event.OccurredAt, decoded.OccurredAt)
-	assert.Empty(t, decoded.PartitionValues)
-	assert.Empty(t, decoded.Fields)
+	assert.Nil(t, decoded.Payload)
+	assert.Empty(t, decoded.Metadata)
+}
+
+func TestSerializeEventEntryWithMetadataOnly(t *testing.T) {
+	event := &EventEntry{
+		EventID:    "meta-event",
+		EventType:  "test.with.metadata",
+		OccurredAt: 12345,
+		Payload:    []byte("simple payload"),
+		Metadata: []KeyValueEntry{
+			{Key: []byte("tenant_id"), Value: []byte("acme-corp")},
+			{Key: []byte("correlation_id"), Value: []byte("xyz-789")},
+		},
+	}
+
+	serialized := SerializeEventEntry(event)
+	decoded := DeserializeEventEntry(serialized)
+
+	assert.Equal(t, event.EventID, decoded.EventID)
+	assert.Equal(t, event.EventType, decoded.EventType)
+	assert.Equal(t, event.OccurredAt, decoded.OccurredAt)
+	assert.Equal(t, event.Payload, decoded.Payload)
+	require.Len(t, decoded.Metadata, 2)
+	assert.Equal(t, []byte("tenant_id"), decoded.Metadata[0].Key)
+	assert.Equal(t, []byte("acme-corp"), decoded.Metadata[0].Value)
+	assert.Equal(t, []byte("correlation_id"), decoded.Metadata[1].Key)
+	assert.Equal(t, []byte("xyz-789"), decoded.Metadata[1].Value)
 }

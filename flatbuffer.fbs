@@ -40,27 +40,18 @@ table RowUpdateEntry {
   columns: [ColumnData];
 }
 
-enum EventOperation : ubyte {
-  Unknown = 0,
-  Insert = 1,
-  Update = 2,
-  Delete = 3,
-}
-
+// Generic event entry
 table EventEntry {
-  pipeline: string;
-  // References KV entry: "schema:{schema_id}"
-  schema_id: string;
-  // Event Identity
   event_id: string;
-  // Operation Type
-  operation: EventOperation;
-  // Event timestamp (microseconds since epoch)
+  event_type: string;
+  
+  // (microseconds since epoch)
   occurred_at: uint64;
-  // sharding hints
-  partition_values: [ColumnData];
-  // actual row data
-  fields: [ColumnData];
+  
+  payload: [ubyte];
+  
+  // metadata optional
+  metadata: [KeyValueEntry];
 }
 
 table EncodedEntry {

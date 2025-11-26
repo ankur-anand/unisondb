@@ -41,7 +41,7 @@ func (rcv *EventEntry) Table() flatbuffers.Table {
 	return rcv._tab
 }
 
-func (rcv *EventEntry) Pipeline() []byte {
+func (rcv *EventEntry) EventId() []byte {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(4))
 	if o != 0 {
 		return rcv._tab.ByteVector(o + rcv._tab.Pos)
@@ -49,7 +49,7 @@ func (rcv *EventEntry) Pipeline() []byte {
 	return nil
 }
 
-func (rcv *EventEntry) SchemaId() []byte {
+func (rcv *EventEntry) EventType() []byte {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(6))
 	if o != 0 {
 		return rcv._tab.ByteVector(o + rcv._tab.Pos)
@@ -57,28 +57,8 @@ func (rcv *EventEntry) SchemaId() []byte {
 	return nil
 }
 
-func (rcv *EventEntry) EventId() []byte {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
-	if o != 0 {
-		return rcv._tab.ByteVector(o + rcv._tab.Pos)
-	}
-	return nil
-}
-
-func (rcv *EventEntry) Operation() EventOperation {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
-	if o != 0 {
-		return EventOperation(rcv._tab.GetByte(o + rcv._tab.Pos))
-	}
-	return 0
-}
-
-func (rcv *EventEntry) MutateOperation(n EventOperation) bool {
-	return rcv._tab.MutateByteSlot(10, byte(n))
-}
-
 func (rcv *EventEntry) OccurredAt() uint64 {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(8))
 	if o != 0 {
 		return rcv._tab.GetUint64(o + rcv._tab.Pos)
 	}
@@ -86,31 +66,45 @@ func (rcv *EventEntry) OccurredAt() uint64 {
 }
 
 func (rcv *EventEntry) MutateOccurredAt(n uint64) bool {
-	return rcv._tab.MutateUint64Slot(12, n)
+	return rcv._tab.MutateUint64Slot(8, n)
 }
 
-func (rcv *EventEntry) PartitionValues(obj *ColumnData, j int) bool {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
+func (rcv *EventEntry) Payload(j int) byte {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
 	if o != 0 {
-		x := rcv._tab.Vector(o)
-		x += flatbuffers.UOffsetT(j) * 4
-		x = rcv._tab.Indirect(x)
-		obj.Init(rcv._tab.Bytes, x)
-		return true
+		a := rcv._tab.Vector(o)
+		return rcv._tab.GetByte(a + flatbuffers.UOffsetT(j*1))
 	}
-	return false
+	return 0
 }
 
-func (rcv *EventEntry) PartitionValuesLength() int {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(14))
+func (rcv *EventEntry) PayloadLength() int {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
 	if o != 0 {
 		return rcv._tab.VectorLen(o)
 	}
 	return 0
 }
 
-func (rcv *EventEntry) Fields(obj *ColumnData, j int) bool {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
+func (rcv *EventEntry) PayloadBytes() []byte {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
+	if o != 0 {
+		return rcv._tab.ByteVector(o + rcv._tab.Pos)
+	}
+	return nil
+}
+
+func (rcv *EventEntry) MutatePayload(j int, n byte) bool {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(10))
+	if o != 0 {
+		a := rcv._tab.Vector(o)
+		return rcv._tab.MutateByte(a+flatbuffers.UOffsetT(j*1), n)
+	}
+	return false
+}
+
+func (rcv *EventEntry) Metadata(obj *KeyValueEntry, j int) bool {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
 	if o != 0 {
 		x := rcv._tab.Vector(o)
 		x += flatbuffers.UOffsetT(j) * 4
@@ -121,8 +115,8 @@ func (rcv *EventEntry) Fields(obj *ColumnData, j int) bool {
 	return false
 }
 
-func (rcv *EventEntry) FieldsLength() int {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(16))
+func (rcv *EventEntry) MetadataLength() int {
+	o := flatbuffers.UOffsetT(rcv._tab.Offset(12))
 	if o != 0 {
 		return rcv._tab.VectorLen(o)
 	}
@@ -130,33 +124,27 @@ func (rcv *EventEntry) FieldsLength() int {
 }
 
 func EventEntryStart(builder *flatbuffers.Builder) {
-	builder.StartObject(7)
-}
-func EventEntryAddPipeline(builder *flatbuffers.Builder, pipeline flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(0, flatbuffers.UOffsetT(pipeline), 0)
-}
-func EventEntryAddSchemaId(builder *flatbuffers.Builder, schemaId flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(1, flatbuffers.UOffsetT(schemaId), 0)
+	builder.StartObject(5)
 }
 func EventEntryAddEventId(builder *flatbuffers.Builder, eventId flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(2, flatbuffers.UOffsetT(eventId), 0)
+	builder.PrependUOffsetTSlot(0, flatbuffers.UOffsetT(eventId), 0)
 }
-func EventEntryAddOperation(builder *flatbuffers.Builder, operation EventOperation) {
-	builder.PrependByteSlot(3, byte(operation), 0)
+func EventEntryAddEventType(builder *flatbuffers.Builder, eventType flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(1, flatbuffers.UOffsetT(eventType), 0)
 }
 func EventEntryAddOccurredAt(builder *flatbuffers.Builder, occurredAt uint64) {
-	builder.PrependUint64Slot(4, occurredAt, 0)
+	builder.PrependUint64Slot(2, occurredAt, 0)
 }
-func EventEntryAddPartitionValues(builder *flatbuffers.Builder, partitionValues flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(5, flatbuffers.UOffsetT(partitionValues), 0)
+func EventEntryAddPayload(builder *flatbuffers.Builder, payload flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(3, flatbuffers.UOffsetT(payload), 0)
 }
-func EventEntryStartPartitionValuesVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
-	return builder.StartVector(4, numElems, 4)
+func EventEntryStartPayloadVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+	return builder.StartVector(1, numElems, 1)
 }
-func EventEntryAddFields(builder *flatbuffers.Builder, fields flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(6, flatbuffers.UOffsetT(fields), 0)
+func EventEntryAddMetadata(builder *flatbuffers.Builder, metadata flatbuffers.UOffsetT) {
+	builder.PrependUOffsetTSlot(4, flatbuffers.UOffsetT(metadata), 0)
 }
-func EventEntryStartFieldsVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
+func EventEntryStartMetadataVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(4, numElems, 4)
 }
 func EventEntryEnd(builder *flatbuffers.Builder) flatbuffers.UOffsetT {

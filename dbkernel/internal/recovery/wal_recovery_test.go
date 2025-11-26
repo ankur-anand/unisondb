@@ -664,13 +664,14 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		defer eventDB.Close()
 
 		event := &logcodec.EventEntry{
-			Pipeline:        "event-pipeline",
-			SchemaID:        "schemas/events/v1",
-			EventID:         gofakeit.UUID(),
-			Operation:       logrecord.EventOperationInsert,
-			OccurredAt:      uint64(time.Now().UnixNano()),
-			PartitionValues: map[string][]byte{"event_date": []byte("2024-11-18")},
-			Fields:          map[string][]byte{"id": []byte("123")},
+			EventType:  "user_signup",
+			EventID:    gofakeit.UUID(),
+			OccurredAt: uint64(time.Now().UnixNano()),
+			Payload:    []byte("2024-11-18"),
+			Metadata: []logcodec.KeyValueEntry{
+				{Key: []byte("schema_id"), Value: []byte("schemas/orders/v1")},
+				{Key: []byte("partition.date"), Value: []byte("2024-11-18")},
+			},
 		}
 		record := logcodec.LogRecord{
 			LSN:           9999,
@@ -944,12 +945,14 @@ func TestWalRecovery_Events_Mixed(t *testing.T) {
 
 	appendEvent := func(lsn uint64) {
 		event := &logcodec.EventEntry{
-			Pipeline:   "test-pipeline",
-			SchemaID:   "test-schema",
+			EventType:  "user_signup",
 			EventID:    gofakeit.UUID(),
-			Operation:  logrecord.EventOperationInsert,
 			OccurredAt: uint64(time.Now().UnixNano()),
-			Fields:     map[string][]byte{"key": []byte(gofakeit.Word())},
+			Payload:    []byte("2024-11-18"),
+			Metadata: []logcodec.KeyValueEntry{
+				{Key: []byte("schema_id"), Value: []byte("schemas/orders/v1")},
+				{Key: []byte("partition.date"), Value: []byte("2024-11-18")},
+			},
 		}
 		record := logcodec.LogRecord{
 			LSN:           lsn,
