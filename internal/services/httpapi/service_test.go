@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/internal/logcodec"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/gorilla/mux"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1682,4 +1684,67 @@ func TestHealthEndpoint(t *testing.T) {
 		assert.Contains(t, resp.Namespaces, "test")
 		assert.Len(t, resp.Namespaces, 1)
 	})
+}
+
+func TestAddEvent_Success(t *testing.T) {
+	ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	reqBody := AddEventRequest{
+		EventID:    "event-1",
+		EventType:  "test-type",
+		OccurredAt: uint64(time.Now().UnixNano()),
+		Payload:    encodeBase64([]byte("test-payload")),
+		Metadata: map[string]string{
+			"meta-key": "meta-value",
+		},
+	}
+
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/event", reqBody)
+
+	assert.Equal(t, http.StatusOK, rr.Code)
+
+	var resp AddEventResponse
+	err := json.NewDecoder(rr.Body).Decode(&resp)
+	require.NoError(t, err)
+	assert.True(t, resp.Success)
+
+	// Verify event in WAL
+	reader, err := ts.engine.NewReader()
+	require.NoError(t, err)
+	defer reader.Close()
+
+	walEncoded, _, err := reader.Next()
+	require.NoError(t, err)
+
+	record := logrecord.GetRootAsLogRecord(walEncoded, 0)
+	assert.Equal(t, logrecord.LogEntryTypeEvent, record.EntryType())
+
+	eventEntry := logcodec.DeserializeFBRootLogRecord(record)
+
+	eventData := eventEntry.Entries[0]
+	event := logcodec.DeserializeEventEntry(eventData)
+
+	assert.Equal(t, "event-1", event.EventID)
+	assert.Equal(t, "test-type", event.EventType)
+	assert.Equal(t, []byte("test-payload"), event.Payload)
+	assert.Len(t, event.Metadata, 1)
+	assert.Equal(t, []byte("meta-key"), event.Metadata[0].Key)
+	assert.Equal(t, []byte("meta-value"), event.Metadata[0].Value)
+}
+
+func TestAddEvent_InvalidPayload(t *testing.T) {
+	ts, cleanup := setupTestServer(t)
+	defer cleanup()
+
+	reqBody := AddEventRequest{
+		EventID:    "event-1",
+		EventType:  "test-type",
+		OccurredAt: uint64(time.Now().UnixNano()),
+		Payload:    "invalid-base64",
+	}
+
+	rr := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/event", reqBody)
+
+	assert.Equal(t, http.StatusBadRequest, rr.Code)
 }
