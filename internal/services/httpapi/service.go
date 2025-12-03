@@ -208,7 +208,9 @@ func statusFromEngineError(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, dbkernel.ErrKeyNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, dbkernel.ErrEngineReadOnly):
+	case errors.Is(err, dbkernel.ErrEngineReadOnly),
+		errors.Is(err, dbkernel.ErrEventLogModeViolation),
+		errors.Is(err, dbkernel.ErrEventNotAllowed):
 		return http.StatusForbidden
 	case errors.Is(err, dbkernel.ErrUnsupportedTxnType),
 		errors.Is(err, dbkernel.ErrEmptyColumns),

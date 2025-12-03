@@ -225,20 +225,45 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		return nil, err
 	}
 
-	if err := engine.recoverWAL(); err != nil {
-		return nil, err
+	if conf.EventLogMode {
+		// EventLogMode, scan WAL to restore LSN/offset but we don't replay to BTree
+		if err := engine.restoreLSNFromWAL(); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := engine.recoverWAL(); err != nil {
+			return nil, err
+		}
 	}
 
 	engine.appendNotify = make(chan struct{})
 	if conf.WalConfig.AutoCleanup {
-		delPredicate := func(segID wal.SegID) bool {
-			currOff := engine.CurrentOffset()
-			return currOff.SegmentID > segID
-		}
-		engine.walIO.RunWalCleanup(ctx, conf.WalConfig.CleanupInterval, delPredicate)
+		predicate := newWalCleanupPredicate(conf.EventLogMode, engine.CurrentOffset, engine.GetWalCheckPoint)
+		engine.walIO.RunWalCleanup(ctx, conf.WalConfig.CleanupInterval, predicate)
 	}
 
 	return engine, nil
+}
+
+func newWalCleanupPredicate(eventLogMode bool, currentOffset func() *wal.Offset, checkpoint func() (*internal.Metadata, error)) func(segID wal.SegID) bool {
+	return func(segID wal.SegID) bool {
+		if eventLogMode {
+			currOff := currentOffset()
+			if currOff == nil {
+				return false
+			}
+			// EventLogMode, events don't need BTree persistence,
+			// so we can safely delete segments behind currentOffset
+			return currOff.SegmentID > segID
+		}
+		// normal mode, only delete segments behind the checkpoint
+		// to ensure data is safely persisted to BTree
+		checkpointMeta, err := checkpoint()
+		if err != nil || checkpointMeta == nil {
+			return false
+		}
+		return checkpointMeta.Pos.SegmentID > segID
+	}
 }
 
 func (e *Engine) initStorage(dataDir, namespace string, conf *EngineConfig) error {
@@ -1118,4 +1143,32 @@ func waitWithCancel(wg *sync.WaitGroup, ctx context.Context) bool {
 	case <-ctx.Done():
 		return false
 	}
+}
+
+// restoreLSNFromWAL restores LSN counter and offset from WAL segment metadata in EventLogMode.
+func (e *Engine) restoreLSNFromWAL() error {
+	lastLSN, lastOffset, count, ok := e.walIO.CurrentSegmentInfo()
+
+	if ok {
+		e.writeSeenCounter.Store(lastLSN)
+		e.opsFlushedCounter.Store(lastLSN)
+
+		if lastOffset != nil {
+			e.currentOffset.Store(lastOffset)
+		}
+	}
+
+	slog.Info("[dbkernel]",
+		slog.String("message", "Restored LSN from WAL (EventLogMode)"),
+		slog.Group("engine",
+			slog.String("namespace", e.namespace),
+		),
+		slog.Group("restore",
+			slog.Uint64("last_lsn", lastLSN),
+			slog.Int64("entry_count", count),
+		),
+	)
+
+	e.recoveredEntriesCount = int(count)
+	return nil
 }

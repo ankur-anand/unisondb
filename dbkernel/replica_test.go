@@ -730,14 +730,18 @@ func TestReplicaWALHandler_ReplicateEvent(t *testing.T) {
 	namespace := "test_event_replication"
 	replicatorNameSpace := "test_event_replication_replica"
 
-	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
+	srcCfg := dbkernel.NewDefaultEngineConfig()
+	srcCfg.EventLogMode = true
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, srcCfg)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		_ = engine.Close(context.Background())
 	})
 
 	replicaDir := filepath.Join(baseDir, "replica")
-	replicaEngine, err := dbkernel.NewStorageEngine(replicaDir, replicatorNameSpace, dbkernel.NewDefaultEngineConfig())
+	dstCfg := dbkernel.NewDefaultEngineConfig()
+	dstCfg.EventLogMode = true
+	replicaEngine, err := dbkernel.NewStorageEngine(replicaDir, replicatorNameSpace, dstCfg)
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		_ = replicaEngine.Close(context.Background())
@@ -776,7 +780,7 @@ func TestReplicaWALHandler_ReplicateEvent(t *testing.T) {
 	err = replicaEngine.Close(context.Background())
 	assert.NoError(t, err)
 
-	replicaEngine, err = dbkernel.NewStorageEngine(replicaDir, replicatorNameSpace, dbkernel.NewDefaultEngineConfig())
+	replicaEngine, err = dbkernel.NewStorageEngine(replicaDir, replicatorNameSpace, dstCfg)
 	assert.NoError(t, err)
 	defer replicaEngine.Close(context.Background())
 

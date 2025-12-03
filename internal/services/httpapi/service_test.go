@@ -1687,7 +1687,9 @@ func TestHealthEndpoint(t *testing.T) {
 }
 
 func TestAddEvent_Success(t *testing.T) {
-	ts, cleanup := setupTestServer(t)
+	ts, cleanup := setupTestServerWithConfig(t, func(cfg *dbkernel.EngineConfig) {
+		cfg.EventLogMode = true
+	})
 	defer cleanup()
 
 	reqBody := AddEventRequest{
@@ -1734,7 +1736,9 @@ func TestAddEvent_Success(t *testing.T) {
 }
 
 func TestAddEvent_InvalidPayload(t *testing.T) {
-	ts, cleanup := setupTestServer(t)
+	ts, cleanup := setupTestServerWithConfig(t, func(cfg *dbkernel.EngineConfig) {
+		cfg.EventLogMode = true
+	})
 	defer cleanup()
 
 	reqBody := AddEventRequest{

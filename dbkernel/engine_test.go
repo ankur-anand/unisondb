@@ -16,6 +16,7 @@ import (
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/memtable"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/pkg/umetrics"
@@ -804,6 +805,7 @@ func TestAddEvent(t *testing.T) {
 	namespace := "test_event_namespace"
 	config := NewDefaultEngineConfig()
 	config.ArenaSize = 1 << 20
+	config.EventLogMode = true
 
 	engine, err := NewStorageEngine(dir, namespace, config)
 	assert.NoError(t, err, "NewStorageEngine should not error")
@@ -854,7 +856,7 @@ func TestAddEvent(t *testing.T) {
 	assert.NoError(t, err)
 	defer engine.Close(context.Background())
 
-	assert.Equal(t, 1, engine.RecoveredWALCount(), "Events should be counted during recovery")
+	assert.Equal(t, 1, engine.RecoveredWALCount(), "LSN recovery in EventLogMode")
 
 	event2 := &logcodec.EventEntry{
 		EventID:   "event-2",
@@ -1508,6 +1510,40 @@ func TestRecordKeyVersionsAndConflicts(t *testing.T) {
 	err = e.checkKeyConflicts([][]byte{[]byte("unknown")}, 0)
 	e.mu.RUnlock()
 	require.NoError(t, err)
+}
+
+func TestNewWalCleanupPredicate(t *testing.T) {
+	t.Run("event_log_mode_uses_current_offset", func(t *testing.T) {
+		current := &wal.Offset{SegmentID: 5, Offset: 42}
+		predicate := newWalCleanupPredicate(true, func() *wal.Offset { return current }, func() (*internal.Metadata, error) {
+			return &internal.Metadata{Pos: &wal.Offset{SegmentID: 1}}, nil
+		})
+
+		assert.True(t, predicate(3), "segments behind current offset should be deletable")
+		assert.False(t, predicate(6), "current or future segments should be kept")
+
+		predicateNoOffset := newWalCleanupPredicate(true, func() *wal.Offset { return nil }, func() (*internal.Metadata, error) {
+			return nil, nil
+		})
+		assert.False(t, predicateNoOffset(1), "nil current offset should not delete")
+	})
+
+	t.Run("normal_mode_uses_checkpoint", func(t *testing.T) {
+		checkpoint := &internal.Metadata{Pos: &wal.Offset{SegmentID: 4, Offset: 10}}
+		predicate := newWalCleanupPredicate(false, func() *wal.Offset {
+			return &wal.Offset{SegmentID: 99}
+		}, func() (*internal.Metadata, error) {
+			return checkpoint, nil
+		})
+
+		assert.True(t, predicate(2), "segments behind checkpoint should be deletable")
+		assert.False(t, predicate(4), "checkpoint segment should be retained")
+
+		predicateErr := newWalCleanupPredicate(false, func() *wal.Offset { return nil }, func() (*internal.Metadata, error) {
+			return nil, assert.AnError
+		})
+		assert.False(t, predicateErr(1), "errors fetching checkpoint should keep segments")
+	})
 }
 
 func TestMinActiveTxnBegin(t *testing.T) {

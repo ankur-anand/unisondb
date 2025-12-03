@@ -373,3 +373,32 @@ func (w *WalIO) GetTransactionRecords(startOffset *Offset) ([]*logrecord.LogReco
 	slices.Reverse(records)
 	return records, nil
 }
+
+// CurrentSegmentInfo returns the last LSN and offset from the current segment's metadata.
+func (w *WalIO) CurrentSegmentInfo() (lastLSN uint64, lastOffset *Offset, entryCount int64, ok bool) {
+	current := w.appendLog.Current()
+	if current == nil {
+		return 0, nil, 0, false
+	}
+
+	firstIndex := current.FirstLogIndex()
+	count := current.GetEntryCount()
+
+	if count == 0 {
+		return 0, nil, 0, false
+	}
+
+	// Last LSN = first index + count - 1
+	lastLSN = firstIndex + uint64(count) - 1
+
+	entries := current.IndexEntries()
+	if len(entries) > 0 {
+		lastEntry := entries[len(entries)-1]
+		lastOffset = &Offset{
+			SegmentID: current.ID(),
+			Offset:    lastEntry.Offset,
+		}
+	}
+
+	return lastLSN, lastOffset, count, true
+}

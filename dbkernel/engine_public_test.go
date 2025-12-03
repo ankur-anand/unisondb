@@ -1089,3 +1089,134 @@ func TestEngineBackupBtree(t *testing.T) {
 	_, err = engine.BackupBtree("/tmp/not-allowed.snapshot")
 	assert.Error(t, err)
 }
+
+func TestEventLogMode_OnlyEventsAllowed(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := dbkernel.NewDefaultEngineConfig()
+	cfg.EventLogMode = true
+
+	engine, err := dbkernel.NewStorageEngine(dataDir, "eventlog", cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, engine.Close(context.Background()))
+	})
+
+	t.Run("AddEvent_succeeds", func(t *testing.T) {
+		event := &logcodec.EventEntry{
+			EventID:   "event-1",
+			EventType: "test.event",
+			Payload:   []byte("event-payload"),
+		}
+		err := engine.AddEvent(event)
+		assert.NoError(t, err)
+	})
+
+	t.Run("PutKV_blocked", func(t *testing.T) {
+		err := engine.PutKV([]byte("key"), []byte("value"))
+		assert.ErrorIs(t, err, dbkernel.ErrEventLogModeViolation)
+	})
+
+	t.Run("BatchPutKV_blocked", func(t *testing.T) {
+		err := engine.BatchPutKV([][]byte{[]byte("k1")}, [][]byte{[]byte("v1")})
+		assert.ErrorIs(t, err, dbkernel.ErrEventLogModeViolation)
+	})
+
+	t.Run("DeleteKV_blocked", func(t *testing.T) {
+		err := engine.DeleteKV([]byte("key"))
+		assert.ErrorIs(t, err, dbkernel.ErrEventLogModeViolation)
+	})
+
+	t.Run("BatchDeleteKV_blocked", func(t *testing.T) {
+		err := engine.BatchDeleteKV([][]byte{[]byte("k1")})
+		assert.ErrorIs(t, err, dbkernel.ErrEventLogModeViolation)
+	})
+
+	t.Run("PutColumnsForRow_blocked", func(t *testing.T) {
+		err := engine.PutColumnsForRow([]byte("row"), map[string][]byte{"col": []byte("val")})
+		assert.ErrorIs(t, err, dbkernel.ErrEventLogModeViolation)
+	})
+
+	t.Run("PutColumnsForRows_blocked", func(t *testing.T) {
+		err := engine.PutColumnsForRows(
+			[][]byte{[]byte("row1")},
+			[]map[string][]byte{{"col": []byte("val")}},
+		)
+		assert.ErrorIs(t, err, dbkernel.ErrEventLogModeViolation)
+	})
+
+	t.Run("DeleteColumnsForRow_blocked", func(t *testing.T) {
+		err := engine.DeleteColumnsForRow([]byte("row"), map[string][]byte{"col": []byte("val")})
+		assert.ErrorIs(t, err, dbkernel.ErrEventLogModeViolation)
+	})
+
+	t.Run("DeleteColumnsForRows_blocked", func(t *testing.T) {
+		err := engine.DeleteColumnsForRows(
+			[][]byte{[]byte("row1")},
+			[]map[string][]byte{{"col": []byte("val")}},
+		)
+		assert.ErrorIs(t, err, dbkernel.ErrEventLogModeViolation)
+	})
+
+	t.Run("DeleteRow_blocked", func(t *testing.T) {
+		err := engine.DeleteRow([]byte("row"))
+		assert.ErrorIs(t, err, dbkernel.ErrEventLogModeViolation)
+	})
+
+	t.Run("BatchDeleteRows_blocked", func(t *testing.T) {
+		err := engine.BatchDeleteRows([][]byte{[]byte("row1")})
+		assert.ErrorIs(t, err, dbkernel.ErrEventLogModeViolation)
+	})
+
+	t.Run("NewTxn_blocked", func(t *testing.T) {
+		_, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+		assert.ErrorIs(t, err, dbkernel.ErrEventLogModeViolation)
+	})
+}
+
+func TestNormalMode_EventsNotAllowed(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := dbkernel.NewDefaultEngineConfig()
+	engine, err := dbkernel.NewStorageEngine(dataDir, "normal", cfg)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		require.NoError(t, engine.Close(context.Background()))
+	})
+
+	t.Run("AddEvent_blocked", func(t *testing.T) {
+		event := &logcodec.EventEntry{
+			EventID:   "event-1",
+			EventType: "test.event",
+			Payload:   []byte("event-payload"),
+		}
+		err := engine.AddEvent(event)
+		assert.ErrorIs(t, err, dbkernel.ErrEventNotAllowed)
+	})
+
+	t.Run("PutKV_succeeds", func(t *testing.T) {
+		err := engine.PutKV([]byte("key"), []byte("value"))
+		assert.NoError(t, err)
+	})
+
+	t.Run("GetKV_succeeds", func(t *testing.T) {
+		val, err := engine.GetKV([]byte("key"))
+		assert.NoError(t, err)
+		assert.Equal(t, []byte("value"), val)
+	})
+
+	t.Run("DeleteKV_succeeds", func(t *testing.T) {
+		err := engine.DeleteKV([]byte("key"))
+		assert.NoError(t, err)
+	})
+
+	t.Run("PutColumnsForRow_succeeds", func(t *testing.T) {
+		err := engine.PutColumnsForRow([]byte("row"), map[string][]byte{"col": []byte("val")})
+		assert.NoError(t, err)
+	})
+
+	t.Run("NewTxn_succeeds", func(t *testing.T) {
+		txn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+		assert.NoError(t, err)
+		assert.NotNil(t, txn)
+		txn.Abort()
+	})
+}

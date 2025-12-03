@@ -470,3 +470,32 @@ func TestWalIO_BatchAppend(t *testing.T) {
 		assert.Equal(t, expectedTotal, totalWritten.Load(), "should have written all records")
 	})
 }
+
+func TestWalIO_CurrentSegmentInfo(t *testing.T) {
+	walInstance := setupWalTest(t)
+
+	t.Run("empty_segment_returns_false", func(t *testing.T) {
+		lastLSN, lastOffset, count, ok := walInstance.CurrentSegmentInfo()
+		assert.False(t, ok)
+		assert.EqualValues(t, 0, lastLSN)
+		assert.EqualValues(t, 0, count)
+		assert.Nil(t, lastOffset)
+	})
+
+	t.Run("populated_segment_returns_last_metadata", func(t *testing.T) {
+		_, err := walInstance.Append([]byte("entry-1"), 100)
+		require.NoError(t, err)
+		_, err = walInstance.Append([]byte("entry-2"), 101)
+		require.NoError(t, err)
+		lastPos, err := walInstance.Append([]byte("entry-3"), 102)
+		require.NoError(t, err)
+
+		lastLSN, lastOffset, count, ok := walInstance.CurrentSegmentInfo()
+		assert.True(t, ok)
+		assert.EqualValues(t, 3, count)
+		assert.EqualValues(t, 102, lastLSN)
+		require.NotNil(t, lastOffset)
+		assert.Equal(t, lastPos.SegmentID, lastOffset.SegmentID)
+		assert.Equal(t, lastPos.Offset, lastOffset.Offset)
+	})
+}
