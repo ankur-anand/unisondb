@@ -491,6 +491,43 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 	return nil
 }
 
+// persistEvent writes an event to the WAL.
+func (e *Engine) persistEvent(event *logcodec.EventEntry) error {
+	if e.readOnly {
+		return ErrEngineReadOnly
+	}
+
+	encodedEvent := logcodec.SerializeEventEntry(event)
+	hintSize := len(encodedEvent) + 512
+	checksum := crc32.ChecksumIEEE(encodedEvent)
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	index := e.writeSeenCounter.Add(1)
+	hlc := HLCNow()
+
+	record := logcodec.LogRecord{
+		LSN:           index,
+		HLC:           hlc,
+		OperationType: logrecord.LogOperationTypeInsert,
+		TxnState:      logrecord.TransactionStateNone,
+		EntryType:     logrecord.LogEntryTypeEvent,
+		Entries:       [][]byte{encodedEvent},
+		CRC32Checksum: checksum,
+	}
+
+	encoded := record.FBEncode(hintSize)
+
+	offset, err := e.walIO.Append(encoded, index)
+	if err != nil {
+		return err
+	}
+
+	e.writeOffset(offset)
+	return nil
+}
+
 // persistRowColumnAction writes the columnEntries for the given rowKey in the wal and mem-table.
 func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [][]byte, columnsEntries []map[string][]byte) error {
 	if e.readOnly {
@@ -1010,7 +1047,9 @@ func (e *Engine) pauseFlush() {
 //}
 
 func (e *Engine) close(ctx context.Context) error {
-	e.shutdown.Store(true)
+	if e.shutdown.Swap(true) {
+		return nil
+	}
 	// cancel the context:
 	e.cancel()
 

@@ -798,7 +798,72 @@ func (m *mockedTree) RetrieveMetadata(key []byte) ([]byte, error) {
 }
 
 func (m *mockedTree) BatchSetKV(keys, values [][]byte) error { panic("not implemented") }
-func (m *mockedTree) BatchDeleteKV(keys [][]byte) error      { panic("not implemented") }
+
+func TestAddEvent(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "test_event_namespace"
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+
+	engine, err := NewStorageEngine(dir, namespace, config)
+	assert.NoError(t, err, "NewStorageEngine should not error")
+	t.Cleanup(func() {
+		err := engine.close(context.Background())
+		assert.NoError(t, err, "storage engine close should not error")
+	})
+
+	event := &logcodec.EventEntry{
+		EventID:    "event-1",
+		EventType:  "test-type",
+		OccurredAt: uint64(time.Now().UnixNano()),
+		Payload:    []byte("test-payload"),
+		Metadata: []logcodec.KeyValueEntry{
+			{Key: []byte("meta-key"), Value: []byte("meta-val")},
+		},
+	}
+
+	err = engine.AddEvent(event)
+	assert.NoError(t, err, "AddEvent should not error")
+
+	reader, err := engine.NewReader()
+	assert.NoError(t, err)
+
+	found := false
+	for {
+		data, _, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		assert.NoError(t, err)
+
+		record := logrecord.GetRootAsLogRecord(data, 0)
+		if record.EntryType() == logrecord.LogEntryTypeEvent {
+			decodedEvent := logcodec.DeserializeEventEntry(logcodec.DeserializeFBRootLogRecord(record).Entries[0])
+			assert.Equal(t, event.EventID, decodedEvent.EventID)
+			assert.Equal(t, event.EventType, decodedEvent.EventType)
+			assert.Equal(t, event.Payload, decodedEvent.Payload)
+			found = true
+		}
+	}
+	assert.True(t, found, "Event should be found in WAL")
+
+	err = engine.close(context.Background())
+	assert.NoError(t, err)
+
+	engine, err = NewStorageEngine(dir, namespace, config)
+	assert.NoError(t, err)
+	defer engine.Close(context.Background())
+
+	assert.Equal(t, 1, engine.RecoveredWALCount(), "Events should be counted during recovery")
+
+	event2 := &logcodec.EventEntry{
+		EventID:   "event-2",
+		EventType: "test-type",
+	}
+	err = engine.AddEvent(event2)
+	assert.NoError(t, err)
+}
+func (m *mockedTree) BatchDeleteKV(keys [][]byte) error { panic("not implemented") }
 func (m *mockedTree) BatchSetCells(rowKeys [][]byte, cols []map[string][]byte) error {
 	panic("not implemented")
 }

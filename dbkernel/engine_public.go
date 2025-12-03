@@ -40,6 +40,8 @@ var (
 	lobSurface = map[string]string{"surface": "client", "op": "get", "entry": "lob"}
 
 	snapshotSurface = map[string]string{"surface": "client", "op": "create", "entry": "snapshot"}
+
+	eventPutSurface = map[string]string{"surface": "client", "op": "put", "entry": "event"}
 )
 
 var (
@@ -262,6 +264,22 @@ func (e *Engine) PutKV(key, value []byte) error {
 	defer start.Stop()
 
 	return e.persistKeyValue([][]byte{key}, [][]byte{value}, logrecord.LogOperationTypeInsert)
+}
+
+// AddEvent adds an event to the WAL.
+// Events are not stored in the MemTable or BTreeStore.
+func (e *Engine) AddEvent(event *logcodec.EventEntry) error {
+	if e.shutdown.Load() {
+		return ErrInCloseProcess
+	}
+
+	eventScope := e.taggedScope.Tagged(map[string]string{"surface": "client", "op": "add", "entry": "event"})
+	eventScope.Counter(mRequestsTotal).Inc(1)
+
+	start := eventScope.Timer(mRequestLatencySeconds).Start()
+	defer start.Stop()
+
+	return e.persistEvent(event)
 }
 
 // BatchPutKV insert the associated Key Value Pair.
