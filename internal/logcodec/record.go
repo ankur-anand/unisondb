@@ -15,6 +15,14 @@ type RowEntry struct {
 	Columns map[string][]byte
 }
 
+type EventEntry struct {
+	EventID    string
+	EventType  string
+	OccurredAt uint64
+	Payload    []byte
+	Metadata   []KeyValueEntry
+}
+
 type LogRecord struct {
 	LSN             uint64
 	HLC             uint64

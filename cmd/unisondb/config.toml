@@ -16,6 +16,8 @@ namespaces = ["default", "tenant_1", "tenant_2", "tenant_3", "tenant_4"]
 bytes_per_sync = "1MB"
 segment_size = "16MB"
 arena_size = "4MB"
+# event_log_mode: when true, only events are accepted (no KV/Row writes or transactions)
+event_log_mode = false
 
 [write_notify_config]
 enabled = false

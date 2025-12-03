@@ -56,9 +56,13 @@ type Txn struct {
 }
 
 // NewTxn returns a new initialized batch Txn.
+// Transactions are not allowed in EventLogMode.
 func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.LogEntryType) (*Txn, error) {
 	if e.readOnly {
 		return nil, ErrEngineReadOnly
+	}
+	if e.config.EventLogMode {
+		return nil, ErrEventLogModeViolation
 	}
 
 	if txnType == logrecord.LogOperationTypeNoOperation {

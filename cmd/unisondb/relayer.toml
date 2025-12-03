@@ -18,6 +18,8 @@ bytes_per_sync = "1MB"
 ## else the entire sync will fail.
 segment_size = "16MB"
 arena_size = "4MB"
+# event_log_mode: when true, only events are accepted (no KV/Row writes or transactions)
+event_log_mode = false
 
 [fuzz_config]
 ops_per_namespace = 10

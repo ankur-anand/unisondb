@@ -20,6 +20,7 @@ enum LogEntryType : ubyte {
   KV = 0,      // Not a chunked value
   Chunked = 1,
   Row = 2,
+  Event = 3,
 }
 
 // Column Entry: Supports multiple column updates per WAL record.
@@ -37,6 +38,20 @@ table KeyValueEntry {
 table RowUpdateEntry {
   key: [ubyte];
   columns: [ColumnData];
+}
+
+// Generic event entry
+table EventEntry {
+  event_id: string;
+  event_type: string;
+  
+  // (microseconds since epoch)
+  occurred_at: uint64;
+  
+  payload: [ubyte];
+  
+  // metadata optional
+  metadata: [KeyValueEntry];
 }
 
 table EncodedEntry {

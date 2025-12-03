@@ -10,18 +10,21 @@ const (
 	LogEntryTypeKV      LogEntryType = 0
 	LogEntryTypeChunked LogEntryType = 1
 	LogEntryTypeRow     LogEntryType = 2
+	LogEntryTypeEvent   LogEntryType = 3
 )
 
 var EnumNamesLogEntryType = map[LogEntryType]string{
 	LogEntryTypeKV:      "KV",
 	LogEntryTypeChunked: "Chunked",
 	LogEntryTypeRow:     "Row",
+	LogEntryTypeEvent:   "Event",
 }
 
 var EnumValuesLogEntryType = map[string]LogEntryType{
 	"KV":      LogEntryTypeKV,
 	"Chunked": LogEntryTypeChunked,
 	"Row":     LogEntryTypeRow,
+	"Event":   LogEntryTypeEvent,
 }
 
 func (v LogEntryType) String() string {

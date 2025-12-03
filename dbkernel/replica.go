@@ -31,6 +31,8 @@ var (
 
 	replicaCommitKV  = map[string]string{"surface": "replica", "op": "commit", "entry": "kv"}
 	replicaCommitRow = map[string]string{"surface": "replica", "op": "commit", "entry": "row"}
+
+	replicaInsertEvent = map[string]string{"surface": "replica", "op": "insert", "entry": "event"}
 )
 
 const mReplicationLatencySeconds = "replication_latency_physical_seconds"
@@ -275,6 +277,9 @@ func (wh *ReplicaWALHandler) handleInsert(record *logrecord.LogRecord, offset *O
 				return err
 			}
 		}
+		wh.engine.writeOffset(offset)
+	case logrecord.LogEntryTypeEvent:
+		wh.engine.taggedScope.Tagged(replicaInsertEvent).Counter(mRequestsTotal).Inc(1)
 		wh.engine.writeOffset(offset)
 	}
 	return nil
