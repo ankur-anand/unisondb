@@ -1215,3 +1215,85 @@ func SegmentFileName(dirPath string, extName string, id SegmentID) string {
 func SegmentIndexFileName(dirPath string, extName string, id SegmentID) string {
 	return filepath.Join(dirPath, fmt.Sprintf("%09d"+extName+".idx", id))
 }
+
+// TruncateTo truncates the segment to the specified log index.
+// All entries after the given log index will be discarded.
+// If the log index is not found in this segment, it returns an error.
+func (seg *Segment) TruncateTo(logIndex uint64) error {
+	seg.writeMu.Lock()
+	defer seg.writeMu.Unlock()
+
+	if seg.closed.Load() {
+		return ErrClosed
+	}
+
+	// offset of the record with logIndex
+	var targetOffset int64 = -1
+	var targetLength uint32
+
+	if len(seg.indexEntries) == 0 {
+		if seg.writeOffset.Load() <= int64(segmentHeaderSize) {
+			return fmt.Errorf("segment is empty, cannot truncate to %d", logIndex)
+		}
+	}
+
+	if logIndex < seg.firstLogIndex {
+		return fmt.Errorf("log index %d is before segment start %d", logIndex, seg.firstLogIndex)
+	}
+
+	relativeIndex := int(logIndex - seg.firstLogIndex)
+	if relativeIndex >= len(seg.indexEntries) {
+		return fmt.Errorf("log index %d not found in segment index (max relative %d)", logIndex, len(seg.indexEntries)-1)
+	}
+
+	targetEntry := seg.indexEntries[relativeIndex]
+	targetOffset = int64(targetEntry.Offset)
+	targetLength = targetEntry.Length
+
+	headerSize := int64(recordHeaderSize)
+	dataSize := int64(targetLength)
+	trailerSize := int64(recordTrailerMarkerSize)
+	rawSize := headerSize + dataSize + trailerSize
+	entrySize := alignUp(rawSize)
+
+	newWriteOffset := targetOffset + entrySize
+	seg.writeOffset.Store(newWriteOffset)
+	seg.indexEntries = seg.indexEntries[:relativeIndex+1]
+
+	newEntryCount := int64(relativeIndex + 1)
+
+	binary.LittleEndian.PutUint64(seg.mmapData[24:32], uint64(newWriteOffset))
+	binary.LittleEndian.PutUint64(seg.mmapData[32:40], uint64(newEntryCount))
+	binary.LittleEndian.PutUint64(seg.mmapData[16:24], uint64(time.Now().UnixNano()))
+
+	flags := binary.LittleEndian.Uint32(seg.mmapData[40:44])
+	if IsSealed(flags) {
+		flags &^= FlagSealed
+		flags |= FlagActive
+		binary.LittleEndian.PutUint32(seg.mmapData[40:44], flags)
+		seg.isSealed.Store(false)
+		seg.inMemorySealed.Store(false)
+	}
+
+	crc := crc32.Checksum(seg.mmapData[0:56], crcTable)
+	binary.LittleEndian.PutUint32(seg.mmapData[56:60], crc)
+
+	clearStart := newWriteOffset
+	clearEnd := clearStart + 1024
+	if clearEnd > seg.mmapSize {
+		clearEnd = seg.mmapSize
+	}
+	for i := clearStart; i < clearEnd; i++ {
+		seg.mmapData[i] = 0
+	}
+
+	if err := seg.MSync(); err != nil {
+		return fmt.Errorf("failed to sync truncated segment: %w", err)
+	}
+
+	if err := seg.flushIndexToFile(seg.indexEntries); err != nil {
+		return fmt.Errorf("failed to flush truncated index: %w", err)
+	}
+
+	return nil
+}
