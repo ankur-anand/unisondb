@@ -151,9 +151,6 @@ type segmentRange struct {
 }
 
 func (wl *WALog) ensureSegmentRangesLocked() {
-	if len(wl.segmentRanges) == len(wl.segments) {
-		return
-	}
 	ranges := wl.segmentRanges[:0]
 	for id, seg := range wl.segments {
 		first := seg.FirstLogIndex()
@@ -608,6 +605,157 @@ func (wl *WALog) rotateSegment() error {
 	return nil
 }
 
+// Truncate truncates the WAL to the specified log index.
+// All entries after the given log index will be discarded.
+// If logIndex is 0, all segments are deleted and the WAL is reset.
+//
+// Users must ensure that reader creation and advancement are not interfering
+// with the truncation logic. Active readers on segments that need to be
+// deleted will cause the Truncate operation to fail.
+func (wl *WALog) Truncate(logIndex uint64) error {
+	wl.writeMu.Lock()
+	defer wl.writeMu.Unlock()
+
+	plan, err := wl.buildTruncatePlan(logIndex)
+	if err != nil {
+		return err
+	}
+
+	if logIndex == 0 && plan.hasActiveReaders {
+		return errors.New("cannot truncate WAL to 0 while active readers exist")
+	}
+
+	if err := wl.deleteSegments(plan.segmentsToDelete); err != nil {
+		return err
+	}
+
+	if logIndex == 0 {
+		return wl.resetAfterFullTruncate(plan.segmentToTruncate)
+	}
+
+	if plan.segmentToTruncate != 0 {
+		seg := wl.segments[plan.segmentToTruncate]
+		if err := seg.TruncateTo(logIndex); err != nil {
+			return fmt.Errorf("failed to truncate segment %d: %w", plan.segmentToTruncate, err)
+		}
+		wl.currentSegment = seg
+	} else if len(wl.segments) == 0 {
+		seg, err := wl.openSegment(1)
+		if err != nil {
+			return fmt.Errorf("failed to create initial segment after truncate: %w", err)
+		}
+		wl.segments[1] = seg
+		wl.currentSegment = seg
+		wl.snapshotSegments()
+		return nil
+	}
+
+	wl.ensureSegmentRangesLocked()
+	wl.snapshotSegments()
+
+	return nil
+}
+
+type truncatePlan struct {
+	segmentsToDelete  []SegmentID
+	segmentToTruncate SegmentID
+	earliestIndex     uint64
+	haveEarliest      bool
+	hasActiveReaders  bool
+}
+
+func (wl *WALog) buildTruncatePlan(logIndex uint64) (truncatePlan, error) {
+	var plan truncatePlan
+
+	for id, seg := range wl.segments {
+		if seg.HasActiveReaders() {
+			plan.hasActiveReaders = true
+		}
+
+		first := seg.FirstLogIndex()
+		if first > 0 && (!plan.haveEarliest || first < plan.earliestIndex) {
+			plan.earliestIndex = first
+			plan.haveEarliest = true
+		}
+
+		if first > logIndex {
+			plan.segmentsToDelete = append(plan.segmentsToDelete, id)
+			continue
+		}
+
+		if plan.segmentToTruncate == 0 || first > wl.segments[plan.segmentToTruncate].FirstLogIndex() {
+			plan.segmentToTruncate = id
+		}
+	}
+
+	if logIndex > 0 && plan.haveEarliest && logIndex < plan.earliestIndex {
+		return plan, fmt.Errorf("truncate index %d is before earliest segment index %d", logIndex, plan.earliestIndex)
+	}
+
+	// active readers on deletion candidates ?
+	for _, id := range plan.segmentsToDelete {
+		seg := wl.segments[id]
+		if seg.HasActiveReaders() {
+			return plan, fmt.Errorf("cannot delete segment %d: has active readers", id)
+		}
+	}
+
+	// active readers on target segment ONLY if fully deleting ?
+	if plan.segmentToTruncate != 0 {
+		seg := wl.segments[plan.segmentToTruncate]
+		if logIndex == 0 {
+			if seg.HasActiveReaders() {
+				return plan, fmt.Errorf("cannot delete segment %d: has active readers", plan.segmentToTruncate)
+			}
+		}
+	}
+
+	return plan, nil
+}
+
+func (wl *WALog) deleteSegments(ids []SegmentID) error {
+	if len(ids) == 0 {
+		return nil
+	}
+
+	for _, id := range ids {
+		seg := wl.segments[id]
+		if err := seg.Remove(); err != nil {
+			return fmt.Errorf("failed to remove segment %d: %w", id, err)
+		}
+		delete(wl.segments, id)
+		if wl.currentSegment != nil && wl.currentSegment.ID() == id {
+			wl.currentSegment = nil
+		}
+	}
+	return nil
+}
+
+func (wl *WALog) resetAfterFullTruncate(segmentToTruncate SegmentID) error {
+	if segmentToTruncate != 0 {
+		seg := wl.segments[segmentToTruncate]
+		if err := seg.Remove(); err != nil {
+			return fmt.Errorf("failed to remove segment %d: %w", segmentToTruncate, err)
+		}
+		delete(wl.segments, segmentToTruncate)
+		if wl.currentSegment != nil && wl.currentSegment.ID() == segmentToTruncate {
+			wl.currentSegment = nil
+		}
+	}
+
+	wl.segmentRanges = nil
+	wl.snapshotSegments()
+
+	seg, err := wl.openSegment(1)
+	if err != nil {
+		return fmt.Errorf("failed to create initial segment after truncate: %w", err)
+	}
+	wl.segments[1] = seg
+	wl.currentSegment = seg
+	wl.snapshotSegments()
+	return nil
+}
+
 // BackupLastRotatedSegment copies the most recently sealed WAL segment into backupDir and returns the backup path.
 func (wl *WALog) BackupLastRotatedSegment(backupDir string) (string, error) {
 	if backupDir == "" {
@@ -866,6 +1014,7 @@ func (wl *WALog) MarkSegmentsForDeletion() {
 		}
 		if _, alreadyQueued := wl.pendingDeletion[seg.ID()]; !alreadyQueued {
 			wl.pendingDeletion[seg.ID()] = seg
+			seg.MarkForDeletion()
 			segmentsToDelete--
 		}
 	}
