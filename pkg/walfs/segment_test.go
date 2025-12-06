@@ -2295,3 +2295,25 @@ func TestSegment_TruncateTo_Errors(t *testing.T) {
 		assert.Contains(t, err.Error(), "not found in segment index")
 	})
 }
+
+func TestSegment_RemoveDeletesFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+
+	_, err = seg.Write([]byte("payload"), 1)
+	require.NoError(t, err)
+
+	require.NoError(t, seg.SealSegment())
+
+	require.NoError(t, seg.Remove())
+
+	_, err = os.Stat(seg.path)
+	assert.True(t, os.IsNotExist(err), "segment file should be removed")
+
+	if seg.indexPath != "" {
+		_, err = os.Stat(seg.indexPath)
+		assert.True(t, os.IsNotExist(err), "index file should be removed")
+	}
+}

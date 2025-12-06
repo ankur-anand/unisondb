@@ -1227,14 +1227,8 @@ func (seg *Segment) TruncateTo(logIndex uint64) error {
 		return ErrClosed
 	}
 
-	// offset of the record with logIndex
-	var targetOffset int64 = -1
-	var targetLength uint32
-
-	if len(seg.indexEntries) == 0 {
-		if seg.writeOffset.Load() <= int64(segmentHeaderSize) {
-			return fmt.Errorf("segment is empty, cannot truncate to %d", logIndex)
-		}
+	if len(seg.indexEntries) == 0 && seg.writeOffset.Load() <= int64(segmentHeaderSize) {
+		return fmt.Errorf("segment is empty, cannot truncate to %d", logIndex)
 	}
 
 	if logIndex < seg.firstLogIndex {
@@ -1247,21 +1241,31 @@ func (seg *Segment) TruncateTo(logIndex uint64) error {
 	}
 
 	targetEntry := seg.indexEntries[relativeIndex]
-	targetOffset = int64(targetEntry.Offset)
-	targetLength = targetEntry.Length
 
-	headerSize := int64(recordHeaderSize)
-	dataSize := int64(targetLength)
-	trailerSize := int64(recordTrailerMarkerSize)
-	rawSize := headerSize + dataSize + trailerSize
+	rawSize := int64(recordHeaderSize) + int64(targetEntry.Length) + int64(recordTrailerMarkerSize)
 	entrySize := alignUp(rawSize)
 
-	newWriteOffset := targetOffset + entrySize
+	newWriteOffset := int64(targetEntry.Offset) + entrySize
 	seg.writeOffset.Store(newWriteOffset)
 	seg.indexEntries = seg.indexEntries[:relativeIndex+1]
 
 	newEntryCount := int64(relativeIndex + 1)
 
+	seg.applyTruncateHeader(newWriteOffset, newEntryCount)
+	seg.zeroAheadFrom(newWriteOffset)
+
+	if err := seg.MSync(); err != nil {
+		return fmt.Errorf("failed to sync truncated segment: %w", err)
+	}
+
+	if err := seg.flushIndexToFile(seg.indexEntries); err != nil {
+		return fmt.Errorf("failed to flush truncated index: %w", err)
+	}
+
+	return nil
+}
+
+func (seg *Segment) applyTruncateHeader(newWriteOffset int64, newEntryCount int64) {
 	binary.LittleEndian.PutUint64(seg.mmapData[24:32], uint64(newWriteOffset))
 	binary.LittleEndian.PutUint64(seg.mmapData[32:40], uint64(newEntryCount))
 	binary.LittleEndian.PutUint64(seg.mmapData[16:24], uint64(time.Now().UnixNano()))
@@ -1277,22 +1281,32 @@ func (seg *Segment) TruncateTo(logIndex uint64) error {
 
 	crc := crc32.Checksum(seg.mmapData[0:56], crcTable)
 	binary.LittleEndian.PutUint32(seg.mmapData[56:60], crc)
+}
 
-	clearStart := newWriteOffset
-	clearEnd := clearStart + 1024
+func (seg *Segment) zeroAheadFrom(offset int64) {
+	clearEnd := offset + 1024
 	if clearEnd > seg.mmapSize {
 		clearEnd = seg.mmapSize
 	}
-	for i := clearStart; i < clearEnd; i++ {
+	for i := offset; i < clearEnd; i++ {
 		seg.mmapData[i] = 0
 	}
+}
 
-	if err := seg.MSync(); err != nil {
-		return fmt.Errorf("failed to sync truncated segment: %w", err)
+// Remove closes the segment and removes its underlying files (segment and index).
+func (seg *Segment) Remove() error {
+	if err := seg.Close(); err != nil {
+		return fmt.Errorf("failed to close segment %d: %w", seg.id, err)
 	}
 
-	if err := seg.flushIndexToFile(seg.indexEntries); err != nil {
-		return fmt.Errorf("failed to flush truncated index: %w", err)
+	if err := os.Remove(seg.path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove segment file %s: %w", seg.path, err)
+	}
+
+	if seg.indexPath != "" {
+		if err := os.Remove(seg.indexPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("failed to remove index file %s: %w", seg.indexPath, err)
+		}
 	}
 
 	return nil
