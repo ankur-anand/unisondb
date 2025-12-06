@@ -2230,3 +2230,90 @@ func TestSegment_WriteBatch_SegmentFullOnFirstRecord(t *testing.T) {
 	assert.Equal(t, 0, written, "no records should be written if first doesn't fit")
 	assert.Nil(t, positions)
 }
+
+func TestSegment_TruncateTo_UnsealsAndKeepsSegment(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+	defer seg.Close()
+
+	var positions []RecordPosition
+	for i := 1; i <= 4; i++ {
+		pos, err := seg.Write([]byte(fmt.Sprintf("data-%d", i)), uint64(i))
+		require.NoError(t, err)
+		positions = append(positions, pos)
+	}
+
+	require.NoError(t, seg.SealSegment())
+	require.True(t, IsSealed(seg.GetFlags()))
+
+	require.NoError(t, seg.TruncateTo(2))
+
+	assert.False(t, IsSealed(seg.GetFlags()), "Segment should be unsealed after truncate")
+	assert.Equal(t, int64(2), seg.GetEntryCount())
+
+	entries := seg.IndexEntries()
+	require.Len(t, entries, 2)
+
+	pos, err := seg.Write([]byte("data-3-new"), 3)
+	require.NoError(t, err)
+	assert.Equal(t, SegmentID(1), pos.SegmentID)
+
+	data, _, err := seg.Read(pos.Offset)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("data-3-new"), data)
+}
+
+func TestSegment_TruncateTo_Errors(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+	defer seg.Close()
+
+	t.Run("empty segment", func(t *testing.T) {
+		err := seg.TruncateTo(1)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "segment is empty, cannot truncate to")
+	})
+
+	_, err = seg.Write([]byte("data-1"), 5)
+	require.NoError(t, err)
+	_, err = seg.Write([]byte("data-2"), 6)
+	require.NoError(t, err)
+
+	t.Run("before segment start", func(t *testing.T) {
+		err := seg.TruncateTo(3)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "before segment start")
+	})
+
+	t.Run("index not found", func(t *testing.T) {
+		err := seg.TruncateTo(10)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "not found in segment index")
+	})
+}
+
+func TestSegment_RemoveDeletesFiles(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+
+	_, err = seg.Write([]byte("payload"), 1)
+	require.NoError(t, err)
+
+	require.NoError(t, seg.SealSegment())
+
+	require.NoError(t, seg.Remove())
+
+	_, err = os.Stat(seg.path)
+	assert.True(t, os.IsNotExist(err), "segment file should be removed")
+
+	if seg.indexPath != "" {
+		_, err = os.Stat(seg.indexPath)
+		assert.True(t, os.IsNotExist(err), "index file should be removed")
+	}
+}

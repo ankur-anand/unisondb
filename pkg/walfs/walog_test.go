@@ -2465,3 +2465,454 @@ func TestSegmentForIndexConcurrentAccess(t *testing.T) {
 	close(stop)
 	wg.Wait()
 }
+
+func TestWALog_Truncate(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext, walfs.WithMaxSegmentSize(1024*1024))
+	require.NoError(t, err)
+	defer wl.Close()
+
+	for i := 1; i <= 100; i++ {
+		_, err := wl.Write([]byte("payload"), uint64(i))
+		require.NoError(t, err)
+		if i%10 == 0 {
+			require.NoError(t, wl.RotateSegment())
+		}
+	}
+
+	assert.Greater(t, len(wl.Segments()), 1)
+
+	err = wl.Truncate(55)
+	require.NoError(t, err)
+
+	segments := wl.Segments()
+
+	var maxID walfs.SegmentID
+	for id := range segments {
+		if id > maxID {
+			maxID = id
+		}
+	}
+
+	current := wl.Current()
+	require.NotNil(t, current)
+
+	assert.LessOrEqual(t, current.FirstLogIndex(), uint64(55))
+
+	_, _, err = wl.SegmentForIndex(56)
+	assert.Error(t, err)
+
+	_, _, err = wl.SegmentForIndex(55)
+	assert.NoError(t, err)
+
+	_, err = wl.Write([]byte("new-56"), 56)
+	require.NoError(t, err)
+
+	segID, slot, err := wl.SegmentForIndex(56)
+	require.NoError(t, err)
+	idxEntries, err := wl.SegmentIndex(segID)
+	require.NoError(t, err)
+	entry := idxEntries[slot]
+	data, _, err := wl.Segments()[segID].Read(int64(entry.Offset))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("new-56"), data)
+}
+
+func TestWALog_Truncate_ToZero(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer wl.Close()
+
+	_, err = wl.Write([]byte("data"), 1)
+	require.NoError(t, err)
+
+	err = wl.Truncate(0)
+	require.NoError(t, err)
+
+	assert.Len(t, wl.Segments(), 1)
+	assert.Equal(t, walfs.SegmentID(1), wl.Current().ID())
+	assert.Equal(t, int64(0), wl.Current().GetEntryCount())
+}
+
+func TestWALog_Truncate_Sealed(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer wl.Close()
+
+	_, err = wl.Write([]byte("data1"), 1)
+	require.NoError(t, err)
+	require.NoError(t, wl.RotateSegment())
+
+	_, err = wl.Write([]byte("data2"), 2)
+	require.NoError(t, err)
+	require.NoError(t, wl.RotateSegment())
+
+	_, err = wl.Write([]byte("data3"), 3)
+	require.NoError(t, err)
+
+	err = wl.Truncate(1)
+	require.NoError(t, err)
+
+	assert.Len(t, wl.Segments(), 1)
+	assert.Equal(t, walfs.SegmentID(1), wl.Current().ID())
+
+	assert.False(t, walfs.IsSealed(wl.Current().GetFlags()))
+}
+
+func TestWALog_Truncate_FutureIndex(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer wl.Close()
+
+	for i := 1; i <= 10; i++ {
+		_, err := wl.Write([]byte("data"), uint64(i))
+		require.NoError(t, err)
+	}
+
+	err = wl.Truncate(20)
+	assert.Error(t, err)
+
+	lastIndex := wl.Current().FirstLogIndex() + uint64(wl.Current().GetEntryCount()) - 1
+	assert.Equal(t, uint64(10), lastIndex)
+}
+
+func TestWALog_Truncate_BeforeEarliestIndex(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer wl.Close()
+
+	_, err = wl.Write([]byte("late-data"), 11)
+	require.NoError(t, err)
+
+	err = wl.Truncate(5)
+	assert.Error(t, err)
+
+	assert.Len(t, wl.Segments(), 1)
+	assert.Equal(t, uint64(11), wl.Current().FirstLogIndex())
+	assert.Equal(t, int64(1), wl.Current().GetEntryCount())
+
+	_, _, err = wl.SegmentForIndex(11)
+	assert.NoError(t, err)
+}
+
+func TestWALog_Truncate_Idempotency(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer wl.Close()
+
+	for i := 1; i <= 10; i++ {
+		_, err := wl.Write([]byte("data"), uint64(i))
+		require.NoError(t, err)
+	}
+
+	err = wl.Truncate(5)
+	require.NoError(t, err)
+
+	lastIndex := wl.Current().FirstLogIndex() + uint64(wl.Current().GetEntryCount()) - 1
+	assert.Equal(t, uint64(5), lastIndex)
+
+	err = wl.Truncate(5)
+	require.NoError(t, err)
+
+	lastIndex = wl.Current().FirstLogIndex() + uint64(wl.Current().GetEntryCount()) - 1
+	assert.Equal(t, uint64(5), lastIndex)
+}
+
+func TestWALog_Truncate_EmptyWAL(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer wl.Close()
+
+	err = wl.Truncate(0)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), wl.Current().GetEntryCount())
+
+	err = wl.Truncate(10)
+	assert.Error(t, err)
+}
+
+func TestWALog_Truncate_CurrentSegmentShrink(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer wl.Close()
+
+	for i := 1; i <= 5; i++ {
+		_, err := wl.Write([]byte("data"), uint64(i))
+		require.NoError(t, err)
+	}
+
+	currentBefore := wl.Current()
+	require.NotNil(t, currentBefore)
+	currentID := currentBefore.ID()
+
+	err = wl.Truncate(3)
+	require.NoError(t, err)
+
+	currentAfter := wl.Current()
+	require.NotNil(t, currentAfter)
+	assert.Equal(t, currentID, currentAfter.ID(), "Truncating within the current segment should not rotate or delete it")
+	assert.Equal(t, int64(3), currentAfter.GetEntryCount())
+
+	deletions := wl.QueuedSegmentsForDeletion()
+	assert.Empty(t, deletions, "Truncating within the current segment should not queue deletions")
+
+	_, _, err = wl.SegmentForIndex(4)
+	assert.Error(t, err)
+
+	_, err = wl.Write([]byte("new-4"), 4)
+	require.NoError(t, err)
+	assert.Equal(t, currentID, wl.Current().ID(), "New writes should continue on the same segment")
+
+	_, _, err = wl.SegmentForIndex(4)
+	assert.NoError(t, err)
+}
+
+func TestWALog_Truncate_SameIndex(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer wl.Close()
+
+	for i := 1; i <= 10; i++ {
+		_, err := wl.Write([]byte("data"), uint64(i))
+		require.NoError(t, err)
+	}
+
+	err = wl.Truncate(10)
+	require.NoError(t, err)
+
+	lastIndex := wl.Current().FirstLogIndex() + uint64(wl.Current().GetEntryCount()) - 1
+	assert.Equal(t, uint64(10), lastIndex)
+
+	_, _, err = wl.SegmentForIndex(10)
+	assert.NoError(t, err)
+}
+
+func TestWALog_Truncate_ToFirstIndex(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer wl.Close()
+
+	for i := 1; i <= 10; i++ {
+		_, err := wl.Write([]byte("data"), uint64(i))
+		require.NoError(t, err)
+	}
+
+	err = wl.Truncate(1)
+	require.NoError(t, err)
+
+	assert.Equal(t, int64(1), wl.Current().GetEntryCount())
+
+	_, _, err = wl.SegmentForIndex(1)
+	assert.NoError(t, err)
+
+	_, _, err = wl.SegmentForIndex(2)
+	assert.Error(t, err)
+}
+
+func TestWALog_Truncate_WriteOffset(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer wl.Close()
+
+	_, err = wl.Write([]byte("data1"), 1)
+	require.NoError(t, err)
+
+	_, err = wl.Write([]byte("data2"), 2)
+	require.NoError(t, err)
+
+	pos3, err := wl.Write([]byte("data3"), 3)
+	require.NoError(t, err)
+
+	err = wl.Truncate(2)
+	require.NoError(t, err)
+
+	newPos, err := wl.Write([]byte("new-data3"), 3)
+	require.NoError(t, err)
+
+	assert.Equal(t, pos3.Offset, newPos.Offset, "New record should start where the truncated one ended")
+}
+
+func TestWALog_Truncate_HeaderIntegrity(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+
+	for i := 1; i <= 10; i++ {
+		_, err := wl.Write([]byte("payload"), uint64(i))
+		require.NoError(t, err)
+	}
+
+	err = wl.Truncate(5)
+	require.NoError(t, err)
+
+	require.NoError(t, wl.Close())
+
+	wl2, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer wl2.Close()
+
+	assert.Equal(t, walfs.SegmentID(1), wl2.Current().ID())
+	assert.Equal(t, int64(5), wl2.Current().GetEntryCount())
+
+	_, _, err = wl2.SegmentForIndex(5)
+	assert.NoError(t, err)
+
+	_, _, err = wl2.SegmentForIndex(6)
+	assert.Error(t, err)
+
+	_, err = wl2.Write([]byte("new-6"), 6)
+	require.NoError(t, err)
+}
+
+func TestWALog_Truncate_Reseal(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer wl.Close()
+
+	_, err = wl.Write([]byte("data1"), 1)
+	require.NoError(t, err)
+
+	require.NoError(t, wl.RotateSegment())
+
+	seg1 := wl.Segments()[1]
+	require.True(t, walfs.IsSealed(seg1.GetFlags()))
+
+	_, err = wl.Write([]byte("data2"), 2)
+	require.NoError(t, err)
+
+	err = wl.Truncate(1)
+	require.NoError(t, err)
+
+	assert.Len(t, wl.Segments(), 1)
+
+	require.False(t, walfs.IsSealed(seg1.GetFlags()))
+	assert.Equal(t, seg1.ID(), wl.Current().ID())
+
+	_, err = wl.Write([]byte("data2-new"), 2)
+	require.NoError(t, err)
+
+	require.NoError(t, wl.RotateSegment())
+
+	require.True(t, walfs.IsSealed(seg1.GetFlags()))
+
+	assert.Equal(t, walfs.SegmentID(2), wl.Current().ID())
+}
+
+func TestWALog_Truncate_ReaderBoundary(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wl, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer wl.Close()
+
+	for i := 1; i <= 10; i++ {
+		_, err := wl.Write([]byte("payload"), uint64(i))
+		require.NoError(t, err)
+	}
+
+	err = wl.Truncate(5)
+	require.NoError(t, err)
+
+	_, _, err = wl.SegmentForIndex(6)
+	assert.Error(t, err)
+
+	reader := wl.NewReader()
+	defer reader.Close()
+
+	count := 0
+	for {
+		data, _, err := reader.Next()
+		if err != nil {
+			break
+		}
+		count++
+		assert.Equal(t, []byte("payload"), data)
+	}
+	assert.Equal(t, 5, count, "Reader should read exactly 5 records")
+}
+
+func TestTruncate_Partial_Then_Rotate_SequentialIDs(t *testing.T) {
+	dir := t.TempDir()
+	wl, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(1024*1024))
+	require.NoError(t, err)
+	defer wl.Close()
+
+	payload := make([]byte, 100)
+	for i := 1; i <= 10; i++ {
+		_, err := wl.Write(payload, uint64(i))
+		require.NoError(t, err)
+	}
+	require.NoError(t, wl.RotateSegment())
+
+	for i := 11; i <= 20; i++ {
+		_, err := wl.Write(payload, uint64(i))
+		require.NoError(t, err)
+	}
+
+	require.Equal(t, walfs.SegmentID(2), wl.Current().ID(), "Should be on Segment 2")
+	require.Len(t, wl.Segments(), 2, "Should have 2 segments")
+
+	err = wl.Truncate(5)
+	require.NoError(t, err)
+
+	segments := wl.Segments()
+	require.Len(t, segments, 1, "Segment 2 should be deleted, Segment 1 kept")
+
+	seg1, ok := segments[1]
+	require.True(t, ok, "Segment 1 should exist")
+	require.Equal(t, walfs.SegmentID(1), wl.Current().ID(), "Segment 1 should be active")
+
+	require.False(t, walfs.IsSealed(seg1.GetFlags()), "Segment 1 should be active/unsealed after truncation")
+	assert.Equal(t, int64(5), seg1.GetEntryCount(), "Segment 1 should have 5 entries")
+
+	_, err = wl.Write(payload, 6)
+	require.NoError(t, err)
+	require.NoError(t, wl.RotateSegment())
+
+	require.Equal(t, walfs.SegmentID(2), wl.Current().ID(), "New segment should be ID 2")
+
+	segmentsAfter := wl.Segments()
+	require.Len(t, segmentsAfter, 2, "Should have Seg 1 and Seg 2")
+	_, hasOne := segmentsAfter[1]
+	_, hasTwo := segmentsAfter[2]
+	assert.True(t, hasOne, "Segment 1 should persist")
+	assert.True(t, hasTwo, "Segment 2 should exist")
+}
