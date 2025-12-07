@@ -241,10 +241,11 @@ type Segment struct {
 	syncOption     MsyncOption
 	dirSyncer      DirectorySyncer
 
-	indexPath     string
-	indexEntries  []segmentIndexEntry
-	indexFlush    sync.WaitGroup
-	firstLogIndex uint64
+	indexPath         string
+	indexEntries      []segmentIndexEntry
+	indexFlush        sync.WaitGroup
+	firstLogIndex     uint64
+	clearIndexOnFlush bool
 }
 
 // WithSyncOption sets the sync option for the Segment.
@@ -260,6 +261,14 @@ func WithSegmentDirectorySyncer(syncer DirectorySyncer) func(*Segment) {
 		if syncer != nil {
 			s.dirSyncer = syncer
 		}
+	}
+}
+
+// withClearIndexOnFlush enables clearing the in-memory index after it's flushed to disk.
+// This is useful when an external index is maintained.
+func withClearIndexOnFlush() func(*Segment) {
+	return func(s *Segment) {
+		s.clearIndexOnFlush = true
 	}
 }
 
@@ -484,8 +493,20 @@ func (seg *Segment) IndexEntries() []IndexEntry {
 	return entries
 }
 
+// ClearIndexFromMemory releases the in-memory index entries to free memory.
+// This can be called after the index has been copied to an external data structure.
+// Note: After calling this, IndexEntries() will return an empty slice.
+// Only sealed segments can be cleared; active segments are ignored.
+func (seg *Segment) ClearIndexFromMemory() {
+	if !seg.isSealed.Load() {
+		return
+	}
+	seg.indexEntries = nil
+}
+
 func (seg *Segment) flushIndexAsync() {
 	entriesCopy := append([]segmentIndexEntry(nil), seg.indexEntries...)
+	clearOnFlush := seg.clearIndexOnFlush
 	seg.indexFlush.Add(1)
 	go func(path string) {
 		defer seg.indexFlush.Done()
@@ -494,6 +515,11 @@ func (seg *Segment) flushIndexAsync() {
 				slog.String("message", "failed to flush index"),
 				slog.Uint64("segment_id", uint64(seg.id)),
 				slog.Any("error", err))
+			return
+		}
+		// clear in-memory index after successful flush if option is enabled
+		if clearOnFlush {
+			seg.indexEntries = nil
 		}
 	}(seg.indexPath)
 }
@@ -549,6 +575,11 @@ func (seg *Segment) MarkSealedInMemory() {
 // IsInMemorySealed returns true if the segment has been marked as sealed in memory.
 func (seg *Segment) IsInMemorySealed() bool {
 	return seg.inMemorySealed.Load()
+}
+
+// IsSealed returns true if the segment is sealed (on-disk flag).
+func (seg *Segment) IsSealed() bool {
+	return seg.isSealed.Load()
 }
 
 func isNewSegment(path string) (bool, error) {

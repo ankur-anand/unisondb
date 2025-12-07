@@ -108,6 +108,14 @@ func WithDirectorySyncer(syncer DirectorySyncer) WALogOptions {
 	}
 }
 
+// WithClearIndexOnFlush enables clearing segment's in-memory index after it's flushed to disk.
+// This is useful when an external index is maintained.
+func WithClearIndexOnFlush() WALogOptions {
+	return func(sm *WALog) {
+		sm.clearIndexOnFlush = true
+	}
+}
+
 // WALog manages the lifecycle of each individual segments, including creation, rotation,
 // recovery, and read/write operations.
 type WALog struct {
@@ -142,6 +150,7 @@ type WALog struct {
 	deletionMu          sync.Mutex
 	pendingDeletion     map[SegmentID]*Segment
 	dirSyncer           DirectorySyncer
+	clearIndexOnFlush   bool
 }
 
 type segmentRange struct {
@@ -216,14 +225,16 @@ func (wl *WALog) openSegment(id uint32) (*Segment, error) {
 		return nil, fmt.Errorf("checking segment %d state: %w", id, err)
 	}
 
-	seg, err := OpenSegmentFile(
-		wl.dir,
-		wl.ext,
-		id,
+	opts := []func(*Segment){
 		WithSegmentSize(wl.maxSegmentSize),
 		WithSyncOption(wl.forceSyncEveryWrite),
 		WithSegmentDirectorySyncer(wl.dirSyncer),
-	)
+	}
+	if wl.clearIndexOnFlush {
+		opts = append(opts, withClearIndexOnFlush())
+	}
+
+	seg, err := OpenSegmentFile(wl.dir, wl.ext, id, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -419,13 +430,10 @@ func (wl *WALog) WriteBatch(records [][]byte, logIndexes []uint64) ([]RecordPosi
 func (wl *WALog) writeBatchLocked(records [][]byte, logIndexes []uint64) ([]RecordPosition, error) {
 	var allPositions []RecordPosition
 	remaining := records
+	remainingIndexes := logIndexes
 
 	for len(remaining) > 0 {
-		var indexes []uint64
-		if logIndexes != nil {
-			indexes = logIndexes[len(records)-len(remaining):]
-		}
-		positions, written, batchErr := wl.currentSegment.WriteBatch(remaining, indexes)
+		positions, written, batchErr := wl.currentSegment.WriteBatch(remaining, remainingIndexes)
 
 		if batchErr != nil && !errors.Is(batchErr, ErrSegmentFull) {
 			return allPositions, batchErr
@@ -458,8 +466,8 @@ func (wl *WALog) writeBatchLocked(records [][]byte, logIndexes []uint64) ([]Reco
 		// segment is full - rotate and continue with remaining records
 		if errors.Is(batchErr, ErrSegmentFull) && written < len(remaining) {
 			remaining = remaining[written:]
-			if logIndexes != nil {
-				logIndexes = logIndexes[written:]
+			if remainingIndexes != nil {
+				remainingIndexes = remainingIndexes[written:]
 			}
 			if rotateErr := wl.rotateSegment(); rotateErr != nil {
 				return allPositions, fmt.Errorf("failed to rotate segment during batch write: %w", rotateErr)
