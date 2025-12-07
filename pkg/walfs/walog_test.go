@@ -2075,13 +2075,14 @@ func TestSegmentDeletionSyncsDirectory(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, wal.RotateSegment())
 
-	before := len(syncer.Calls())
-
 	segments := wal.Segments()
 	seg := segments[1]
-	seg.MarkForDeletion()
+	seg.WaitForIndexFlush()
 
-	require.Equal(t, before+2, len(syncer.Calls()))
+	before := len(syncer.Calls())
+	seg.MarkForDeletion()
+	
+	require.Equal(t, before+1, len(syncer.Calls()))
 	require.Equal(t, dir, syncer.Calls()[len(syncer.Calls())-1])
 }
 
@@ -2097,14 +2098,15 @@ func TestBackupSyncsDestinationDirectory(t *testing.T) {
 	_, err = wal.Write([]byte("hello"), 0)
 	require.NoError(t, err)
 	require.NoError(t, wal.RotateSegment())
+	segments := wal.Segments()
+	segments[1].WaitForIndexFlush()
 
 	before := len(syncer.Calls())
-
 	_, err = wal.BackupLastRotatedSegment(backupDir)
 	require.NoError(t, err)
 
 	calls := syncer.Calls()
-	require.Equal(t, before+2, len(calls))
+	require.Equal(t, before+1, len(calls))
 	require.Equal(t, backupDir, calls[len(calls)-1])
 }
 
