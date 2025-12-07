@@ -410,14 +410,22 @@ func (seg *Segment) flushIndexToFile(entries []segmentIndexEntry) error {
 	if seg.indexPath == "" {
 		return nil
 	}
-	file, err := os.OpenFile(seg.indexPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileModePerm)
+	indexDir := filepath.Dir(seg.indexPath)
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		return fmt.Errorf("ensure index dir: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp(indexDir, filepath.Base(seg.indexPath)+".tmp")
 	if err != nil {
 		return fmt.Errorf("open index for flush: %w", err)
 	}
-	writer := bufio.NewWriterSize(file, 32*1024)
+	tmpPath := tmpFile.Name()
+
+	writer := bufio.NewWriterSize(tmpFile, 32*1024)
 	defer func() {
 		_ = writer.Flush()
-		_ = file.Close()
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
 	}()
 
 	buf := make([]byte, indexEntrySize)
@@ -435,8 +443,23 @@ func (seg *Segment) flushIndexToFile(entries []segmentIndexEntry) error {
 	if err := writer.Flush(); err != nil {
 		return fmt.Errorf("flush index writer: %w", err)
 	}
-	if err := file.Sync(); err != nil {
+	if err := tmpFile.Sync(); err != nil {
 		return fmt.Errorf("sync index file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close index file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, seg.indexPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename index file: %w", err)
+	}
+
+	if seg.dirSyncer != nil {
+		if err := seg.dirSyncer.SyncDir(indexDir); err != nil {
+			return fmt.Errorf("fsync index directory: %w", err)
+		}
 	}
 	return nil
 }
@@ -1299,6 +1322,8 @@ func (seg *Segment) Remove() error {
 		return fmt.Errorf("failed to close segment %d: %w", seg.id, err)
 	}
 
+	dir := filepath.Dir(seg.path)
+
 	if err := os.Remove(seg.path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove segment file %s: %w", seg.path, err)
 	}
@@ -1306,6 +1331,12 @@ func (seg *Segment) Remove() error {
 	if seg.indexPath != "" {
 		if err := os.Remove(seg.indexPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("failed to remove index file %s: %w", seg.indexPath, err)
+		}
+	}
+
+	if seg.dirSyncer != nil {
+		if err := seg.dirSyncer.SyncDir(dir); err != nil {
+			return fmt.Errorf("failed to sync directory after removal: %w", err)
 		}
 	}
 
