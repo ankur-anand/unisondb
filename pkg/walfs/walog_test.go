@@ -2081,7 +2081,7 @@ func TestSegmentDeletionSyncsDirectory(t *testing.T) {
 
 	before := len(syncer.Calls())
 	seg.MarkForDeletion()
-	
+
 	require.Equal(t, before+1, len(syncer.Calls()))
 	require.Equal(t, dir, syncer.Calls()[len(syncer.Calls())-1])
 }
