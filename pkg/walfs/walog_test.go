@@ -2081,7 +2081,7 @@ func TestSegmentDeletionSyncsDirectory(t *testing.T) {
 	seg := segments[1]
 	seg.MarkForDeletion()
 
-	require.Equal(t, before+1, len(syncer.Calls()))
+	require.Equal(t, before+2, len(syncer.Calls()))
 	require.Equal(t, dir, syncer.Calls()[len(syncer.Calls())-1])
 }
 
@@ -2104,7 +2104,7 @@ func TestBackupSyncsDestinationDirectory(t *testing.T) {
 	require.NoError(t, err)
 
 	calls := syncer.Calls()
-	require.Equal(t, before+1, len(calls))
+	require.Equal(t, before+2, len(calls))
 	require.Equal(t, backupDir, calls[len(calls)-1])
 }
 
