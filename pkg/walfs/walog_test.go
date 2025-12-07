@@ -2050,9 +2050,9 @@ func TestWALogSyncsDirectoryOnlyForNewSegments(t *testing.T) {
 	require.Equal(t, []string{dir}, syncer.Calls())
 
 	require.NoError(t, wal.RotateSegment())
-	require.Equal(t, []string{dir, dir}, syncer.Calls())
-	require.NoError(t, wal.Close())
 	require.Equal(t, []string{dir, dir, dir}, syncer.Calls())
+	require.NoError(t, wal.Close())
+	require.Equal(t, []string{dir, dir, dir, dir}, syncer.Calls())
 
 	syncer.Reset()
 
