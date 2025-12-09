@@ -241,10 +241,11 @@ type Segment struct {
 	syncOption     MsyncOption
 	dirSyncer      DirectorySyncer
 
-	indexPath     string
-	indexEntries  []segmentIndexEntry
-	indexFlush    sync.WaitGroup
-	firstLogIndex uint64
+	indexPath         string
+	indexEntries      []segmentIndexEntry
+	indexFlush        sync.WaitGroup
+	firstLogIndex     uint64
+	clearIndexOnFlush bool
 }
 
 // WithSyncOption sets the sync option for the Segment.
@@ -260,6 +261,14 @@ func WithSegmentDirectorySyncer(syncer DirectorySyncer) func(*Segment) {
 		if syncer != nil {
 			s.dirSyncer = syncer
 		}
+	}
+}
+
+// withClearIndexOnFlush enables clearing the in-memory index after it's flushed to disk.
+// This is useful when an external index is maintained.
+func withClearIndexOnFlush() func(*Segment) {
+	return func(s *Segment) {
+		s.clearIndexOnFlush = true
 	}
 }
 
@@ -410,14 +419,22 @@ func (seg *Segment) flushIndexToFile(entries []segmentIndexEntry) error {
 	if seg.indexPath == "" {
 		return nil
 	}
-	file, err := os.OpenFile(seg.indexPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fileModePerm)
+	indexDir := filepath.Dir(seg.indexPath)
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		return fmt.Errorf("ensure index dir: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp(indexDir, filepath.Base(seg.indexPath)+".tmp")
 	if err != nil {
 		return fmt.Errorf("open index for flush: %w", err)
 	}
-	writer := bufio.NewWriterSize(file, 32*1024)
+	tmpPath := tmpFile.Name()
+
+	writer := bufio.NewWriterSize(tmpFile, 32*1024)
 	defer func() {
 		_ = writer.Flush()
-		_ = file.Close()
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
 	}()
 
 	buf := make([]byte, indexEntrySize)
@@ -435,8 +452,23 @@ func (seg *Segment) flushIndexToFile(entries []segmentIndexEntry) error {
 	if err := writer.Flush(); err != nil {
 		return fmt.Errorf("flush index writer: %w", err)
 	}
-	if err := file.Sync(); err != nil {
+	if err := tmpFile.Sync(); err != nil {
 		return fmt.Errorf("sync index file: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		return fmt.Errorf("close index file: %w", err)
+	}
+
+	if err := os.Rename(tmpPath, seg.indexPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename index file: %w", err)
+	}
+
+	if seg.dirSyncer != nil {
+		if err := seg.dirSyncer.SyncDir(indexDir); err != nil {
+			return fmt.Errorf("fsync index directory: %w", err)
+		}
 	}
 	return nil
 }
@@ -461,8 +493,20 @@ func (seg *Segment) IndexEntries() []IndexEntry {
 	return entries
 }
 
+// ClearIndexFromMemory releases the in-memory index entries to free memory.
+// This can be called after the index has been copied to an external data structure.
+// Note: After calling this, IndexEntries() will return an empty slice.
+// Only sealed segments can be cleared; active segments are ignored.
+func (seg *Segment) ClearIndexFromMemory() {
+	if !seg.isSealed.Load() {
+		return
+	}
+	seg.indexEntries = nil
+}
+
 func (seg *Segment) flushIndexAsync() {
 	entriesCopy := append([]segmentIndexEntry(nil), seg.indexEntries...)
+	clearOnFlush := seg.clearIndexOnFlush
 	seg.indexFlush.Add(1)
 	go func(path string) {
 		defer seg.indexFlush.Done()
@@ -471,6 +515,11 @@ func (seg *Segment) flushIndexAsync() {
 				slog.String("message", "failed to flush index"),
 				slog.Uint64("segment_id", uint64(seg.id)),
 				slog.Any("error", err))
+			return
+		}
+		// clear in-memory index after successful flush if option is enabled
+		if clearOnFlush {
+			seg.indexEntries = nil
 		}
 	}(seg.indexPath)
 }
@@ -526,6 +575,11 @@ func (seg *Segment) MarkSealedInMemory() {
 // IsInMemorySealed returns true if the segment has been marked as sealed in memory.
 func (seg *Segment) IsInMemorySealed() bool {
 	return seg.inMemorySealed.Load()
+}
+
+// IsSealed returns true if the segment is sealed (on-disk flag).
+func (seg *Segment) IsSealed() bool {
+	return seg.isSealed.Load()
 }
 
 func isNewSegment(path string) (bool, error) {
@@ -1299,6 +1353,8 @@ func (seg *Segment) Remove() error {
 		return fmt.Errorf("failed to close segment %d: %w", seg.id, err)
 	}
 
+	dir := filepath.Dir(seg.path)
+
 	if err := os.Remove(seg.path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove segment file %s: %w", seg.path, err)
 	}
@@ -1306,6 +1362,12 @@ func (seg *Segment) Remove() error {
 	if seg.indexPath != "" {
 		if err := os.Remove(seg.indexPath); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("failed to remove index file %s: %w", seg.indexPath, err)
+		}
+	}
+
+	if seg.dirSyncer != nil {
+		if err := seg.dirSyncer.SyncDir(dir); err != nil {
+			return fmt.Errorf("failed to sync directory after removal: %w", err)
 		}
 	}
 

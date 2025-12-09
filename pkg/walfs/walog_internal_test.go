@@ -216,3 +216,212 @@ func TestTruncateWithActiveReaderOnDeletedSegment(t *testing.T) {
 
 	reader.Close()
 }
+
+func TestClearIndexOnFlush_EnabledClearsAfterRotation(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := NewWALog(dir, ".wal",
+		WithClearIndexOnFlush(),
+	)
+	require.NoError(t, err)
+	defer wal.Close()
+
+	data := make([]byte, 100)
+	for i := 0; i < 3; i++ {
+		_, err := wal.Write(data, uint64(i+1))
+		require.NoError(t, err)
+	}
+
+	seg1 := wal.Current()
+	seg1ID := seg1.ID()
+
+	require.NoError(t, wal.RotateSegment())
+	seg1.WaitForIndexFlush()
+
+	require.True(t, seg1.IsSealed(), "segment 1 should be sealed after rotation")
+	entries := seg1.IndexEntries()
+	assert.Empty(t, entries, "sealed segment %d should have cleared index after flush", seg1ID)
+
+	for i := 0; i < 2; i++ {
+		_, err := wal.Write(data, uint64(i+4))
+		require.NoError(t, err)
+	}
+
+	current := wal.Current()
+	require.NotNil(t, current)
+	require.False(t, current.IsSealed(), "current segment should be active")
+	entries = current.IndexEntries()
+	assert.NotEmpty(t, entries, "active segment should still have index")
+}
+
+func TestClearIndexOnFlush_ReopenedSegmentsNotCleared(t *testing.T) {
+	dir := t.TempDir()
+
+	wal1, err := NewWALog(dir, ".wal",
+		WithClearIndexOnFlush(),
+	)
+	require.NoError(t, err)
+
+	data := make([]byte, 100)
+	for i := 0; i < 3; i++ {
+		_, err := wal1.Write(data, uint64(i+1))
+		require.NoError(t, err)
+	}
+
+	seg1 := wal1.Current()
+	require.NoError(t, wal1.RotateSegment())
+	seg1.WaitForIndexFlush()
+
+	require.True(t, seg1.IsSealed())
+	assert.Empty(t, seg1.IndexEntries(), "sealed segment should be cleared after flush in first session")
+
+	require.NoError(t, wal1.Close())
+
+	wal2, err := NewWALog(dir, ".wal",
+		WithClearIndexOnFlush(),
+	)
+	require.NoError(t, err)
+	defer wal2.Close()
+
+	sealedWithIndex := 0
+	for _, seg := range wal2.Segments() {
+		if seg.IsSealed() {
+			entries := seg.IndexEntries()
+			if len(entries) > 0 {
+				sealedWithIndex++
+			}
+		}
+	}
+	assert.Greater(t, sealedWithIndex, 0,
+		"reopened sealed segments should have index loaded from disk even with ClearIndexOnFlush enabled")
+
+	for _, seg := range wal2.Segments() {
+		seg.ClearIndexFromMemory()
+	}
+
+	for id, seg := range wal2.Segments() {
+		if seg.IsSealed() {
+			entries := seg.IndexEntries()
+			assert.Empty(t, entries, "manually cleared segment %d should have empty index", id)
+		}
+	}
+}
+
+func TestClearIndexOnFlush_DisabledDoesNotClearOnRotation(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := NewWALog(dir, ".wal")
+	require.NoError(t, err)
+	defer wal.Close()
+
+	data := make([]byte, 100)
+	for i := 0; i < 3; i++ {
+		_, err := wal.Write(data, uint64(i+1))
+		require.NoError(t, err)
+	}
+
+	seg1 := wal.Current()
+	require.NoError(t, wal.RotateSegment())
+	seg1.WaitForIndexFlush()
+
+	require.True(t, seg1.IsSealed())
+	entries := seg1.IndexEntries()
+	assert.NotEmpty(t, entries, "sealed segment should still have index when clear disabled")
+
+	current := wal.Current()
+	_, err = wal.Write(data, 4)
+	require.NoError(t, err)
+	entries = current.IndexEntries()
+	assert.NotEmpty(t, entries, "active segment should have index")
+}
+
+func TestClearIndexFromMemory_ManualClearOnlySealedNotActive(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := NewWALog(dir, ".wal")
+	require.NoError(t, err)
+	defer wal.Close()
+
+	data := make([]byte, 100)
+	for i := 0; i < 3; i++ {
+		_, err := wal.Write(data, uint64(i+1))
+		require.NoError(t, err)
+	}
+
+	seg1 := wal.Current()
+	require.NoError(t, wal.RotateSegment())
+	seg1.WaitForIndexFlush()
+
+	for i := 0; i < 2; i++ {
+		_, err := wal.Write(data, uint64(i+4))
+		require.NoError(t, err)
+	}
+
+	activeSegment := wal.Current()
+	require.True(t, seg1.IsSealed(), "seg1 should be sealed")
+	require.False(t, activeSegment.IsSealed(), "active segment should not be sealed")
+
+	seg1.ClearIndexFromMemory()
+	assert.Empty(t, seg1.IndexEntries(), "sealed segment should be cleared")
+	activeSegment.ClearIndexFromMemory()
+	assert.NotEmpty(t, activeSegment.IndexEntries(), "active segment should NOT be cleared")
+}
+
+func TestClearIndexFromMemory_ActiveSegmentCannotBeCleared(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := NewWALog(dir, ".wal")
+	require.NoError(t, err)
+	defer wal.Close()
+
+	data := make([]byte, 50)
+	for i := 0; i < 5; i++ {
+		_, err := wal.Write(data, uint64(i+1))
+		require.NoError(t, err)
+	}
+
+	current := wal.Current()
+	require.NotNil(t, current)
+	require.False(t, current.IsSealed(), "segment should be active")
+
+	entriesBefore := current.IndexEntries()
+	require.NotEmpty(t, entriesBefore, "active segment should have entries")
+	current.ClearIndexFromMemory()
+
+	entriesAfter := current.IndexEntries()
+	assert.Equal(t, len(entriesBefore), len(entriesAfter), "active segment should NOT be cleared")
+	assert.NotEmpty(t, entriesAfter, "active segment should still have entries")
+}
+
+func TestClearIndexOnFlush_MultipleRotations(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := NewWALog(dir, ".wal",
+		WithClearIndexOnFlush(),
+	)
+	require.NoError(t, err)
+	defer wal.Close()
+
+	data := make([]byte, 50)
+	var sealedSegments []*Segment
+
+	for round := 0; round < 3; round++ {
+		for i := 0; i < 2; i++ {
+			_, err := wal.Write(data, uint64(round*2+i+1))
+			require.NoError(t, err)
+		}
+
+		seg := wal.Current()
+		require.NoError(t, wal.RotateSegment())
+		seg.WaitForIndexFlush()
+		sealedSegments = append(sealedSegments, seg)
+	}
+
+	for i, seg := range sealedSegments {
+		require.True(t, seg.IsSealed(), "segment %d should be sealed", i)
+		assert.Empty(t, seg.IndexEntries(), "sealed segment %d should have cleared index", i)
+	}
+	_, err = wal.Write(data, 7)
+	require.NoError(t, err)
+	assert.NotEmpty(t, wal.Current().IndexEntries(), "active segment should have index")
+}

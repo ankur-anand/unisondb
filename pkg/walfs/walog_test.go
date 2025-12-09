@@ -2050,9 +2050,9 @@ func TestWALogSyncsDirectoryOnlyForNewSegments(t *testing.T) {
 	require.Equal(t, []string{dir}, syncer.Calls())
 
 	require.NoError(t, wal.RotateSegment())
-	require.Equal(t, []string{dir, dir}, syncer.Calls())
-	require.NoError(t, wal.Close())
 	require.Equal(t, []string{dir, dir, dir}, syncer.Calls())
+	require.NoError(t, wal.Close())
+	require.Equal(t, []string{dir, dir, dir, dir}, syncer.Calls())
 
 	syncer.Reset()
 
@@ -2075,10 +2075,11 @@ func TestSegmentDeletionSyncsDirectory(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, wal.RotateSegment())
 
-	before := len(syncer.Calls())
-
 	segments := wal.Segments()
 	seg := segments[1]
+	seg.WaitForIndexFlush()
+
+	before := len(syncer.Calls())
 	seg.MarkForDeletion()
 
 	require.Equal(t, before+1, len(syncer.Calls()))
@@ -2097,9 +2098,10 @@ func TestBackupSyncsDestinationDirectory(t *testing.T) {
 	_, err = wal.Write([]byte("hello"), 0)
 	require.NoError(t, err)
 	require.NoError(t, wal.RotateSegment())
+	segments := wal.Segments()
+	segments[1].WaitForIndexFlush()
 
 	before := len(syncer.Calls())
-
 	_, err = wal.BackupLastRotatedSegment(backupDir)
 	require.NoError(t, err)
 
@@ -2915,4 +2917,94 @@ func TestTruncate_Partial_Then_Rotate_SequentialIDs(t *testing.T) {
 	_, hasTwo := segmentsAfter[2]
 	assert.True(t, hasOne, "Segment 1 should persist")
 	assert.True(t, hasTwo, "Segment 2 should exist")
+}
+
+func TestWALog_WriteBatch_LogIndexesAcrossRotation(t *testing.T) {
+	dir := t.TempDir()
+	wal, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(512))
+	require.NoError(t, err)
+	defer wal.Close()
+
+	const batchSize = 30
+	records := make([][]byte, batchSize)
+	logIndexes := make([]uint64, batchSize)
+	for i := 0; i < batchSize; i++ {
+		records[i] = bytes.Repeat([]byte{byte(i)}, 50)
+		logIndexes[i] = uint64(i + 1)
+	}
+
+	// bug-fix: test
+	// This should NOT panic - the bug caused panic here due to slice out of range
+	positions, err := wal.WriteBatch(records, logIndexes)
+	require.NoError(t, err, "WriteBatch with logIndexes should not panic or error")
+	require.Len(t, positions, batchSize, "should return position for each record")
+
+	rotationCount := wal.SegmentRotatedCount()
+	require.Greater(t, rotationCount, int64(0), "should have rotated at least once to trigger the bug scenario")
+	t.Logf("Segment rotations during batch: %d", rotationCount)
+
+	for i, pos := range positions {
+		data, err := wal.Read(pos)
+		require.NoError(t, err, "should read record %d at pos %v", i, pos)
+		require.Equal(t, records[i], data, "record %d data should match", i)
+	}
+
+	segments := wal.Segments()
+	require.Greater(t, len(segments), 1, "should have multiple segments")
+
+	var segmentFirstIndexes []uint64
+	for _, seg := range segments {
+		firstIdx := seg.FirstLogIndex()
+		if firstIdx > 0 {
+			segmentFirstIndexes = append(segmentFirstIndexes, firstIdx)
+		}
+	}
+	sort.Slice(segmentFirstIndexes, func(i, j int) bool {
+		return segmentFirstIndexes[i] < segmentFirstIndexes[j]
+	})
+
+	require.Equal(t, uint64(1), segmentFirstIndexes[0], "first segment should have FirstLogIndex=1")
+	for i := 1; i < len(segmentFirstIndexes); i++ {
+		require.Greater(t, segmentFirstIndexes[i], segmentFirstIndexes[i-1],
+			"segment FirstLogIndex values should be monotonically increasing")
+	}
+}
+
+func TestWALog_WriteBatch_LogIndexesPartialRotation(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal", walfs.WithMaxSegmentSize(300))
+	require.NoError(t, err)
+	defer wal.Close()
+
+	_, err = wal.Write(bytes.Repeat([]byte("A"), 100), 1)
+	require.NoError(t, err)
+
+	const batchSize = 10
+	records := make([][]byte, batchSize)
+	logIndexes := make([]uint64, batchSize)
+	for i := 0; i < batchSize; i++ {
+		records[i] = bytes.Repeat([]byte{byte('B' + i)}, 60)
+		logIndexes[i] = uint64(i + 2)
+	}
+
+	positions, err := wal.WriteBatch(records, logIndexes)
+	require.NoError(t, err, "WriteBatch should succeed across rotation boundary")
+	require.Len(t, positions, batchSize)
+
+	segments := wal.Segments()
+	require.Greater(t, len(segments), 1, "should have rotated to multiple segments")
+
+	for i, pos := range positions {
+		data, err := wal.Read(pos)
+		require.NoError(t, err)
+		require.Equal(t, records[i], data, "record %d should be readable", i)
+	}
+
+	segmentIDs := make(map[walfs.SegmentID]int)
+	for _, pos := range positions {
+		segmentIDs[pos.SegmentID]++
+	}
+	require.Greater(t, len(segmentIDs), 1,
+		"batch records should span multiple segments, got segments: %v", segmentIDs)
 }
