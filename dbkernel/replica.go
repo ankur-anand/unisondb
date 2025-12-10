@@ -8,9 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel/internal"
-	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
-	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/uber-go/tally/v4"
 )
@@ -253,84 +250,30 @@ func (wh *ReplicaWALHandler) handleRecord(record *logrecord.LogRecord, offset *O
 
 // handleInsert insert the provided record into the mem table entry.
 func (wh *ReplicaWALHandler) handleInsert(record *logrecord.LogRecord, offset *Offset) error {
-	logEntry := logcodec.DeserializeFBRootLogRecord(record)
 	switch record.EntryType() {
 	case logrecord.LogEntryTypeKV:
 		wh.engine.taggedScope.Tagged(replicaInsertKV).Counter(mRequestsTotal).Inc(1)
-		for _, entry := range logEntry.Entries {
-			kvEntry := logcodec.DeserializeKVEntry(entry)
-			memValue := getValueStruct(internal.LogOperationInsert, internal.EntryTypeKV, kvEntry.Value)
-			err := wh.engine.memTableWrite(kvEntry.Key, memValue)
-			if err != nil {
-				return err
-			}
-		}
-		wh.engine.writeOffset(offset)
 	case logrecord.LogEntryTypeRow:
 		wh.engine.taggedScope.Tagged(replicaInsertRow).Counter(mRequestsTotal).Inc(1)
-		for _, entry := range logEntry.Entries {
-			rowEntry := logrecord.GetRootAsRowUpdateEntry(entry, 0)
-			rowKey := rowEntry.KeyBytes()
-			memValue := getValueStruct(internal.LogOperationInsert, internal.EntryTypeRow, entry)
-			err := wh.engine.memTableWrite(rowKey, memValue)
-			if err != nil {
-				return err
-			}
-		}
-		wh.engine.writeOffset(offset)
 	case logrecord.LogEntryTypeEvent:
 		wh.engine.taggedScope.Tagged(replicaInsertEvent).Counter(mRequestsTotal).Inc(1)
-		wh.engine.writeOffset(offset)
 	}
-	return nil
+	return wh.engine.applyInsert(record, offset)
 }
 
 func (wh *ReplicaWALHandler) handleDelete(record *logrecord.LogRecord, offset *Offset) error {
-	logEntry := logcodec.DeserializeFBRootLogRecord(record)
 	switch record.EntryType() {
 	case logrecord.LogEntryTypeKV:
 		wh.engine.taggedScope.Tagged(replicaDeleteKV).Counter(mRequestsTotal).Inc(1)
-		for _, entry := range logEntry.Entries {
-			kvEntry := logcodec.DeserializeKVEntry(entry)
-			memValue := getValueStruct(internal.LogOperationDelete, internal.EntryTypeKV, kvEntry.Value)
-			err := wh.engine.memTableWrite(kvEntry.Key, memValue)
-			if err != nil {
-				return err
-			}
-		}
-		wh.engine.writeOffset(offset)
 	case logrecord.LogEntryTypeRow:
 		wh.engine.taggedScope.Tagged(replicaDeleteRow).Counter(mRequestsTotal).Inc(1)
-		for _, entry := range logEntry.Entries {
-			rowEntry := logrecord.GetRootAsRowUpdateEntry(entry, 0)
-			rowKey := rowEntry.KeyBytes()
-			memValue := getValueStruct(internal.LogOperationDelete, internal.EntryTypeRow, entry)
-			err := wh.engine.memTableWrite(rowKey, memValue)
-			if err != nil {
-				return err
-			}
-		}
-		wh.engine.writeOffset(offset)
 	}
-
-	return nil
+	return wh.engine.applyDelete(record, offset)
 }
 
 func (wh *ReplicaWALHandler) handleDeleteRowByKey(record *logrecord.LogRecord, offset *Offset) error {
-	logEntry := logcodec.DeserializeFBRootLogRecord(record)
 	wh.engine.taggedScope.Tagged(replicaDeleteRowKey).Counter(mRequestsTotal).Inc(1)
-	for _, entry := range logEntry.Entries {
-		rowEntry := logrecord.GetRootAsRowUpdateEntry(entry, 0)
-		rowKey := rowEntry.KeyBytes()
-		memValue := getValueStruct(internal.LogOperationDeleteRowByKey, internal.EntryTypeRow, entry)
-		err := wh.engine.memTableWrite(rowKey, memValue)
-		if err != nil {
-			return err
-		}
-	}
-
-	wh.engine.writeOffset(offset)
-	return nil
+	return wh.engine.applyDeleteRowByKey(record, offset)
 }
 
 // handleTxnCommited handles the current commited txn, for chunked, insert and delete ops.
@@ -350,75 +293,22 @@ func (wh *ReplicaWALHandler) handleTxnCommited(record *logrecord.LogRecord, offs
 // handleKVValuesTxn Handles the insert and delete operation of Txn and updates
 // the same to the underlying btree bases store.
 func (wh *ReplicaWALHandler) handleKVValuesTxn(record *logrecord.LogRecord, offset *Offset) error {
-	// TODO: Optimize this with cache or read Cache at WAL that is planned.
-	records, err := wh.engine.walIO.GetTransactionRecords(wal.DecodeOffset(record.PrevTxnWalIndexBytes()))
+	applied, err := wh.engine.applyKVValuesTxn(record, offset)
 	if err != nil {
 		return err
 	}
-
-	// remove the begins part from the
-	preparedRecords := records[1:]
-	// Empty Increment the offset as this operation was carried but don't provide any offset value
-	// newer offset is present.
-	wh.engine.writeNilOffset()
-
-	var applied int64
-	for _, pRecord := range preparedRecords {
-		logEntry := logcodec.DeserializeFBRootLogRecord(pRecord)
-		for _, entry := range logEntry.Entries {
-			kvEntry := logcodec.DeserializeKVEntry(entry)
-			memValue := getValueStruct(byte(record.OperationType()), internal.EntryTypeKV, kvEntry.Value)
-			err := wh.engine.memTableWrite(kvEntry.Key, memValue)
-			if err != nil {
-				return err
-			}
-
-			applied++
-			// empty offset just to increment the offset count that will be flushed.
-			// new offset should or shouldn't be present.
-			wh.engine.writeNilOffset()
-		}
-	}
-
 	wh.engine.taggedScope.Tagged(replicaCommitKV).Counter(mRequestsTotal).Inc(applied)
-	// finally write the current offset.
-	wh.engine.writeOffset(offset)
 	return nil
 }
 
 // handleRowColumnTxn Handles the insert and delete operation of Txn for RowUpdate and updates
 // the same to the underlying btree bases store.
 func (wh *ReplicaWALHandler) handleRowColumnTxn(record *logrecord.LogRecord, offset *Offset) error {
-	records, err := wh.engine.walIO.GetTransactionRecords(wal.DecodeOffset(record.PrevTxnWalIndexBytes()))
+	applied, err := wh.engine.applyRowColumnTxn(record, offset)
 	if err != nil {
 		return err
 	}
-
-	// remove the begins part from the
-	preparedRecords := records[1:]
-	// Empty Increment the offset as this operation was carried but don't provide any offset value
-	// newer offset is present.
-	wh.engine.writeOffset(nil)
-
-	var applied int64
-
-	for _, pRecord := range preparedRecords {
-		logEntry := logcodec.DeserializeFBRootLogRecord(pRecord)
-		for _, entry := range logEntry.Entries {
-			rowEntry := logcodec.DeserializeRowUpdateEntry(entry)
-			memValue := getValueStruct(byte(record.OperationType()), internal.EntryTypeRow, entry)
-			err := wh.engine.memTableWrite(rowEntry.Key, memValue)
-			if err != nil {
-				return err
-			}
-
-			applied++
-			wh.engine.writeNilOffset()
-		}
-	}
-
 	wh.engine.taggedScope.Tagged(replicaCommitRow).Counter(mRequestsTotal).Inc(applied)
-	wh.engine.writeOffset(offset)
 	return nil
 }
 
@@ -426,14 +316,5 @@ func (wh *ReplicaWALHandler) handleRowColumnTxn(record *logrecord.LogRecord, off
 // to the provided btree based store.
 func (wh *ReplicaWALHandler) handleChunkedValuesTxn(record *logrecord.LogRecord, offset *Offset) error {
 	wh.engine.taggedScope.Tagged(replicaInsertChunk).Counter(mRequestsTotal).Inc(1)
-	logEntry := logcodec.DeserializeFBRootLogRecord(record)
-	kvEntry := logcodec.DeserializeKVEntry(logEntry.Entries[0])
-	chunkedKey := kvEntry.Key
-	memValue := getValueStruct(byte(logrecord.LogOperationTypeInsert), byte(logrecord.LogEntryTypeChunked), offset.Encode())
-	err := wh.engine.memTableWrite(chunkedKey, memValue)
-	if err != nil {
-		return err
-	}
-	wh.engine.writeOffset(offset)
-	return err
+	return wh.engine.applyChunkedValuesTxn(record, offset)
 }
