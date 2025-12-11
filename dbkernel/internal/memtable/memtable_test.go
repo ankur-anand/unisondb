@@ -748,3 +748,30 @@ func TestBloomFilter_ManyKeys(t *testing.T) {
 	assert.Less(t, falsePositives, 5, "bloom filter should have very low false positive rate")
 	t.Logf("False positives: %d out of %d tests (%.2f%%)", falsePositives, nonExistentTests, float64(falsePositives)/float64(nonExistentTests)*100)
 }
+
+func TestMemTable_RaftPositions(t *testing.T) {
+	table := NewMemTable(1<<20, nil, "", nil)
+
+	firstIdx, firstTerm := table.GetFirstRaftPosition()
+	assert.Equal(t, uint64(0), firstIdx)
+	assert.Equal(t, uint64(0), firstTerm)
+	lastIdx, lastTerm := table.GetLastRaftPosition()
+	assert.Equal(t, uint64(0), lastIdx)
+	assert.Equal(t, uint64(0), lastTerm)
+
+	table.SetRaftPosition(5, 2)
+	firstIdx, firstTerm = table.GetFirstRaftPosition()
+	assert.Equal(t, uint64(5), firstIdx)
+	assert.Equal(t, uint64(2), firstTerm)
+	lastIdx, lastTerm = table.GetLastRaftPosition()
+	assert.Equal(t, uint64(5), lastIdx)
+	assert.Equal(t, uint64(2), lastTerm)
+
+	table.SetRaftPosition(6, 3)
+	firstIdx, firstTerm = table.GetFirstRaftPosition()
+	assert.Equal(t, uint64(5), firstIdx)
+	assert.Equal(t, uint64(2), firstTerm)
+	lastIdx, lastTerm = table.GetLastRaftPosition()
+	assert.Equal(t, uint64(6), lastIdx)
+	assert.Equal(t, uint64(3), lastTerm)
+}

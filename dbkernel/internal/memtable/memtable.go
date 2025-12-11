@@ -49,6 +49,12 @@ type MemTable struct {
 	tsGenerator    *tsGenerator
 	bloomFilter    *bloom.BloomFilter
 	bloomMu        sync.RWMutex
+
+	// Raft tracking (only used in raft mode)
+	firstRaftIndex uint64
+	lastRaftIndex  uint64
+	firstRaftTerm  uint64
+	lastRaftTerm   uint64
 }
 
 // NewMemTable returns an initialized mem-table.
@@ -134,6 +140,26 @@ func (table *MemTable) GetLastOffset() *wal.Offset {
 
 func (table *MemTable) GetFirstOffset() *wal.Offset {
 	return table.firstOffset
+}
+
+// SetRaftPosition sets the raft log position for this memtable (only used in raft mode).
+func (table *MemTable) SetRaftPosition(index, term uint64) {
+	table.lastRaftIndex = index
+	table.lastRaftTerm = term
+	if table.firstRaftIndex == 0 {
+		table.firstRaftIndex = index
+		table.firstRaftTerm = term
+	}
+}
+
+// GetLastRaftPosition returns the last raft log index and term for this memtable.
+func (table *MemTable) GetLastRaftPosition() (index uint64, term uint64) {
+	return table.lastRaftIndex, table.lastRaftTerm
+}
+
+// GetFirstRaftPosition returns the first raft log index and term for this memtable.
+func (table *MemTable) GetFirstRaftPosition() (index uint64, term uint64) {
+	return table.firstRaftIndex, table.firstRaftTerm
 }
 
 func (table *MemTable) Get(key []byte) y.ValueStruct {
