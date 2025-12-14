@@ -32,6 +32,8 @@ var (
 	ErrEventLogModeViolation = errors.New("operation not allowed: engine is in event log mode, only events are accepted")
 	// ErrEventNotAllowed is returned when an event operation is attempted in normal (non-event-log) mode.
 	ErrEventNotAllowed = errors.New("operation not allowed: events require event log mode to be enabled")
+	// ErrNotSupportedInRaftMode is returned when an operation is not supported in Raft mode.
+	ErrNotSupportedInRaftMode = errors.New("operation not supported in raft mode")
 )
 
 var (

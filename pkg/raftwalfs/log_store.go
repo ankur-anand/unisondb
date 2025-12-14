@@ -430,5 +430,13 @@ func (l *LogStore) IsMonotonic() bool {
 	return true
 }
 
+// GetPosition returns the WAL position for a given log index.
+func (l *LogStore) GetPosition(index uint64) (walfs.RecordPosition, bool) {
+	if l.closed.Load() {
+		return walfs.RecordPosition{}, false
+	}
+	return l.index.Get(index)
+}
+
 var _ raft.MonotonicLogStore = (*LogStore)(nil)
 var _ raft.LogStore = (*LogStore)(nil)
