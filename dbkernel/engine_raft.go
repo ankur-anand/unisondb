@@ -248,7 +248,7 @@ func (s *engineSnapshot) Persist(sink raft.SnapshotSink) error {
 	defer s.engine.mu.RUnlock()
 
 	if err := s.engine.dataStore.Snapshot(sink); err != nil {
-		sink.Cancel()
+		_ = sink.Cancel()
 		return fmt.Errorf("snapshot btree: %w", err)
 	}
 
