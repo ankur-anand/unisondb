@@ -3008,3 +3008,279 @@ func TestWALog_WriteBatch_LogIndexesPartialRotation(t *testing.T) {
 	require.Greater(t, len(segmentIDs), 1,
 		"batch records should span multiple segments, got segments: %v", segmentIDs)
 }
+
+func TestWALog_ReaderCommitCheck_BasicBoundary(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal", walfs.WithReaderCommitCheck())
+	require.NoError(t, err)
+	defer wal.Close()
+
+	var positions []walfs.RecordPosition
+	for i := 0; i < 5; i++ {
+		data := []byte(fmt.Sprintf("record-%d", i))
+		pos, err := wal.Write(data, uint64(i+1))
+		require.NoError(t, err)
+		positions = append(positions, pos)
+	}
+
+	wal.Commit(positions[2])
+	reader := wal.NewReader()
+	defer reader.Close()
+
+	count := 0
+	for {
+		_, _, err := reader.Next()
+		if errors.Is(err, walfs.ErrNoNewData) {
+			break
+		}
+		require.NoError(t, err)
+		count++
+	}
+
+	assert.Equal(t, 3, count, "reader should see exactly 3 committed records")
+
+	wal.Commit(positions[4])
+	reader2 := wal.NewReader()
+	defer reader2.Close()
+
+	count = 0
+	for {
+		_, _, err := reader2.Next()
+		if errors.Is(err, walfs.ErrNoNewData) {
+			break
+		}
+		require.NoError(t, err)
+		count++
+	}
+
+	assert.Equal(t, 5, count, "reader should see all 5 records after full commit")
+}
+
+func TestWALog_ReaderCommitCheck_NoCommitReturnsNoData(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal", walfs.WithReaderCommitCheck())
+	require.NoError(t, err)
+	defer wal.Close()
+
+	for i := 0; i < 3; i++ {
+		data := []byte(fmt.Sprintf("record-%d", i))
+		_, err := wal.Write(data, uint64(i+1))
+		require.NoError(t, err)
+	}
+
+	reader := wal.NewReader()
+	defer reader.Close()
+
+	_, _, err = reader.Next()
+	assert.ErrorIs(t, err, walfs.ErrNoNewData, "reader should return ErrNoNewData when nothing is committed")
+}
+
+func TestWALog_ReaderCommitCheck_AcrossSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	segmentSize := int64(512)
+	wal, err := walfs.NewWALog(dir, ".wal",
+		walfs.WithReaderCommitCheck(),
+		walfs.WithMaxSegmentSize(segmentSize),
+	)
+	require.NoError(t, err)
+	defer wal.Close()
+
+	var positions []walfs.RecordPosition
+	recordData := bytes.Repeat([]byte("x"), 100)
+
+	for i := 0; i < 10; i++ {
+		pos, err := wal.Write(recordData, uint64(i+1))
+		require.NoError(t, err)
+		positions = append(positions, pos)
+	}
+
+	segments := wal.Segments()
+	require.Greater(t, len(segments), 1, "should have multiple segments")
+
+	var boundaryIdx = -1
+	for i := 1; i < len(positions); i++ {
+		if positions[i].SegmentID != positions[i-1].SegmentID {
+			boundaryIdx = i
+			break
+		}
+	}
+	require.Greater(t, boundaryIdx, 0, "should have found segment boundary")
+
+	wal.Commit(positions[boundaryIdx])
+	reader := wal.NewReader()
+	defer reader.Close()
+
+	count := 0
+	for {
+		_, _, err := reader.Next()
+		if errors.Is(err, walfs.ErrNoNewData) {
+			break
+		}
+		require.NoError(t, err)
+		count++
+	}
+
+	assert.Equal(t, boundaryIdx+1, count, "reader should see exactly %d records (up to and including boundary)", boundaryIdx+1)
+	wal.Commit(positions[len(positions)-1])
+
+	reader2 := wal.NewReader()
+	defer reader2.Close()
+
+	count = 0
+	for {
+		_, _, err := reader2.Next()
+		if errors.Is(err, walfs.ErrNoNewData) {
+			break
+		}
+		require.NoError(t, err)
+		count++
+	}
+
+	assert.Equal(t, 10, count, "reader should see all 10 records after full commit")
+}
+
+func TestWALog_ReaderCommitCheck_CommitInSecondSegment(t *testing.T) {
+	dir := t.TempDir()
+
+	segmentSize := int64(512)
+	wal, err := walfs.NewWALog(dir, ".wal",
+		walfs.WithReaderCommitCheck(),
+		walfs.WithMaxSegmentSize(segmentSize),
+	)
+	require.NoError(t, err)
+	defer wal.Close()
+
+	var positions []walfs.RecordPosition
+	recordData := bytes.Repeat([]byte("y"), 100)
+
+	for i := 0; i < 10; i++ {
+		pos, err := wal.Write(recordData, uint64(i+1))
+		require.NoError(t, err)
+		positions = append(positions, pos)
+	}
+
+	var secondSegmentRecords []int
+	firstSegID := positions[0].SegmentID
+	for i, pos := range positions {
+		if pos.SegmentID > firstSegID {
+			secondSegmentRecords = append(secondSegmentRecords, i)
+		}
+	}
+	require.NotEmpty(t, secondSegmentRecords, "should have records in second segment")
+
+	commitIdx := secondSegmentRecords[len(secondSegmentRecords)/2]
+	wal.Commit(positions[commitIdx])
+
+	reader := wal.NewReader()
+	defer reader.Close()
+
+	count := 0
+	for {
+		_, _, err := reader.Next()
+		if errors.Is(err, walfs.ErrNoNewData) {
+			break
+		}
+		require.NoError(t, err)
+		count++
+	}
+
+	assert.Equal(t, commitIdx+1, count, "reader should see exactly %d records", commitIdx+1)
+}
+
+func TestWALog_CommittedPosition_ReturnsNilWhenNotSet(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal", walfs.WithReaderCommitCheck())
+	require.NoError(t, err)
+	defer wal.Close()
+
+	pos := wal.CommittedPosition()
+	assert.Equal(t, walfs.NilRecordPosition, pos, "should return NilRecordPosition when nothing committed")
+	writePos, err := wal.Write([]byte("data"), 1)
+	require.NoError(t, err)
+
+	wal.Commit(writePos)
+	pos = wal.CommittedPosition()
+	assert.Equal(t, writePos, pos, "should return committed position")
+}
+
+func TestWALog_ReaderCommitCheck_CommitEqualsWrite(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal", walfs.WithReaderCommitCheck())
+	require.NoError(t, err)
+	defer wal.Close()
+
+	var lastPos walfs.RecordPosition
+	for i := 0; i < 5; i++ {
+		data := []byte(fmt.Sprintf("record-%d", i))
+		pos, err := wal.Write(data, uint64(i+1))
+		require.NoError(t, err)
+		lastPos = pos
+	}
+
+	wal.Commit(lastPos)
+
+	reader := wal.NewReader()
+	defer reader.Close()
+
+	count := 0
+	var finalErr error
+	for {
+		_, _, err := reader.Next()
+		if err != nil {
+			finalErr = err
+			break
+		}
+		count++
+	}
+
+	assert.Equal(t, 5, count, "should read all 5 records")
+	assert.ErrorIs(t, finalErr, walfs.ErrNoNewData, "should return ErrNoNewData when at committed boundary (not EOF)")
+}
+
+func TestWALog_ReaderCommitCheck_CommitEqualsWrite_AcrossSegments(t *testing.T) {
+	dir := t.TempDir()
+
+	segmentSize := int64(512)
+	wal, err := walfs.NewWALog(dir, ".wal",
+		walfs.WithReaderCommitCheck(),
+		walfs.WithMaxSegmentSize(segmentSize),
+	)
+	require.NoError(t, err)
+	defer wal.Close()
+
+	var lastPos walfs.RecordPosition
+	recordData := bytes.Repeat([]byte("z"), 100)
+	numRecords := 10
+
+	for i := 0; i < numRecords; i++ {
+		pos, err := wal.Write(recordData, uint64(i+1))
+		require.NoError(t, err)
+		lastPos = pos
+	}
+
+	segments := wal.Segments()
+	require.Greater(t, len(segments), 1, "should have multiple segments")
+	wal.Commit(lastPos)
+
+	reader := wal.NewReader()
+	defer reader.Close()
+
+	count := 0
+	var finalErr error
+	for {
+		_, _, err := reader.Next()
+		if err != nil {
+			finalErr = err
+			break
+		}
+		count++
+	}
+
+	assert.Equal(t, numRecords, count, "should read all %d records", numRecords)
+	assert.ErrorIs(t, finalErr, walfs.ErrNoNewData, "should return ErrNoNewData at end (not EOF)")
+}

@@ -116,6 +116,18 @@ func WithClearIndexOnFlush() WALogOptions {
 	}
 }
 
+// WithReaderCommitCheck enables commit offset checking for readers.
+// When enabled, readers will check against the committed position before advancing.
+// If the reader's current position is at or beyond the committed position,
+// Next() returns ErrNoNewData without advancing.
+// Use Commit() to advance the committed position.
+// This is used in Raft mode where writes are not visible until committed.
+func WithReaderCommitCheck() WALogOptions {
+	return func(sm *WALog) {
+		sm.readerCommitCheck = true
+	}
+}
+
 // WALog manages the lifecycle of each individual segments, including creation, rotation,
 // recovery, and read/write operations.
 type WALog struct {
@@ -142,6 +154,14 @@ type WALog struct {
 	// use exclusively.
 	// optimizes the read path and prevent Read-Stall Lock in hot path.
 	segmentSnapshot atomic.Pointer[[]*Segment]
+
+	// committedPos is the logical boundary for readers when readerCommitCheck is enabled.
+	// Readers cannot advance beyond this position.
+	// In Raft mode, FSM.Apply() updates this via Commit() after Raft consensus.
+	committedPos atomic.Pointer[RecordPosition]
+	// readerCommitCheck when true, readers check committed position before advancing.
+	// Set to true for Raft mode where writes are not visible until committed.
+	readerCommitCheck bool
 
 	segmentMaxAge       time.Duration
 	minSegmentsToRetain int
@@ -338,6 +358,24 @@ func (wl *WALog) Sync() error {
 		return fmt.Errorf("%w: %v", ErrFsync, err)
 	}
 	return nil
+}
+
+// Commit advances the committed position to the given position.
+// When readerCommitCheck is enabled, readers cannot advance beyond this position.
+// In Raft mode, call this after Raft consensus confirms the log entry.
+// This method is safe for concurrent use.
+func (wl *WALog) Commit(pos RecordPosition) {
+	wl.committedPos.Store(&pos)
+}
+
+// CommittedPosition returns the current committed position.
+// Returns NilRecordPosition if no position has been committed yet.
+func (wl *WALog) CommittedPosition() RecordPosition {
+	pos := wl.committedPos.Load()
+	if pos == nil {
+		return NilRecordPosition
+	}
+	return *pos
 }
 
 // Close gracefully shuts down all segments managed by the WALog.
@@ -1088,6 +1126,7 @@ func syncDir(dir string) error {
 // advancing from one segment to the next.
 // Reader is not safe for concurrent use.
 type Reader struct {
+	wal      *WALog
 	segments []*Segment
 	// index in segments
 	segmentIndex  int
@@ -1101,6 +1140,7 @@ func (wl *WALog) NewReader() *Reader {
 	segments := *wl.segmentSnapshot.Load()
 
 	return &Reader{
+		wal:           wl,
 		segments:      segments,
 		currentReader: nil,
 	}
@@ -1117,6 +1157,8 @@ func (r *Reader) Close() {
 // Next returns the next available WAL record data and its current position.
 // IMPORTANT: The returned `[]byte` is a slice of a memory-mapped file, so data must not be retained or modified.
 // If the data needs to be used beyond the lifetime of the segment, the caller MUST copy it.
+// When readerCommitCheck is enabled on the WALog, returns ErrNoNewData if the reader
+// has reached the committed boundary.
 func (r *Reader) Next() ([]byte, RecordPosition, error) {
 	for {
 		// no current segment reader, it advances to the next segment in r.segments until all are exhausted.
@@ -1138,6 +1180,15 @@ func (r *Reader) Next() ([]byte, RecordPosition, error) {
 			r.currentReader = reader
 		}
 
+		// Check committed boundary before reading.
+		// If readerCommitCheck is enabled and we're at or beyond the committed position,
+		// return ErrNoNewData without advancing.
+		if r.wal != nil && r.wal.readerCommitCheck {
+			if r.isAtOrBeyondCommitted() {
+				return nil, NilRecordPosition, ErrNoNewData
+			}
+		}
+
 		reader := r.currentReader
 		data, pos, err := reader.Next()
 		if err == nil {
@@ -1151,6 +1202,35 @@ func (r *Reader) Next() ([]byte, RecordPosition, error) {
 		}
 		return nil, NilRecordPosition, err
 	}
+}
+
+// isAtOrBeyondCommitted checks if the reader's current position is at or beyond
+// the committed position. Returns true if reader should not advance further.
+func (r *Reader) isAtOrBeyondCommitted() bool {
+	committed := r.wal.committedPos.Load()
+	if committed == nil {
+		// No committed position yet - nothing to read
+		return true
+	}
+
+	// Get the current read position
+	// current segment (segmentIndex was already incremented)
+	seg := r.segments[r.segmentIndex-1]
+	nextPos := RecordPosition{
+		SegmentID: seg.ID(),
+		Offset:    r.currentReader.readOffset,
+	}
+
+	// Reader is beyond committed if:
+	// - segment ID > committed segment ID, OR
+	// - same segment but offset > committed offset
+	if nextPos.SegmentID > committed.SegmentID {
+		return true
+	}
+	if nextPos.SegmentID == committed.SegmentID && nextPos.Offset > committed.Offset {
+		return true
+	}
+	return false
 }
 
 // SeekNext advances the reader by one record, discarding the data.
@@ -1216,6 +1296,7 @@ func (wl *WALog) NewReaderWithStart(pos RecordPosition) (*Reader, error) {
 	}
 
 	return &Reader{
+		wal:           wl,
 		segments:      filtered,
 		startOffset:   startOffset,
 		currentReader: nil,
