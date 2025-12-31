@@ -52,8 +52,7 @@ func SaveMetadataWithRaft(db BTreeStore, pos *wal.Offset, index uint64, raftInde
 
 const posEncodedSize = 12
 
-// MarshalBinary encodes a Metadata struct to a byte slice.
-// Format: [RecordProcessed:8][Pos:12][RaftIndex:8][RaftTerm:8] = 36 bytes
+// Format: [RecordProcessed:8][Pos:12][RaftIndex:8][RaftTerm:8] = 36 bytes.
 func (m *Metadata) MarshalBinary() []byte {
 	encodedPos := make([]byte, posEncodedSize)
 	if m.Pos != nil {
@@ -69,8 +68,7 @@ func (m *Metadata) MarshalBinary() []byte {
 	return result
 }
 
-// UnmarshalMetadata decodes a Metadata struct from a byte slice.
-// Format: [RecordProcessed:8][Pos:12][RaftIndex:8][RaftTerm:8] = 36 bytes
+// Format: [RecordProcessed:8][Pos:12][RaftIndex:8][RaftTerm:8] = 36 bytes.
 func UnmarshalMetadata(data []byte) Metadata {
 	index := binary.LittleEndian.Uint64(data[:8])
 	pos := wal.DecodeOffset(data[8:20])

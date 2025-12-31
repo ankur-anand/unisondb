@@ -7,99 +7,23 @@ import (
 	"github.com/hashicorp/raft"
 )
 
-// Raft Snapshot Design for UnisonDB Engine
+// Raft assumes that when you take a snapshot, everything up to that index is persisted.
+// But we have a gap between what's applied to memtable vs what's flushed to disk.
+// appliedIndex = 100 (in memtable)
+// flushedIndex = 80 (on disk in B-tree)
+// When Raft snapshots, it uses appliedIndex for the metadata, then deletes logs up to 100.
+// But our B-tree only has data through 80. On recovery, Raft replays from 101. Entries 81-100? Gone.
+// We intercept the snapshot store and swap out the index.
+// Raft calls Create(index=100), we call the inner store with Create(index=80).
+// Now Raft only compacts logs up to 80 and keeps 81-100 around for replay.
 //
-//  The Problem: appliedIndex vs flushedIndex
-//
-//  UnisonDB Engine uses a two-tier storage architecture:
-//
-//	 ┌─────────────────────────────────────────────────────────────┐
-//	 │                     Raft Log (WAL)                          │
-//	 │  [1] [2] [3] ... [80] [81] ... [100]                        │
-//	 │                        ↑              ↑                     │
-//	 │                   flushedIndex   appliedIndex               │
-//	 └─────────────────────────────────────────────────────────────┘
-//							  │              │
-//							  ▼              ▼
-//	 ┌─────────────────────┐  ┌─────────────────────┐
-//	 │      B-Tree         │  │     MemTable        │
-//	 │  (persistent)       │  │  (in-memory)        │
-//	 │                     │  │                     │
-//	 │  Data: 1-80         │  │  Data: 81-100       │
-//	 │                     │  │                     │
-//	 └─────────────────────┘  └─────────────────────┘
-//
-//  - appliedIndex (100): Last log entry applied to MemTable
-//  - flushedIndex (80): Last log entry flushed to B-Tree
-//
-//  The B-Tree snapshot only contains data up to flushedIndex, not appliedIndex!
-//
-//  Why Standard Raft Snapshots Break
-//
-//  hashicorp/raft's default behavior:
-//
-//  1. Raft calls FSM.Snapshot()
-//  2. Raft calls SnapshotStore.Create(appliedIndex=100, ...)  ← Uses appliedIndex!
-//  3. Raft calls FSMSnapshot.Persist() → Writes B-Tree (contains data up to 80)
-//  4. Raft compacts logs up to index 100
-//  5. Logs 81-100 are DELETED
-//
-//  On Restore:
-//  1. Raft restores snapshot (thinks it's at index 100)
-//  2. B-Tree only has data up to 80
-//  3. Raft replays from 101 (logs 81-100 are gone!)
-//  4. DATA LOSS for entries 81-100!
-//
-//
-// FSMSnapshotStore
-//
-//  FSMSnapshotStore intercepts Create() and uses flushedIndex instead of appliedIndex:
-//
-//	┌────────────────────────────────────────────────────────────────────────────┐
-//	│                             SNAPSHOT FLOW                                  │
-//	├────────────────────────────────────────────────────────────────────────────┤
-//	│                                                                            │
-//	│  (1) FSM.Snapshot()                                                        │
-//	│      └── sets FlushedIndexHolder = { flushedIndex = 80, term = 5 }         │
-//	│                                                                            │
-//	│  (2) FSMSnapshotStore.Create(appliedIndex = 100, term = 7, ...)            │
-//	│      └── reads holder → { flushedIndex = 80, term = 5 }                    │
-//	│      └── calls inner.Create(index = 80, term = 5, ...)   ← overridden      │
-//	│                                                                            │
-//	│  (3) FSMSnapshot.Persist()                                                 │
-//	│      └── writes B-Tree snapshot (contains data only up to index = 80)      │
-//	│                                                                            │
-//	│  (4) Raft log compaction                                                   │
-//	│      └── compacts logs up to index = 80                                    │
-//	│      └── logs [81..100] are preserved (NOT compacted)                      │
-//	│                                                                            │
-//	└────────────────────────────────────────────────────────────────────────────┘
-
-//  On Restore:
-//  1. Raft restores snapshot at index 80
-//  2. B-Tree has data up to 80
-//  3. Raft replays logs 81-100
-//  4. All data recovered!
-//
-// Timing Considerations
-//
-//  Potential Race Condition
-//
-//  Timeline:
-//  1. Snapshot() called: flushedIndex=80, holder set to 80
-//  2. Create() called: reads holder=80, metadata says 80
-//  3. Apply() runs + triggers flush: flushedIndex becomes 100
-//  4. Persist() called: B-Tree now has data up to 100!
-//
-//  Result: Snapshot metadata says 80, but B-Tree contains data up to 100
-//
-//  Why This Is Safe
-//
-//  On restore:
-//  - Raft thinks snapshot is at index 80
-//  - B-Tree actually has data up to 100 (from checkpoint metadata)
-//  - Raft replays logs 81-100
-//  - If Apply() is idempotent, replaying already-flushed entries is harmless
+// The FlushedIndexHolder is just a way to pass the real flushed index from FSM.Snapshot() to SnapshotStore.Create()
+// since they're called separately by Raft.
+// Race condition?
+// What if a flush happens between Snapshot() and Persist()?
+// The metadata says 80 but the B-tree now has data through 100.
+// Doesn't matter. On recovery we'll replay 81-100 over data that's already there.
+// As long as Apply is idempotent (it is), we're fine.
 
 // FlushedIndexHolder holds the flushed index/term that should be used for snapshots.
 // This is set by FSM.Snapshot() and read by FSMSnapshotStore.Create().
