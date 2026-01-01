@@ -14,6 +14,8 @@ enum LogOperationType : ubyte {
   Delete = 2,
   TxnMarker = 3,
   DeleteRowByKey = 4,
+  // Raft Noop, Barrier - maintains LSN continuity
+  RaftInternal = 5,  
 }
 
 enum LogEntryType : ubyte {

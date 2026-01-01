@@ -154,10 +154,8 @@ type Engine struct {
 	btreeFlushInterval        time.Duration
 	btreeFlushIntervalEnabled bool
 
-	// used only during testing
-	callback func()
-	ctx      context.Context
-	cancel   context.CancelFunc
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	// used for notification.
 	coalesceFlag     atomic.Bool
@@ -167,6 +165,13 @@ type Engine struct {
 
 	taggedScope    umetrics.Scope
 	changeNotifier ChangeNotifier
+
+	// Raft mode fields
+	raftState raftState
+
+	// used only during testing
+	memtableRotateCallback func()
+	fsyncCallback          func()
 }
 
 // NewStorageEngine initializes WAL, MemTable, and BtreeStore and returns an initialized Engine for a namespace.
@@ -193,7 +198,7 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		pendingMetadata:           &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
 		ctx:                       ctx,
 		cancel:                    cancel,
-		callback:                  func() {},
+		memtableRotateCallback:    func() {},
 		fsyncReqSignal:            make(chan struct{}, 1),
 		btreeFlushInterval:        btreeFlushInterval,
 		btreeFlushIntervalEnabled: btreeFlushIntervalEnabled,
@@ -475,6 +480,22 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 		kvEntries = append(kvEntries, kv)
 	}
 
+	if e.raftState.raftMode {
+		record := logcodec.LogRecord{
+			LSN:           1,
+			HLC:           HLCNow(),
+			OperationType: op,
+			TxnState:      logrecord.TransactionStateNone,
+			EntryType:     logrecord.LogEntryTypeKV,
+			Entries:       kvEntries,
+		}
+		encoded := record.FBEncode(hintSize)
+		// Propose to Raft and return
+		// Memtable write will be handled by the FSM Apply method
+		_, err := e.raftState.applier.Apply(encoded)
+		return err
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	index := e.writeSeenCounter.Add(1)
@@ -525,6 +546,10 @@ func (e *Engine) persistEvent(event *logcodec.EventEntry) error {
 	encodedEvent := logcodec.SerializeEventEntry(event)
 	hintSize := len(encodedEvent) + 512
 	checksum := crc32.ChecksumIEEE(encodedEvent)
+
+	if e.raftState.raftMode {
+		return ErrNotSupportedInRaftMode
+	}
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -577,6 +602,23 @@ func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [
 		rowEntries = append(rowEntries, re)
 	}
 
+	if e.raftState.raftMode {
+		record := logcodec.LogRecord{
+			LSN:           1,
+			HLC:           HLCNow(),
+			OperationType: op,
+			CRC32Checksum: checksum,
+			TxnState:      logrecord.TransactionStateNone,
+			EntryType:     logrecord.LogEntryTypeRow,
+			Entries:       rowEntries,
+		}
+		encoded := record.FBEncode(hintSize)
+		// Propose to Raft and return
+		// Memtable write will be handled by the FSM Apply method
+		_, err := e.raftState.applier.Apply(encoded)
+		return err
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -620,6 +662,13 @@ func (e *Engine) writeOffset(offset *wal.Offset) {
 		// Signal all waiting routines that a new append has happened
 		// Atomically update lastChunkPosition
 		e.currentOffset.Store(offset)
+
+		// In Raft mode, update WAL commit boundary so ISR followers
+		// streaming from the WAL only see committed entries.
+		if e.raftState.raftMode && e.raftState.walCommitCallback != nil {
+			e.raftState.walCommitCallback(*offset)
+		}
+
 		e.notifyAppend()
 	}
 }
@@ -787,7 +836,7 @@ func (e *Engine) rotateMemTableNoFlush() {
 	oldTable := e.activeMemTable
 	e.activeMemTable = memtable.NewMemTable(e.config.ArenaSize, e.walIO, e.namespace, e.newTxnBatcher)
 	e.sealedMemTables = append(e.sealedMemTables, oldTable)
-	e.callback()
+	e.memtableRotateCallback()
 }
 
 func (e *Engine) rotateMemTable() {
@@ -893,13 +942,33 @@ func (e *Engine) handleFlush(ctx context.Context) {
 		startTime := time.Now()
 		recordProcessed, err := mt.Flush(ctx)
 		if err != nil {
-			log.Fatal("Failed to flushMemTable MemTable:", "namespace", e.namespace, "err", err)
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				slog.Warn("flushMemTable canceled",
+					slog.String("namespace", e.namespace),
+					slog.Any("err", err),
+				)
+				return
+			}
+			slog.Error("Failed to flushMemTable MemTable:",
+				slog.String("namespace", e.namespace),
+				slog.Any("err", err),
+			)
+			return
+		}
+
+		// raft position from memtable and update tracking atomics.
+		raftIdx, raftTerm := mt.GetLastRaftPosition()
+		if raftIdx > 0 {
+			e.raftState.flushedIndex.Store(raftIdx)
+			e.raftState.flushedTerm.Store(raftTerm)
 		}
 
 		fm := &flushedMetadata{
 			metadata: &internal.Metadata{
 				RecordProcessed: e.opsFlushedCounter.Add(uint64(recordProcessed)),
 				Pos:             mt.GetLastOffset(),
+				RaftIndex:       raftIdx,
+				RaftTerm:        raftTerm,
 			},
 			recordProcessed: recordProcessed,
 			bytesFlushed:    uint64(mt.GetBytesStored()),
@@ -924,15 +993,18 @@ func (e *Engine) handleFlush(ctx context.Context) {
 			}
 		}
 
-		slog.Debug("[dbkernel]",
-			slog.String("message", "MemTable flushed to BtreeStore"),
-			slog.Group("flush",
-				slog.String("namespace", e.namespace),
-				slog.String("duration", humanizeDuration(time.Since(startTime))),
-				slog.Int("ops", recordProcessed),
-				slog.String("bytes", humanize.Bytes(uint64(mt.GetBytesStored()))),
-			),
-		)
+		if slog.Default().Enabled(e.ctx, slog.LevelDebug) {
+			slog.Debug("[dbkernel]",
+				slog.String("message", "MemTable flushed to BtreeStore"),
+				slog.Group("flush",
+					slog.String("namespace", e.namespace),
+					slog.String("duration", humanizeDuration(time.Since(startTime))),
+					slog.Int("ops", recordProcessed),
+					slog.String("bytes", humanize.Bytes(uint64(mt.GetBytesStored()))),
+				),
+			)
+		}
+		e.memtableRotateCallback()
 	}
 }
 
@@ -1031,7 +1103,11 @@ func (e *Engine) fSyncStore() {
 	startTime := time.Now()
 	e.taggedScope.Counter(mKeyFSyncTotal).Inc(1)
 
-	err := internal.SaveMetadata(e.dataStore, fm.metadata.Pos, fm.metadata.RecordProcessed)
+	// Always save with raft fields - zero values are harmless in non-raft mode
+	err := internal.SaveMetadataWithRaft(e.dataStore, fm.metadata.Pos,
+		fm.metadata.RecordProcessed,
+		fm.metadata.RaftIndex,
+		fm.metadata.RaftTerm)
 	if err != nil {
 		log.Fatal("[dbkernel] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
 	}
@@ -1056,9 +1132,13 @@ func (e *Engine) fSyncStore() {
 		),
 	)
 
-	if e.callback != nil {
-		go e.callback()
+	if e.fsyncCallback != nil {
+		e.fsyncCallback()
 	}
+}
+
+func (e *Engine) setFsyncCallback(fn func()) {
+	e.fsyncCallback = fn
 }
 
 // pauseFlush helps in getting a consistent snapshot of the underlying kv drivers.

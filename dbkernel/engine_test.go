@@ -41,8 +41,8 @@ func TestStorageEngine_Suite(t *testing.T) {
 	config := NewDefaultEngineConfig()
 	config.ArenaSize = 1 << 20
 	engine, err := NewStorageEngine(dir, namespace, config)
-	engine.callback = callback
-
+	engine.memtableRotateCallback = callback
+	engine.setFsyncCallback(callback)
 	assert.NoError(t, err, "NewStorageEngine should not error")
 	t.Cleanup(func() {
 		err := engine.close(context.Background())
@@ -57,9 +57,6 @@ func TestStorageEngine_Suite(t *testing.T) {
 			insertedKV[key] = value
 			err := engine.persistKeyValue([][]byte{[]byte(key)}, [][]byte{[]byte(value)}, logrecord.LogOperationTypeInsert)
 			assert.NoError(t, err, "persistKeyValue should not error")
-			//valueType, ok := engine.getEntryTypeForKeyFromMemTable([]byte(key))
-			//assert.True(t, ok, "getEntryTypeForKeyFromMemTable should return true")
-			//assert.Equal(t, valueType, logrecord.LogEntryTypeKV)
 		}
 	})
 
@@ -67,7 +64,7 @@ func TestStorageEngine_Suite(t *testing.T) {
 		engine.handleFlush(t.Context())
 		select {
 		case <-callbackSignal:
-			t.Errorf("should not have received callback signal")
+			t.Errorf("should not have received memtableRotateCallback signal")
 		case <-time.After(1 * time.Second):
 		}
 	})
@@ -77,7 +74,7 @@ func TestStorageEngine_Suite(t *testing.T) {
 		select {
 		case <-callbackSignal:
 		case <-time.After(5 * time.Second):
-			t.Errorf("timed out waiting for callback signal")
+			t.Errorf("timed out waiting for memtableRotateCallback signal")
 		}
 	})
 
@@ -104,7 +101,7 @@ func TestStorageEngine_Suite(t *testing.T) {
 		select {
 		case <-callbackSignal:
 		case <-time.After(5 * time.Second):
-			t.Errorf("timed out waiting for callback signal for rotation")
+			t.Errorf("timed out waiting for memtableRotateCallback signal for rotation")
 		}
 
 		assert.Equal(t, uint64(1100), engine.writeSeenCounter.Load(), "expected writeSeenCounter counter to be 100")
@@ -130,19 +127,22 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 	assert.NoError(t, err)
 
 	signal := make(chan struct{}, 10)
-	engine.callback = func() {
-		signal <- struct{}{}
-	}
+	engine.setFsyncCallback(func() {
+		select {
+		case signal <- struct{}{}:
+		default:
+		}
+	})
 	assert.NoError(t, err)
-	valueSize := 1024 // 1KB per value (approx.)
+	valueSize := 1024
 
 	// create a batch records.
 	batchKey := []byte(gofakeit.UUID())
 
-	// open a batch writer:
+	// open a txn writer:
 	batch, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
-	assert.NoError(t, err, "NewBatch operation should succeed")
-	assert.NotNil(t, batch, "NewBatch operation should succeed")
+	assert.NoError(t, err, "NewTxn operation should succeed")
+	assert.NotNil(t, batch, "NewTxn operation should succeed")
 
 	var batchValues []string
 	fullValue := new(bytes.Buffer)
@@ -310,7 +310,7 @@ func TestEngine_GetRowColumns_WithMemTableRotateNoFlush(t *testing.T) {
 	config.ArenaSize = 1 << 20
 	engine, err := NewStorageEngine(dir, namespace, config)
 	assert.NoError(t, err, "NewStorageEngine should not error")
-	engine.callback = callback
+	engine.memtableRotateCallback = callback
 	t.Cleanup(func() {
 		err := engine.close(context.Background())
 		assert.NoError(t, err, "storage engine close should not error")
@@ -378,7 +378,7 @@ func TestEngine_GetRowColumns_WithMemTableRotateNoFlush(t *testing.T) {
 		select {
 		case <-callbackSignal:
 		case <-time.After(5 * time.Second):
-			t.Errorf("timed out waiting for callback signal")
+			t.Errorf("timed out waiting for memtableRotateCallback signal")
 		}
 	})
 
@@ -443,7 +443,7 @@ func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
 	config.ArenaSize = 1 << 20
 	engine, err := NewStorageEngine(dir, namespace, config)
 	assert.NoError(t, err, "NewStorageEngine should not error")
-	engine.callback = callback
+	engine.memtableRotateCallback = callback
 	t.Cleanup(func() {
 		err := engine.close(context.Background())
 		assert.NoError(t, err, "storage engine close should not error")
@@ -489,7 +489,7 @@ func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
 		select {
 		case <-callbackSignal:
 		case <-time.After(5 * time.Second):
-			t.Errorf("timed out waiting for callback signal")
+			t.Errorf("timed out waiting for memtableRotateCallback signal")
 		}
 	})
 
@@ -525,7 +525,7 @@ func TestEngine_GetRowColumns_WithMemTableRotate(t *testing.T) {
 		select {
 		case <-callbackSignal:
 		case <-time.After(5 * time.Second):
-			t.Errorf("timed out waiting for callback signal")
+			t.Errorf("timed out waiting for memtableRotateCallback signal")
 		}
 	})
 
@@ -590,7 +590,7 @@ func TestRecoveryAndCheckPoint(t *testing.T) {
 	config.DBEngine = BoltDBEngine
 	engine, err := NewStorageEngine(dir, namespace, config)
 	assert.NoError(t, err, "NewStorageEngine should not error")
-	engine.callback = callback
+	engine.memtableRotateCallback = callback
 
 	kv := make(map[string]string)
 	for i := 0; i < 100; i++ {
@@ -607,7 +607,7 @@ func TestRecoveryAndCheckPoint(t *testing.T) {
 	select {
 	case <-callbackSignal:
 	case <-time.After(5 * time.Second):
-		t.Errorf("timed out waiting for callback signal")
+		t.Errorf("timed out waiting for memtableRotateCallback signal")
 	}
 
 	err = engine.close(context.Background())
@@ -659,16 +659,16 @@ func Test_ASyncFSync_Coalescing(t *testing.T) {
 	signal := make(chan struct{}, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	engine := &Engine{
-		namespace:       namespace,
-		config:          config,
-		wg:              &sync.WaitGroup{},
-		flushReqSignal:  signal,
-		pendingMetadata: &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
-		taggedScope:     umetrics.AutoScope(),
-		ctx:             ctx,
-		cancel:          cancel,
-		callback:        func() {},
-		fsyncReqSignal:  make(chan struct{}, 1),
+		namespace:              namespace,
+		config:                 config,
+		wg:                     &sync.WaitGroup{},
+		flushReqSignal:         signal,
+		pendingMetadata:        &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
+		taggedScope:            umetrics.AutoScope(),
+		ctx:                    ctx,
+		cancel:                 cancel,
+		memtableRotateCallback: func() {},
+		fsyncReqSignal:         make(chan struct{}, 1),
 	}
 
 	err := engine.initStorage(dir, namespace, config)
@@ -676,8 +676,8 @@ func Test_ASyncFSync_Coalescing(t *testing.T) {
 
 	engine.appendNotify = make(chan struct{})
 
-	engine.callback = callback
-
+	engine.memtableRotateCallback = callback
+	engine.setFsyncCallback(callback)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
@@ -742,15 +742,15 @@ func Test_WalSyncer_Sync(t *testing.T) {
 	signal := make(chan struct{}, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	engine := &Engine{
-		namespace:       namespace,
-		config:          config,
-		wg:              &sync.WaitGroup{},
-		flushReqSignal:  signal,
-		pendingMetadata: &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
-		ctx:             ctx,
-		cancel:          cancel,
-		callback:        func() {},
-		fsyncReqSignal:  make(chan struct{}, 1),
+		namespace:              namespace,
+		config:                 config,
+		wg:                     &sync.WaitGroup{},
+		flushReqSignal:         signal,
+		pendingMetadata:        &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
+		ctx:                    ctx,
+		cancel:                 cancel,
+		memtableRotateCallback: func() {},
+		fsyncReqSignal:         make(chan struct{}, 1),
 	}
 
 	err := engine.initStorage(dir, namespace, config)
@@ -758,7 +758,7 @@ func Test_WalSyncer_Sync(t *testing.T) {
 
 	engine.appendNotify = make(chan struct{})
 
-	engine.callback = callback
+	engine.memtableRotateCallback = callback
 	syncer := &mockWalSyncer{cancel: cancel}
 	engine.walSyncer = syncer
 	engine.syncWalAtInterval(ctx)
@@ -942,7 +942,7 @@ func TestBtreeSyncInterval(t *testing.T) {
 		pendingMetadata:           &pendingMetadata{pendingMetadataWrites: make([]*flushedMetadata, 0)},
 		ctx:                       ctx,
 		cancel:                    cancel,
-		callback:                  func() {},
+		memtableRotateCallback:    func() {},
 		fsyncReqSignal:            make(chan struct{}, 1),
 		btreeFlushInterval:        10 * time.Millisecond,
 		btreeFlushIntervalEnabled: true,
@@ -993,7 +993,7 @@ func TestBtreeSyncInterval_Engine(t *testing.T) {
 	config.BTreeFlushInterval = 1 * time.Second
 	engine, err := NewStorageEngine(dir, namespace, config)
 	assert.NoError(t, err, "NewStorageEngine should not error")
-	engine.callback = callback
+	engine.setFsyncCallback(callback)
 
 	kv := make(map[string]string)
 	for i := 0; i < 100; i++ {
@@ -1008,7 +1008,7 @@ func TestBtreeSyncInterval_Engine(t *testing.T) {
 	select {
 	case <-callbackSignal:
 	case <-time.After(5 * time.Second):
-		t.Errorf("callback timeout waiting for timer fsync")
+		t.Errorf("memtableRotateCallback timeout waiting for timer fsync")
 	}
 }
 
@@ -1115,7 +1115,7 @@ func TestGetLOB_WALAndPersisted(t *testing.T) {
 	assert.Equal(t, want, got, "WAL reconstruction should join chunks in order")
 
 	done := make(chan struct{}, 1)
-	engine.callback = func() {
+	engine.memtableRotateCallback = func() {
 		select {
 		case done <- struct{}{}:
 		default:

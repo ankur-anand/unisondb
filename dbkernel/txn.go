@@ -55,22 +55,28 @@ type Txn struct {
 	beginReleased        bool
 }
 
+// validateTxnStart checks if a transaction can be started.
+func (e *Engine) validateTxnStart(txnType logrecord.LogOperationType, valueType logrecord.LogEntryType) error {
+	switch {
+	case e.readOnly:
+		return ErrEngineReadOnly
+	case e.raftState.raftMode:
+		return ErrNotSupportedInRaftMode
+	case e.config.EventLogMode:
+		return ErrEventLogModeViolation
+	case txnType == logrecord.LogOperationTypeNoOperation:
+		return ErrUnsupportedTxnType
+	case txnType == logrecord.LogOperationTypeDelete && valueType == logrecord.LogEntryTypeChunked:
+		return ErrUnsupportedTxnType
+	}
+	return nil
+}
+
 // NewTxn returns a new initialized batch Txn.
-// Transactions are not allowed in EventLogMode.
+// Transactions are not allowed in EventLogMode or RaftMode.
 func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.LogEntryType) (*Txn, error) {
-	if e.readOnly {
-		return nil, ErrEngineReadOnly
-	}
-	if e.config.EventLogMode {
-		return nil, ErrEventLogModeViolation
-	}
-
-	if txnType == logrecord.LogOperationTypeNoOperation {
-		return nil, ErrUnsupportedTxnType
-	}
-
-	if txnType == logrecord.LogOperationTypeDelete && valueType == logrecord.LogEntryTypeChunked {
-		return nil, ErrUnsupportedTxnType
+	if err := e.validateTxnStart(txnType, valueType); err != nil {
+		return nil, err
 	}
 
 	uuid, err := ksuid.New().MarshalBinary()
