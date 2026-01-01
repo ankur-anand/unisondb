@@ -3,6 +3,7 @@ package dbkernel
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -706,4 +707,364 @@ func TestEngine_RaftMode_IdempotentApply(t *testing.T) {
 
 	t.Logf("Idempotent Apply test passed. Final applied: %d, flushed: %d",
 		engine.AppliedIndex(), engine.FlushedIndex())
+}
+
+func TestEngine_RaftMode_WALCommitCallback(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "raft_commit_callback_test"
+
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+	engine, err := NewStorageEngine(dir, namespace, config)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.close(context.Background())
+		assert.NoError(t, err)
+	})
+
+	r, logStore, cleanupRaft := setupSingleNodeRaft(t, dir, engine)
+	t.Cleanup(cleanupRaft)
+
+	applier := &raftApplierWrapper{raft: r, timeout: 5 * time.Second}
+	engine.SetRaftMode(true)
+	engine.SetRaftApplier(applier)
+	engine.SetPositionLookup(logStore.GetPosition)
+
+	var mu sync.Mutex
+	var callbackPositions []walfs.RecordPosition
+	engine.SetWALCommitCallback(func(pos walfs.RecordPosition) {
+		mu.Lock()
+		callbackPositions = append(callbackPositions, pos)
+		mu.Unlock()
+	})
+
+	numEntries := 5
+	for i := 0; i < numEntries; i++ {
+		key := []byte(fmt.Sprintf("key-%d", i))
+		value := []byte(fmt.Sprintf("value-%d", i))
+		err = engine.PutKV(key, value)
+		require.NoError(t, err)
+	}
+
+	mu.Lock()
+	callbackCount := len(callbackPositions)
+	mu.Unlock()
+
+	assert.Equal(t, numEntries, callbackCount,
+		"callback should be invoked for each applied entry")
+
+	mu.Lock()
+	for i, pos := range callbackPositions {
+		assert.Greater(t, pos.SegmentID, walfs.SegmentID(0),
+			"position %d should have valid segment ID", i)
+		assert.Greater(t, pos.Offset, int64(0),
+			"position %d should have valid offset", i)
+	}
+	mu.Unlock()
+}
+
+func TestEngine_RaftMode_WALCommitCallback_NotCalledInNonRaftMode(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "non_raft_callback_test"
+
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+	engine, err := NewStorageEngine(dir, namespace, config)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.close(context.Background())
+		assert.NoError(t, err)
+	})
+
+	callbackCount := 0
+	engine.SetWALCommitCallback(func(pos walfs.RecordPosition) {
+		callbackCount++
+	})
+
+	assert.False(t, engine.IsRaftMode(), "engine should not be in Raft mode by default")
+
+	for i := 0; i < 5; i++ {
+		key := []byte(fmt.Sprintf("key-%d", i))
+		value := []byte(fmt.Sprintf("value-%d", i))
+		err = engine.PutKV(key, value)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, 0, callbackCount,
+		"callback should NOT be invoked in non-Raft mode")
+}
+
+func TestEngine_RaftMode_WALCommitCallback_WithLogStoreCommitPosition(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "raft_logstore_commit_test"
+
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+	engine, err := NewStorageEngine(dir, namespace, config)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.close(context.Background())
+		assert.NoError(t, err)
+	})
+
+	raftWALDir := filepath.Join(dir, "raft-wal-commit")
+	wal, err := walfs.NewWALog(raftWALDir, ".wal",
+		walfs.WithMaxSegmentSize(16*1024*1024),
+		walfs.WithClearIndexOnFlush(),
+		walfs.WithReaderCommitCheck(),
+	)
+	require.NoError(t, err)
+
+	logStore, err := raftwalfs.NewLogStore(wal, 0)
+	require.NoError(t, err)
+
+	stableStore := raft.NewInmemStore()
+	snapshotStore := raft.NewInmemSnapshotStore()
+
+	addr := raft.ServerAddress("127.0.0.1:0")
+	_, transport := raft.NewInmemTransport(addr)
+
+	raftConfig := raft.DefaultConfig()
+	raftConfig.LocalID = "node1"
+	raftConfig.HeartbeatTimeout = 50 * time.Millisecond
+	raftConfig.ElectionTimeout = 50 * time.Millisecond
+	raftConfig.LeaderLeaseTimeout = 50 * time.Millisecond
+	raftConfig.CommitTimeout = 5 * time.Millisecond
+	raftConfig.LogOutput = io.Discard
+
+	r, err := raft.NewRaft(raftConfig, engine, logStore, stableStore, snapshotStore, transport)
+	require.NoError(t, err)
+
+	configuration := raft.Configuration{
+		Servers: []raft.Server{
+			{
+				ID:      raftConfig.LocalID,
+				Address: transport.LocalAddr(),
+			},
+		},
+	}
+	err = r.BootstrapCluster(configuration).Error()
+	require.NoError(t, err)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if r.State() == raft.Leader {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.Equal(t, raft.Leader, r.State(), "node should be leader")
+
+	t.Cleanup(func() {
+		future := r.Shutdown()
+		_ = future.Error()
+		_ = transport.Close()
+		_ = logStore.Close()
+		_ = wal.Close()
+	})
+
+	applier := &raftApplierWrapper{raft: r, timeout: 5 * time.Second}
+	engine.SetRaftMode(true)
+	engine.SetRaftApplier(applier)
+	engine.SetPositionLookup(logStore.GetPosition)
+	engine.SetWALCommitCallback(logStore.CommitPosition)
+
+	initialCommitted := wal.CommittedPosition()
+	assert.Equal(t, walfs.NilRecordPosition, initialCommitted,
+		"initially no committed position")
+
+	numEntries := 5
+	for i := 0; i < numEntries; i++ {
+		key := []byte(fmt.Sprintf("key-%d", i))
+		value := []byte(fmt.Sprintf("value-%d", i))
+		err = engine.PutKV(key, value)
+		require.NoError(t, err)
+	}
+
+	finalCommitted := wal.CommittedPosition()
+	assert.NotEqual(t, walfs.NilRecordPosition, finalCommitted,
+		"committed position should be set after writes")
+	assert.Greater(t, finalCommitted.SegmentID, walfs.SegmentID(0),
+		"committed segment ID should be valid")
+	assert.Greater(t, finalCommitted.Offset, int64(0),
+		"committed offset should be valid")
+
+	t.Logf("Final committed position: SegmentID=%d, Offset=%d",
+		finalCommitted.SegmentID, finalCommitted.Offset)
+}
+
+func TestEngine_RaftMode_ISRReaderRespectsCommitBoundary(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "raft_isr_reader_test"
+
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+	engine, err := NewStorageEngine(dir, namespace, config)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.close(context.Background())
+		assert.NoError(t, err)
+	})
+
+	raftWALDir := filepath.Join(dir, "raft-wal-isr")
+	wal, err := walfs.NewWALog(raftWALDir, ".wal",
+		walfs.WithMaxSegmentSize(16*1024*1024),
+		walfs.WithClearIndexOnFlush(),
+		walfs.WithReaderCommitCheck(),
+	)
+	require.NoError(t, err)
+
+	logStore, err := raftwalfs.NewLogStore(wal, 0)
+	require.NoError(t, err)
+
+	stableStore := raft.NewInmemStore()
+	snapshotStore := raft.NewInmemSnapshotStore()
+
+	addr := raft.ServerAddress("127.0.0.1:0")
+	_, transport := raft.NewInmemTransport(addr)
+
+	raftConfig := raft.DefaultConfig()
+	raftConfig.LocalID = "node1"
+	raftConfig.HeartbeatTimeout = 50 * time.Millisecond
+	raftConfig.ElectionTimeout = 50 * time.Millisecond
+	raftConfig.LeaderLeaseTimeout = 50 * time.Millisecond
+	raftConfig.CommitTimeout = 5 * time.Millisecond
+	raftConfig.LogOutput = io.Discard
+
+	r, err := raft.NewRaft(raftConfig, engine, logStore, stableStore, snapshotStore, transport)
+	require.NoError(t, err)
+
+	configuration := raft.Configuration{
+		Servers: []raft.Server{
+			{
+				ID:      raftConfig.LocalID,
+				Address: transport.LocalAddr(),
+			},
+		},
+	}
+	err = r.BootstrapCluster(configuration).Error()
+	require.NoError(t, err)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if r.State() == raft.Leader {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.Equal(t, raft.Leader, r.State(), "node should be leader")
+
+	t.Cleanup(func() {
+		future := r.Shutdown()
+		_ = future.Error()
+		_ = transport.Close()
+		_ = logStore.Close()
+		_ = wal.Close()
+	})
+
+	applier := &raftApplierWrapper{raft: r, timeout: 5 * time.Second}
+	engine.SetRaftMode(true)
+	engine.SetRaftApplier(applier)
+	engine.SetPositionLookup(logStore.GetPosition)
+	engine.SetWALCommitCallback(logStore.CommitPosition)
+
+	numEntries := 10
+	for i := 0; i < numEntries; i++ {
+		key := []byte(fmt.Sprintf("key-%d", i))
+		value := []byte(fmt.Sprintf("value-%d", i))
+		err = engine.PutKV(key, value)
+		require.NoError(t, err)
+	}
+
+	reader := wal.NewReader()
+	defer reader.Close()
+
+	codec := raftwalfs.BinaryCodecV1{}
+	readCount := 0
+	commandCount := 0
+
+	for {
+		data, pos, err := reader.Next()
+		if errors.Is(err, walfs.ErrNoNewData) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		assert.NotNil(t, data, "data should not be nil")
+		assert.Greater(t, pos.SegmentID, walfs.SegmentID(0), "valid segment ID")
+
+		raftLog, err := codec.Decode(data)
+		require.NoError(t, err, "should decode raft log")
+
+		if raftLog.Type == raft.LogCommand {
+			record := logrecord.GetRootAsLogRecord(raftLog.Data, 0)
+			assert.NotNil(t, record, "should be valid log record")
+			_ = record.Lsn()
+			commandCount++
+		}
+
+		readCount++
+	}
+
+	assert.GreaterOrEqual(t, readCount, numEntries,
+		"should read at least %d entries (got %d)", numEntries, readCount)
+	assert.Equal(t, numEntries, commandCount,
+		"should have exactly %d command entries", numEntries)
+}
+
+func TestEngine_RaftMode_WALCommitCallback_MonotonicPositions(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "raft_monotonic_pos_test"
+
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+	engine, err := NewStorageEngine(dir, namespace, config)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.close(context.Background())
+		assert.NoError(t, err)
+	})
+
+	r, logStore, cleanupRaft := setupSingleNodeRaft(t, dir, engine)
+	t.Cleanup(cleanupRaft)
+
+	applier := &raftApplierWrapper{raft: r, timeout: 5 * time.Second}
+	engine.SetRaftMode(true)
+	engine.SetRaftApplier(applier)
+	engine.SetPositionLookup(logStore.GetPosition)
+
+	var mu sync.Mutex
+	var positions []walfs.RecordPosition
+	engine.SetWALCommitCallback(func(pos walfs.RecordPosition) {
+		mu.Lock()
+		positions = append(positions, pos)
+		mu.Unlock()
+	})
+
+	numEntries := 20
+	for i := 0; i < numEntries; i++ {
+		key := []byte(fmt.Sprintf("key-%d", i))
+		value := []byte(fmt.Sprintf("value-%d", i))
+		err = engine.PutKV(key, value)
+		require.NoError(t, err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	for i := 1; i < len(positions); i++ {
+		prev := positions[i-1]
+		curr := positions[i]
+
+		if curr.SegmentID == prev.SegmentID {
+			assert.Greater(t, curr.Offset, prev.Offset,
+				"offset should increase within same segment (pos %d)", i)
+		} else {
+			assert.Greater(t, curr.SegmentID, prev.SegmentID,
+				"segment ID should increase (pos %d)", i)
+		}
+	}
+
 }

@@ -23,6 +23,11 @@ type RaftApplier interface {
 	Apply(data []byte) (index uint64, err error)
 }
 
+// WALCommitCallback is called when a committed entry's WAL position is known.
+// In Raft mode, this is used to update the WAL's commit boundary so that
+// ISR followers streaming from the WAL only see committed entries.
+type WALCommitCallback func(pos walfs.RecordPosition)
+
 type raftState struct {
 	raftMode bool
 	// applied Raft log index (in memtable)
@@ -37,6 +42,11 @@ type raftState struct {
 	// snapshotIndexHolder communicates flushedIndex to FSMSnapshotStore.
 	// It's Set by Snapshot(), and read by FSMSnapshotStore.Create().
 	snapshotIndexHolder *FlushedIndexHolder
+
+	// walCommitCallback is called when a committed entry is applied to update
+	// the WAL's commit boundary. This enables ISR-style replication where
+	// followers stream from the WAL and only see committed entries.
+	walCommitCallback WALCommitCallback
 }
 
 // SetPositionLookup sets the function used to look up WAL positions from Raft log indices.
@@ -47,6 +57,13 @@ func (e *Engine) SetPositionLookup(lookup PositionLookup) {
 // SetRaftApplier sets the RaftApplier used to propose commands to Raft.
 func (e *Engine) SetRaftApplier(applier RaftApplier) {
 	e.raftState.applier = applier
+}
+
+// SetWALCommitCallback sets the callback that is invoked when a committed
+// Raft entry is applied. The callback receives the WAL position of the
+// committed entry, which can be used to update the WAL's commit boundary.
+func (e *Engine) SetWALCommitCallback(callback WALCommitCallback) {
+	e.raftState.walCommitCallback = callback
 }
 
 // Apply implements raft.FSM interface.
@@ -255,8 +272,5 @@ func (s *engineSnapshot) Persist(sink raft.SnapshotSink) error {
 	return sink.Close()
 }
 
-// Release is called when the snapshot is no longer needed.
-// TODO: Implement this
 func (s *engineSnapshot) Release() {
-	// Nothing to release - we don't hold any special resources
 }

@@ -662,6 +662,13 @@ func (e *Engine) writeOffset(offset *wal.Offset) {
 		// Signal all waiting routines that a new append has happened
 		// Atomically update lastChunkPosition
 		e.currentOffset.Store(offset)
+
+		// In Raft mode, update WAL commit boundary so ISR followers
+		// streaming from the WAL only see committed entries.
+		if e.raftState.raftMode && e.raftState.walCommitCallback != nil {
+			e.raftState.walCommitCallback(*offset)
+		}
+
 		e.notifyAppend()
 	}
 }

@@ -347,6 +347,13 @@ func (l *LogStore) SetCommittedIndex(index uint64) {
 	l.committedIndex.Store(index)
 }
 
+// CommitPosition updates the WAL's commit boundary to the given position.
+// This enables ISR-style replication where followers streaming from the WAL
+// only see committed entries. Call this when a Raft entry is committed.
+func (l *LogStore) CommitPosition(pos walfs.RecordPosition) {
+	l.wal.Commit(pos)
+}
+
 // Close closes the log store.
 func (l *LogStore) Close() error {
 	if l.closed.Swap(true) {
