@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
-	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/gorilla/mux"
 )
@@ -115,9 +114,6 @@ func (s *Service) RegisterRoutes(router *mux.Router) {
 	api.HandleFunc("/wal/backup", s.handleBackupSegmentsAfter).Methods(http.MethodPost)
 	api.HandleFunc("/btree/backup", s.handleBackupBTree).Methods(http.MethodPost)
 
-	// event ops
-	api.HandleFunc("/event", s.handleAddEvent).Methods(http.MethodPost)
-
 	go s.reapStaleTransactions()
 }
 
@@ -208,9 +204,7 @@ func statusFromEngineError(err error) int {
 		return http.StatusConflict
 	case errors.Is(err, dbkernel.ErrKeyNotFound):
 		return http.StatusNotFound
-	case errors.Is(err, dbkernel.ErrEngineReadOnly),
-		errors.Is(err, dbkernel.ErrEventLogModeViolation),
-		errors.Is(err, dbkernel.ErrEventNotAllowed):
+	case errors.Is(err, dbkernel.ErrEngineReadOnly):
 		return http.StatusForbidden
 	case errors.Is(err, dbkernel.ErrUnsupportedTxnType),
 		errors.Is(err, dbkernel.ErrEmptyColumns),
@@ -803,78 +797,6 @@ func (s *Service) handleGetStats(w http.ResponseWriter, r *http.Request) {
 		CurrentSegment: offset.SegmentID,
 		CurrentOffset:  offset.Offset,
 	})
-}
-
-type AddEventRequest struct {
-	EventID    string `json:"eventId"`
-	EventType  string `json:"eventType"`
-	OccurredAt uint64 `json:"occurredAt"`
-	// base64 encoded
-	Payload  string            `json:"payload"`
-	Metadata map[string]string `json:"metadata"`
-}
-
-type AddEventResponse struct {
-	Success bool `json:"success"`
-}
-
-func (s *Service) handleAddEvent(w http.ResponseWriter, r *http.Request) {
-	vars := mux.Vars(r)
-	namespace := vars["namespace"]
-
-	engine, err := s.getEngine(namespace)
-	if err != nil {
-		respondError(w, http.StatusNotFound, err.Error())
-		return
-	}
-
-	var req AddEventRequest
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		respondError(w, http.StatusBadRequest, fmt.Sprintf("invalid request body: %v", err))
-		return
-	}
-
-	if req.EventID == "" {
-		respondError(w, http.StatusBadRequest, "eventId cannot be empty")
-		return
-	}
-	if req.EventType == "" {
-		respondError(w, http.StatusBadRequest, "eventType cannot be empty")
-		return
-	}
-
-	payload, err := base64.StdEncoding.DecodeString(req.Payload)
-	if err != nil {
-		respondError(w, http.StatusBadRequest, fmt.Sprintf("invalid base64 payload: %v", err))
-		return
-	}
-
-	var metadata []logcodec.KeyValueEntry
-	if len(req.Metadata) > 0 {
-		metadata = make([]logcodec.KeyValueEntry, 0, len(req.Metadata))
-		for k, v := range req.Metadata {
-			metadata = append(metadata, logcodec.KeyValueEntry{
-				Key:   []byte(k),
-				Value: []byte(v),
-			})
-		}
-	}
-
-	event := &logcodec.EventEntry{
-		EventID:    req.EventID,
-		EventType:  req.EventType,
-		OccurredAt: req.OccurredAt,
-		Payload:    payload,
-		Metadata:   metadata,
-	}
-
-	if err := engine.AddEvent(event); err != nil {
-		respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to add event: %v", err))
-		return
-	}
-
-	respondJSON(w, http.StatusOK, AddEventResponse{Success: true})
 }
 
 type CheckpointResponse struct {

@@ -204,39 +204,6 @@ func TestEngine_RaftMode_RowOperations(t *testing.T) {
 	t.Logf("Applied index: %d, Applied term: %d", engine.AppliedIndex(), engine.AppliedTerm())
 }
 
-func TestEngine_RaftMode_EventOperations_NotSupported(t *testing.T) {
-	dir := t.TempDir()
-	namespace := "raft_event_test"
-
-	config := NewDefaultEngineConfig()
-	config.ArenaSize = 1 << 20
-	config.EventLogMode = true
-	engine, err := NewStorageEngine(dir, namespace, config)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		err := engine.close(context.Background())
-		assert.NoError(t, err)
-	})
-
-	r, logStore, cleanupRaft := setupSingleNodeRaft(t, dir, engine)
-	t.Cleanup(cleanupRaft)
-
-	applier := &raftApplierWrapper{raft: r, timeout: 5 * time.Second}
-	engine.SetRaftMode(true)
-	engine.SetRaftApplier(applier)
-	engine.SetPositionLookup(logStore.GetPosition)
-
-	event := &logcodec.EventEntry{
-		EventID:    "event-1",
-		EventType:  "user_created",
-		OccurredAt: uint64(time.Now().UnixNano()),
-		Payload:    []byte(`{"user_id":"123"}`),
-	}
-
-	err = engine.AddEvent(event)
-	require.ErrorIs(t, err, ErrNotSupportedInRaftMode, "events should not be supported in raft mode")
-}
-
 func TestEngine_RaftMode_DeleteOperations(t *testing.T) {
 	dir := t.TempDir()
 	namespace := "raft_delete_test"

@@ -800,71 +800,6 @@ func (m *mockedTree) RetrieveMetadata(key []byte) ([]byte, error) {
 
 func (m *mockedTree) BatchSetKV(keys, values [][]byte) error { panic("not implemented") }
 
-func TestAddEvent(t *testing.T) {
-	dir := t.TempDir()
-	namespace := "test_event_namespace"
-	config := NewDefaultEngineConfig()
-	config.ArenaSize = 1 << 20
-	config.EventLogMode = true
-
-	engine, err := NewStorageEngine(dir, namespace, config)
-	assert.NoError(t, err, "NewStorageEngine should not error")
-	t.Cleanup(func() {
-		err := engine.close(context.Background())
-		assert.NoError(t, err, "storage engine close should not error")
-	})
-
-	event := &logcodec.EventEntry{
-		EventID:    "event-1",
-		EventType:  "test-type",
-		OccurredAt: uint64(time.Now().UnixNano()),
-		Payload:    []byte("test-payload"),
-		Metadata: []logcodec.KeyValueEntry{
-			{Key: []byte("meta-key"), Value: []byte("meta-val")},
-		},
-	}
-
-	err = engine.AddEvent(event)
-	assert.NoError(t, err, "AddEvent should not error")
-
-	reader, err := engine.NewReader()
-	assert.NoError(t, err)
-
-	found := false
-	for {
-		data, _, err := reader.Next()
-		if err == io.EOF {
-			break
-		}
-		assert.NoError(t, err)
-
-		record := logrecord.GetRootAsLogRecord(data, 0)
-		if record.EntryType() == logrecord.LogEntryTypeEvent {
-			decodedEvent := logcodec.DeserializeEventEntry(logcodec.DeserializeFBRootLogRecord(record).Entries[0])
-			assert.Equal(t, event.EventID, decodedEvent.EventID)
-			assert.Equal(t, event.EventType, decodedEvent.EventType)
-			assert.Equal(t, event.Payload, decodedEvent.Payload)
-			found = true
-		}
-	}
-	assert.True(t, found, "Event should be found in WAL")
-
-	err = engine.close(context.Background())
-	assert.NoError(t, err)
-
-	engine, err = NewStorageEngine(dir, namespace, config)
-	assert.NoError(t, err)
-	defer engine.Close(context.Background())
-
-	assert.Equal(t, 1, engine.RecoveredWALCount(), "LSN recovery in EventLogMode")
-
-	event2 := &logcodec.EventEntry{
-		EventID:   "event-2",
-		EventType: "test-type",
-	}
-	err = engine.AddEvent(event2)
-	assert.NoError(t, err)
-}
 func (m *mockedTree) BatchDeleteKV(keys [][]byte) error { panic("not implemented") }
 func (m *mockedTree) BatchSetCells(rowKeys [][]byte, cols []map[string][]byte) error {
 	panic("not implemented")
@@ -1513,36 +1448,24 @@ func TestRecordKeyVersionsAndConflicts(t *testing.T) {
 }
 
 func TestNewWalCleanupPredicate(t *testing.T) {
-	t.Run("event_log_mode_uses_current_offset", func(t *testing.T) {
-		current := &wal.Offset{SegmentID: 5, Offset: 42}
-		predicate := newWalCleanupPredicate(true, func() *wal.Offset { return current }, func() (*internal.Metadata, error) {
-			return &internal.Metadata{Pos: &wal.Offset{SegmentID: 1}}, nil
-		})
-
-		assert.True(t, predicate(3), "segments behind current offset should be deletable")
-		assert.False(t, predicate(6), "current or future segments should be kept")
-
-		predicateNoOffset := newWalCleanupPredicate(true, func() *wal.Offset { return nil }, func() (*internal.Metadata, error) {
-			return nil, nil
-		})
-		assert.False(t, predicateNoOffset(1), "nil current offset should not delete")
-	})
-
-	t.Run("normal_mode_uses_checkpoint", func(t *testing.T) {
+	t.Run("uses_checkpoint", func(t *testing.T) {
 		checkpoint := &internal.Metadata{Pos: &wal.Offset{SegmentID: 4, Offset: 10}}
-		predicate := newWalCleanupPredicate(false, func() *wal.Offset {
-			return &wal.Offset{SegmentID: 99}
-		}, func() (*internal.Metadata, error) {
+		predicate := newWalCleanupPredicate(func() (*internal.Metadata, error) {
 			return checkpoint, nil
 		})
 
 		assert.True(t, predicate(2), "segments behind checkpoint should be deletable")
 		assert.False(t, predicate(4), "checkpoint segment should be retained")
 
-		predicateErr := newWalCleanupPredicate(false, func() *wal.Offset { return nil }, func() (*internal.Metadata, error) {
+		predicateErr := newWalCleanupPredicate(func() (*internal.Metadata, error) {
 			return nil, assert.AnError
 		})
 		assert.False(t, predicateErr(1), "errors fetching checkpoint should keep segments")
+
+		predicateNil := newWalCleanupPredicate(func() (*internal.Metadata, error) {
+			return nil, nil
+		})
+		assert.False(t, predicateNil(1), "nil checkpoint should keep segments")
 	})
 }
 

@@ -40,8 +40,6 @@ var (
 	lobSurface = map[string]string{"surface": "client", "op": "get", "entry": "lob"}
 
 	snapshotSurface = map[string]string{"surface": "client", "op": "create", "entry": "snapshot"}
-
-	eventPutSurface = map[string]string{"surface": "client", "op": "put", "entry": "event"}
 )
 
 var (
@@ -67,19 +65,6 @@ const (
 	metaDelete         = byte(logrecord.LogOperationTypeDelete)
 	metaDeleteRowByKey = byte(logrecord.LogOperationTypeDeleteRowByKey)
 )
-
-// validateWriteOperation checks if the write operation is allowed based on engine mode.
-// In EventLogMode: only events are allowed, KV/Row/Txn operations are rejected.
-// In normal mode: events are not allowed, only KV/Row/Txn operations are accepted.
-func (e *Engine) validateWriteOperation(isEvent bool) error {
-	if e.config.EventLogMode == isEvent {
-		return nil
-	}
-	if e.config.EventLogMode {
-		return ErrEventLogModeViolation
-	}
-	return ErrEventNotAllowed
-}
 
 // Offset represents the offset in the wal.
 type Offset = wal.Offset
@@ -267,9 +252,6 @@ func (e *Engine) PutKV(key, value []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	if err := e.validateWriteOperation(false); err != nil {
-		return err
-	}
 
 	key = keycodec.KeyKV(key)
 
@@ -282,33 +264,10 @@ func (e *Engine) PutKV(key, value []byte) error {
 	return e.persistKeyValue([][]byte{key}, [][]byte{value}, logrecord.LogOperationTypeInsert)
 }
 
-// AddEvent adds an event to the WAL.
-// Events are not stored in the MemTable or BTreeStore.
-// Only allowed when EventLogMode is enabled.
-func (e *Engine) AddEvent(event *logcodec.EventEntry) error {
-	if e.shutdown.Load() {
-		return ErrInCloseProcess
-	}
-	if err := e.validateWriteOperation(true); err != nil {
-		return err
-	}
-
-	eventScope := e.taggedScope.Tagged(map[string]string{"surface": "client", "op": "add", "entry": "event"})
-	eventScope.Counter(mRequestsTotal).Inc(1)
-
-	start := eventScope.Timer(mRequestLatencySeconds).Start()
-	defer start.Stop()
-
-	return e.persistEvent(event)
-}
-
 // BatchPutKV insert the associated Key Value Pair.
 func (e *Engine) BatchPutKV(key, value [][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
-	}
-	if err := e.validateWriteOperation(false); err != nil {
-		return err
 	}
 
 	for i := range key {
@@ -329,9 +288,6 @@ func (e *Engine) DeleteKV(key []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	if err := e.validateWriteOperation(false); err != nil {
-		return err
-	}
 
 	key = keycodec.KeyKV(key)
 
@@ -348,9 +304,6 @@ func (e *Engine) DeleteKV(key []byte) error {
 func (e *Engine) BatchDeleteKV(keys [][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
-	}
-	if err := e.validateWriteOperation(false); err != nil {
-		return err
 	}
 
 	for i := range keys {
@@ -519,10 +472,6 @@ func (e *Engine) PutColumnsForRow(rowKey []byte, columnEntries map[string][]byte
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	if err := e.validateWriteOperation(false); err != nil {
-		return err
-	}
-
 	rowKey = keycodec.RowKey(rowKey)
 	rowSetScope := e.taggedScope.Tagged(wideColumnPutSurface)
 	rowSetScope.Counter(mRequestsTotal).Inc(1)
@@ -537,9 +486,6 @@ func (e *Engine) PutColumnsForRow(rowKey []byte, columnEntries map[string][]byte
 func (e *Engine) PutColumnsForRows(rowKeys [][]byte, columnEntriesPerRow []map[string][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
-	}
-	if err := e.validateWriteOperation(false); err != nil {
-		return err
 	}
 
 	for i := range rowKeys {
@@ -560,9 +506,6 @@ func (e *Engine) DeleteColumnsForRow(rowKey []byte, columnEntries map[string][]b
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	if err := e.validateWriteOperation(false); err != nil {
-		return err
-	}
 
 	rowKey = keycodec.RowKey(rowKey)
 
@@ -581,9 +524,6 @@ func (e *Engine) DeleteColumnsForRow(rowKey []byte, columnEntries map[string][]b
 func (e *Engine) DeleteColumnsForRows(rowKeys [][]byte, columnEntries []map[string][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
-	}
-	if err := e.validateWriteOperation(false); err != nil {
-		return err
 	}
 
 	for i := range rowKeys {
@@ -604,9 +544,6 @@ func (e *Engine) DeleteRow(rowKey []byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
 	}
-	if err := e.validateWriteOperation(false); err != nil {
-		return err
-	}
 
 	rowKey = keycodec.RowKey(rowKey)
 
@@ -622,9 +559,6 @@ func (e *Engine) DeleteRow(rowKey []byte) error {
 func (e *Engine) BatchDeleteRows(rowKeys [][]byte) error {
 	if e.shutdown.Load() {
 		return ErrInCloseProcess
-	}
-	if err := e.validateWriteOperation(false); err != nil {
-		return err
 	}
 
 	for i := range rowKeys {

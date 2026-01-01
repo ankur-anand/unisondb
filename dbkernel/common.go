@@ -22,17 +22,12 @@ var (
 	ErrRecordCorrupted = kvdrivers.ErrRecordCorrupted
 	ErrUseGetColumnAPI = kvdrivers.ErrUseGetColumnAPI
 
-	ErrInCloseProcess   = errors.New("in-Close process")
-	ErrDatabaseDirInUse = errors.New("pid.lock is held by another process")
-	ErrInternalError    = errors.New("internal error")
-	ErrMisMatchKeyType  = errors.New("mismatch key type with existing value")
-	ErrNoNewData        = wal.ErrNoNewData
-	ErrEngineReadOnly   = errors.New("engine is in read-only mode (relayer): write operations are not allowed")
-	// ErrEventLogModeViolation is returned when a non-event operation is attempted in event log mode.
-	ErrEventLogModeViolation = errors.New("operation not allowed: engine is in event log mode, only events are accepted")
-	// ErrEventNotAllowed is returned when an event operation is attempted in normal (non-event-log) mode.
-	ErrEventNotAllowed = errors.New("operation not allowed: events require event log mode to be enabled")
-	// ErrNotSupportedInRaftMode is returned when an operation is not supported in Raft mode.
+	ErrInCloseProcess         = errors.New("in-Close process")
+	ErrDatabaseDirInUse       = errors.New("pid.lock is held by another process")
+	ErrInternalError          = errors.New("internal error")
+	ErrMisMatchKeyType        = errors.New("mismatch key type with existing value")
+	ErrNoNewData              = wal.ErrNoNewData
+	ErrEngineReadOnly         = errors.New("engine is in read-only mode (relayer): write operations are not allowed")
 	ErrNotSupportedInRaftMode = errors.New("operation not supported in raft mode")
 )
 
@@ -59,10 +54,6 @@ type EngineConfig struct {
 	DisableEntryTypeCheck bool                        `toml:"disable_entry_type_check"`
 	ChangeNotifier        ChangeNotifier              `toml:"change_notifier"`
 	ReadOnly              bool                        `toml:"read_only"`
-
-	// EventLogMode when enabled, the engine only accepts events (via AddEvent).
-	// KV/Row writes and transactions are rejected with ErrEventLogModeViolation.
-	EventLogMode bool `toml:"event_log_mode"`
 }
 
 // WriteNotifyCoalescingConfig controls the coalescing of notifications
