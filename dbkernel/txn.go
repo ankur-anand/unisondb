@@ -62,8 +62,6 @@ func (e *Engine) validateTxnStart(txnType logrecord.LogOperationType, valueType 
 		return ErrEngineReadOnly
 	case e.raftState.raftMode:
 		return ErrNotSupportedInRaftMode
-	case e.config.EventLogMode:
-		return ErrEventLogModeViolation
 	case txnType == logrecord.LogOperationTypeNoOperation:
 		return ErrUnsupportedTxnType
 	case txnType == logrecord.LogOperationTypeDelete && valueType == logrecord.LogEntryTypeChunked:
@@ -73,7 +71,7 @@ func (e *Engine) validateTxnStart(txnType logrecord.LogOperationType, valueType 
 }
 
 // NewTxn returns a new initialized batch Txn.
-// Transactions are not allowed in EventLogMode or RaftMode.
+// Transactions are not allowed in RaftMode.
 func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.LogEntryType) (*Txn, error) {
 	if err := e.validateTxnStart(txnType, valueType); err != nil {
 		return nil, err

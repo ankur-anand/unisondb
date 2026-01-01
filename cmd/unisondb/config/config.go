@@ -50,9 +50,6 @@ type StorageConfig struct {
 	WalFsyncInterval      string           `toml:"wal_fsync_interval"`
 	WALCleanupConfig      WALCleanupConfig `toml:"wal_cleanup_config"`
 	DisableEntryTypeCheck bool             `toml:"disable_entry_type_check"`
-	// EventLogMode when enabled, the engine only accepts events (via AddEvent).
-	// KV/Row writes and transactions are rejected.
-	EventLogMode bool `toml:"event_log_mode"`
 }
 
 type WALCleanupConfig struct {

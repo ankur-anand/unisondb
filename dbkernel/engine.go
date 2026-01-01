@@ -230,38 +230,22 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		return nil, err
 	}
 
-	if conf.EventLogMode {
-		// EventLogMode, scan WAL to restore LSN/offset but we don't replay to BTree
-		if err := engine.restoreLSNFromWAL(); err != nil {
-			return nil, err
-		}
-	} else {
-		if err := engine.recoverWAL(); err != nil {
-			return nil, err
-		}
+	if err := engine.recoverWAL(); err != nil {
+		return nil, err
 	}
 
 	engine.appendNotify = make(chan struct{})
 	if conf.WalConfig.AutoCleanup {
-		predicate := newWalCleanupPredicate(conf.EventLogMode, engine.CurrentOffset, engine.GetWalCheckPoint)
+		predicate := newWalCleanupPredicate(engine.GetWalCheckPoint)
 		engine.walIO.RunWalCleanup(ctx, conf.WalConfig.CleanupInterval, predicate)
 	}
 
 	return engine, nil
 }
 
-func newWalCleanupPredicate(eventLogMode bool, currentOffset func() *wal.Offset, checkpoint func() (*internal.Metadata, error)) func(segID wal.SegID) bool {
+func newWalCleanupPredicate(checkpoint func() (*internal.Metadata, error)) func(segID wal.SegID) bool {
 	return func(segID wal.SegID) bool {
-		if eventLogMode {
-			currOff := currentOffset()
-			if currOff == nil {
-				return false
-			}
-			// EventLogMode, events don't need BTree persistence,
-			// so we can safely delete segments behind currentOffset
-			return currOff.SegmentID > segID
-		}
-		// normal mode, only delete segments behind the checkpoint
+		// only delete segments behind the checkpoint
 		// to ensure data is safely persisted to BTree
 		checkpointMeta, err := checkpoint()
 		if err != nil || checkpointMeta == nil {
@@ -533,47 +517,6 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 	}
 
 	e.recordKeyVersions(keys, index)
-	e.writeOffset(offset)
-	return nil
-}
-
-// persistEvent writes an event to the WAL.
-func (e *Engine) persistEvent(event *logcodec.EventEntry) error {
-	if e.readOnly {
-		return ErrEngineReadOnly
-	}
-
-	encodedEvent := logcodec.SerializeEventEntry(event)
-	hintSize := len(encodedEvent) + 512
-	checksum := crc32.ChecksumIEEE(encodedEvent)
-
-	if e.raftState.raftMode {
-		return ErrNotSupportedInRaftMode
-	}
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	index := e.writeSeenCounter.Add(1)
-	hlc := HLCNow()
-
-	record := logcodec.LogRecord{
-		LSN:           index,
-		HLC:           hlc,
-		OperationType: logrecord.LogOperationTypeInsert,
-		TxnState:      logrecord.TransactionStateNone,
-		EntryType:     logrecord.LogEntryTypeEvent,
-		Entries:       [][]byte{encodedEvent},
-		CRC32Checksum: checksum,
-	}
-
-	encoded := record.FBEncode(hintSize)
-
-	offset, err := e.walIO.Append(encoded, index)
-	if err != nil {
-		return err
-	}
-
 	e.writeOffset(offset)
 	return nil
 }
@@ -1223,32 +1166,4 @@ func waitWithCancel(wg *sync.WaitGroup, ctx context.Context) bool {
 	case <-ctx.Done():
 		return false
 	}
-}
-
-// restoreLSNFromWAL restores LSN counter and offset from WAL segment metadata in EventLogMode.
-func (e *Engine) restoreLSNFromWAL() error {
-	lastLSN, lastOffset, count, ok := e.walIO.CurrentSegmentInfo()
-
-	if ok {
-		e.writeSeenCounter.Store(lastLSN)
-		e.opsFlushedCounter.Store(lastLSN)
-
-		if lastOffset != nil {
-			e.currentOffset.Store(lastOffset)
-		}
-	}
-
-	slog.Info("[dbkernel]",
-		slog.String("message", "Restored LSN from WAL (EventLogMode)"),
-		slog.Group("engine",
-			slog.String("namespace", e.namespace),
-		),
-		slog.Group("restore",
-			slog.Uint64("last_lsn", lastLSN),
-			slog.Int64("entry_count", count),
-		),
-	)
-
-	e.recoveredEntriesCount = int(count)
-	return nil
 }
