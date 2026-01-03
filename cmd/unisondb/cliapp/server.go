@@ -30,35 +30,33 @@ import (
 )
 
 var (
-	modeReplicator = "replicator"
-	modeRelayer    = "relayer"
-	modeFuzzer     = "fuzzer"
+	modeReplica = "replica"
+	modeRelay   = "relay"
+	modeFuzz    = "fuzz"
 )
 
 type Server struct {
-	mode               string
-	env                string
-	relayerGRPCEnabled bool
-	cfg                config.Config
-	engines            map[string]*dbkernel.Engine
-	storageConfig      *dbkernel.EngineConfig
-	pl                 *slog.Logger
-	fuzzStats          *fuzzer.FuzzStats
-	notifiers          map[string]notifier.Notifier
-	services           []Service
-	deps               *Dependencies
-	PortsFile          string
+	mode          string
+	env           string
+	cfg           config.Config
+	engines       map[string]*dbkernel.Engine
+	storageConfig *dbkernel.EngineConfig
+	pl            *slog.Logger
+	fuzzStats     *fuzzer.FuzzStats
+	notifiers     map[string]notifier.Notifier
+	services      []Service
+	deps          *Dependencies
+	PortsFile     string
 
 	// callbacks when shutdown.
 	DeferCallback []func(ctx context.Context)
 }
 
 // InitFromCLI initializes the server from CLI arguments.
-func (ms *Server) InitFromCLI(cfgPath, env, mode string, relayerGRPCEnabled bool) func(ctx context.Context) error {
+func (ms *Server) InitFromCLI(cfgPath, env, mode string) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
 		ms.mode = mode
 		ms.env = env
-		ms.relayerGRPCEnabled = relayerGRPCEnabled
 
 		cfgBytes, err := os.ReadFile(cfgPath)
 		if err != nil {
@@ -233,7 +231,7 @@ func (ms *Server) SetupStorageConfig(ctx context.Context) error {
 	return ms.setupWalCleanup(ctx)
 }
 
-func (ms *Server) setupWalCleanup(ctx context.Context) error {
+func (ms *Server) setupWalCleanup(_ context.Context) error {
 	if ms.cfg.Storage.WALCleanupConfig.Enabled {
 		cleanUpDur, err := time.ParseDuration(ms.cfg.Storage.WALCleanupConfig.Interval)
 		if err != nil {
@@ -323,7 +321,7 @@ func (ms *Server) SetupStorage(ctx context.Context) error {
 	for _, namespace := range ms.cfg.Storage.Namespaces {
 		engineConfig := *ms.storageConfig
 
-		if ms.mode == modeRelayer {
+		if ms.mode == modeReplica || ms.mode == modeRelay {
 			engineConfig.ReadOnly = true
 		}
 

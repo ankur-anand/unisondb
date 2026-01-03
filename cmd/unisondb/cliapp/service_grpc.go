@@ -43,9 +43,9 @@ func (g *GRPCService) Name() string {
 func (g *GRPCService) Setup(ctx context.Context, deps *Dependencies) error {
 	g.ready = make(chan struct{})
 
-	// skip in relayer mode unless enabled
-	if deps.Mode == modeRelayer && !deps.RelayerGRPCEnabled {
-		slog.Info("[unisondb.cliapp] gRPC server disabled in relayer mode by flag/config")
+	// replica mode doesn't serve downstream, so no gRPC server needed
+	if deps.Mode == modeReplica {
+		slog.Info("[unisondb.cliapp] gRPC server disabled in replica mode (no downstream serving)")
 		g.enabled = false
 		close(g.ready)
 		return nil
