@@ -240,6 +240,13 @@ func WithActiveTail(enabled bool) ReaderOption {
 	}
 }
 
+// WithDecoder sets a decoder that transforms raw WAL bytes before returning.
+func WithDecoder(decoder walfs.RecordDecoder) ReaderOption {
+	return func(r *Reader) {
+		r.decoder = decoder
+	}
+}
+
 // Reader provides a forward-only iterator over WAL records and is not concurrent safe.
 type Reader struct {
 	appendReader   *walfs.Reader
@@ -248,6 +255,7 @@ type Reader struct {
 	taggedScope    umetrics.Scope
 	withActiveTail bool
 	readCount      int
+	decoder        walfs.RecordDecoder
 }
 
 // Next returns the next chunk data and its position in the WAL.
@@ -311,14 +319,20 @@ func (r *Reader) Close() {
 // access WAL logs for replication, recovery, or log processing.
 func (w *WalIO) NewReader(options ...ReaderOption) (*Reader, error) {
 	reader := &Reader{
-		appendReader: w.appendLog.NewReader(),
-		namespace:    w.namespace,
-		taggedScope:  w.taggedScope,
+		namespace:   w.namespace,
+		taggedScope: w.taggedScope,
 	}
 
 	for _, opt := range options {
 		opt(reader)
 	}
+
+	var walfsOpts []walfs.ReaderOption
+	if reader.decoder != nil {
+		walfsOpts = append(walfsOpts, walfs.WithDecoder(reader.decoder))
+	}
+
+	reader.appendReader = w.appendLog.NewReader(walfsOpts...)
 
 	w.taggedScope.Counter(metricsReaderCreatedTotal).Inc(1)
 	return reader, nil
@@ -326,19 +340,25 @@ func (w *WalIO) NewReader(options ...ReaderOption) (*Reader, error) {
 
 // NewReaderWithStart returns a new instance of WIOReader from the provided Offset.
 func (w *WalIO) NewReaderWithStart(offset *Offset, options ...ReaderOption) (*Reader, error) {
-	underlyingReader, err := w.appendLog.NewReaderWithStart(*offset)
-	if err != nil {
-		return nil, err
-	}
 	reader := &Reader{
-		appendReader: underlyingReader,
-		namespace:    w.namespace,
-		taggedScope:  w.taggedScope,
+		namespace:   w.namespace,
+		taggedScope: w.taggedScope,
 	}
 
 	for _, opt := range options {
 		opt(reader)
 	}
+
+	var walfsOpts []walfs.ReaderOption
+	if reader.decoder != nil {
+		walfsOpts = append(walfsOpts, walfs.WithDecoder(reader.decoder))
+	}
+
+	underlyingReader, err := w.appendLog.NewReaderWithStart(*offset, walfsOpts...)
+	if err != nil {
+		return nil, err
+	}
+	reader.appendReader = underlyingReader
 
 	w.taggedScope.Counter(metricsReaderCreatedTotal).Inc(1)
 	return reader, nil
