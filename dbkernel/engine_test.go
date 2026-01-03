@@ -31,7 +31,7 @@ import (
 func TestStorageEngine_Suite(t *testing.T) {
 	dir := t.TempDir()
 	namespace := "testnamespace"
-	callbackSignal := make(chan struct{}, 1)
+	callbackSignal := make(chan struct{}, 10)
 	callback := func() {
 		select {
 		case callbackSignal <- struct{}{}:
@@ -71,10 +71,12 @@ func TestStorageEngine_Suite(t *testing.T) {
 
 	t.Run("handle_mem_table_flush", func(t *testing.T) {
 		engine.rotateMemTable()
-		select {
-		case <-callbackSignal:
-		case <-time.After(5 * time.Second):
-			t.Errorf("timed out waiting for memtableRotateCallback signal")
+		for i := range 2 {
+			select {
+			case <-callbackSignal:
+			case <-time.After(5 * time.Second):
+				t.Errorf("timed out waiting for callback signal %d", i+1)
+			}
 		}
 	})
 
@@ -98,10 +100,12 @@ func TestStorageEngine_Suite(t *testing.T) {
 			assert.NoError(t, err, "persistKeyValue should not error")
 		}
 
-		select {
-		case <-callbackSignal:
-		case <-time.After(5 * time.Second):
-			t.Errorf("timed out waiting for memtableRotateCallback signal for rotation")
+		for i := range 2 {
+			select {
+			case <-callbackSignal:
+			case <-time.After(5 * time.Second):
+				t.Errorf("timed out waiting for callback signal %d", i+1)
+			}
 		}
 
 		assert.Equal(t, uint64(1100), engine.writeSeenCounter.Load(), "expected writeSeenCounter counter to be 100")
