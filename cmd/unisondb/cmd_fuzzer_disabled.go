@@ -22,6 +22,6 @@ var replicatorCommand = &cli.Command{
 	Usage: "Run in replicator mode",
 	Action: func(c *cli.Context) error {
 		return Run(c.Context, c.String("config"), c.String("env"),
-			"replicator", c.Bool("grpc"))
+			"replicator", c.Bool("grpc"), c.String("ports-file"))
 	},
 }

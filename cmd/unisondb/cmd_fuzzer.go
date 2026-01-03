@@ -14,7 +14,7 @@ var fuzzerCommand = &cli.Command{
 	Usage: "Run in fuzzer mode, (should only be used for testing)",
 	Action: func(c *cli.Context) error {
 		return Run(c.Context, c.String("config"), c.String("env"),
-			"fuzzer", c.Bool("grpc"))
+			"fuzzer", c.Bool("grpc"), c.String("ports-file"))
 	},
 }
 
