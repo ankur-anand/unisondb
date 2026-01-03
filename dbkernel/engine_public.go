@@ -694,10 +694,22 @@ func (e *Engine) Close(ctx context.Context) error {
 
 type Reader = wal.Reader
 
+// raftDecoderOption returns a decoder option if the engine is in Raft mode.
+func (e *Engine) raftDecoderOption() wal.ReaderOption {
+	if e.IsRaftMode() {
+		return wal.WithDecoder(wal.NewRaftWALDecoder(nil))
+	}
+	return nil
+}
+
 // NewReader return a reader that reads from the beginning, until EOF is encountered.
 // It returns io.EOF when it reaches end of file.
 func (e *Engine) NewReader() (*Reader, error) {
-	return e.walIO.NewReader()
+	var opts []wal.ReaderOption
+	if decoder := e.raftDecoderOption(); decoder != nil {
+		opts = append(opts, decoder)
+	}
+	return e.walIO.NewReader(opts...)
 }
 
 // NewReaderWithStart return a reader that reads from provided offset, until EOF is encountered.
@@ -728,7 +740,11 @@ func (e *Engine) NewReaderWithStart(startPos *Offset) (r *Reader, err error) {
 		return e.NewReader()
 	}
 
-	return e.walIO.NewReaderWithStart(startPos)
+	var opts []wal.ReaderOption
+	if decoder := e.raftDecoderOption(); decoder != nil {
+		opts = append(opts, decoder)
+	}
+	return e.walIO.NewReaderWithStart(startPos, opts...)
 }
 
 // NewReaderWithTail returns a reader that starts from the provided offset,
@@ -736,10 +752,14 @@ func (e *Engine) NewReaderWithStart(startPos *Offset) (r *Reader, err error) {
 // It returns ErrNoNewData when no new entries are available *yet*,
 // instead of io.EOF.
 func (e *Engine) NewReaderWithTail(startPos *Offset) (*Reader, error) {
-	if startPos == nil {
-		return e.walIO.NewReader(wal.WithActiveTail(true))
+	opts := []wal.ReaderOption{wal.WithActiveTail(true)}
+	if decoder := e.raftDecoderOption(); decoder != nil {
+		opts = append(opts, decoder)
 	}
-	return e.walIO.NewReaderWithStart(startPos, wal.WithActiveTail(true))
+	if startPos == nil {
+		return e.walIO.NewReader(opts...)
+	}
+	return e.walIO.NewReaderWithStart(startPos, opts...)
 }
 
 // GetLOB returns the full LOB value (joined).
