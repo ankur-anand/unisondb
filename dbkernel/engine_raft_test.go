@@ -1035,3 +1035,69 @@ func TestEngine_RaftMode_WALCommitCallback_MonotonicPositions(t *testing.T) {
 	}
 
 }
+
+func TestEngine_RaftMode_ReaderUsesDecoder(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "raft_reader_decoder_test"
+
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+	engine, err := NewStorageEngine(dir, namespace, config)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.close(context.Background())
+		assert.NoError(t, err)
+	})
+
+	r, logStore, cleanupRaft := setupSingleNodeRaft(t, dir, engine)
+	t.Cleanup(cleanupRaft)
+
+	applier := &raftApplierWrapper{raft: r, timeout: 5 * time.Second}
+	engine.SetRaftMode(true)
+	engine.SetRaftApplier(applier)
+	engine.SetPositionLookup(logStore.GetPosition)
+	engine.SetRaftWAL(logStore.WAL())
+
+	numEntries := 5
+	for i := 0; i < numEntries; i++ {
+		key := []byte(fmt.Sprintf("key-%d", i))
+		value := []byte(fmt.Sprintf("value-%d", i))
+		err = engine.PutKV(key, value)
+		require.NoError(t, err)
+	}
+
+	reader, err := engine.NewReader()
+	require.NoError(t, err)
+	defer reader.Close()
+
+	readCount := 0
+	commandCount := 0
+	raftInternalCount := 0
+
+	for {
+		data, pos, err := reader.Next()
+		if errors.Is(err, io.EOF) || errors.Is(err, walfs.ErrNoNewData) {
+			break
+		}
+		require.NoError(t, err)
+		assert.NotNil(t, data)
+		assert.Greater(t, pos.SegmentID, walfs.SegmentID(0))
+
+		record := logrecord.GetRootAsLogRecord(data, 0)
+		require.NotNil(t, record)
+
+		opType := record.OperationType()
+		switch opType {
+		case logrecord.LogOperationTypeRaftInternal:
+			raftInternalCount++
+		case logrecord.LogOperationTypeInsert:
+			commandCount++
+		}
+
+		readCount++
+	}
+
+	assert.GreaterOrEqual(t, readCount, numEntries)
+	assert.Equal(t, numEntries, commandCount)
+	assert.Greater(t, raftInternalCount, 0, "should have RaftInternal entries for Raft noop/config")
+}

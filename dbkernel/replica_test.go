@@ -724,3 +724,201 @@ func requireSegmentFirstIndex(t *testing.T, walog *walfs.WALog, expected uint64)
 
 	t.Fatalf("no segment persisted FirstLogIndex %d", expected)
 }
+
+func TestReplicaWALHandler_RaftInternalRecords(t *testing.T) {
+	baseDir := t.TempDir()
+	replicatorNameSpace := "test_raft_internal_replicator"
+	replicaDir := filepath.Join(baseDir, "replica")
+
+	replicaEngine, err := dbkernel.NewStorageEngine(replicaDir, replicatorNameSpace, dbkernel.NewDefaultEngineConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err := replicaEngine.Close(context.Background())
+		if err != nil {
+			t.Errorf("Failed to close replica: %v", err)
+		}
+	})
+
+	replicator := dbkernel.NewReplicaWALHandler(replicaEngine)
+
+	t.Run("raft_internal_record_applies_without_error", func(t *testing.T) {
+		record := logcodec.LogRecord{
+			LSN:           1,
+			HLC:           uint64(dbkernel.HLCNow()),
+			OperationType: logrecord.LogOperationTypeRaftInternal,
+			EntryType:     logrecord.LogEntryTypeKV,
+			TxnState:      logrecord.TransactionStateNone,
+		}
+
+		encoded := record.FBEncode(64)
+		expectedOffset := dbkernel.Offset{
+			SegmentID: 1,
+			Offset:    int64(len(encoded)),
+		}
+
+		err := replicator.ApplyRecord(encoded, expectedOffset)
+		require.NoError(t, err, "RaftInternal record should apply without error")
+		assert.Equal(t, uint64(1), replicaEngine.OpsReceivedCount(),
+			"OpsReceivedCount should be incremented for RaftInternal")
+	})
+
+	t.Run("raft_internal_does_not_write_data_to_store", func(t *testing.T) {
+		_, err := replicaEngine.GetKV([]byte("any-key"))
+		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound,
+			"RaftInternal should not write any KV data")
+	})
+
+	t.Run("raft_internal_via_leader_follower_pattern", func(t *testing.T) {
+		leaderDir := filepath.Join(baseDir, "leader_raft_internal")
+		followerDir := filepath.Join(baseDir, "follower_raft_internal")
+
+		leader, err := dbkernel.NewStorageEngine(leaderDir, "leader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		defer leader.Close(context.Background())
+
+		follower, err := dbkernel.NewStorageEngine(followerDir, "follower", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		defer follower.Close(context.Background())
+
+		followerHandler := dbkernel.NewReplicaWALHandler(follower)
+		key1 := "leader_key_1"
+		val1 := "leader_value_1"
+		require.NoError(t, leader.PutKV([]byte(key1), []byte(val1)))
+
+		key2 := "leader_key_2"
+		val2 := "leader_value_2"
+		require.NoError(t, leader.PutKV([]byte(key2), []byte(val2)))
+
+		reader, err := leader.NewReader()
+		require.NoError(t, err)
+		defer reader.Close()
+
+		recordCount := 0
+		for {
+			walEncoded, offset, err := reader.Next()
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+
+			err = followerHandler.ApplyRecord(walEncoded, offset)
+			require.NoError(t, err)
+			recordCount++
+		}
+
+		assert.Equal(t, 2, recordCount, "should have replicated 2 records")
+		assert.Equal(t, leader.OpsReceivedCount(), follower.OpsReceivedCount(),
+			"leader and follower should have same ops count")
+
+		gotVal1, err := follower.GetKV([]byte(key1))
+		require.NoError(t, err)
+		assert.Equal(t, []byte(val1), gotVal1)
+
+		gotVal2, err := follower.GetKV([]byte(key2))
+		require.NoError(t, err)
+		assert.Equal(t, []byte(val2), gotVal2)
+	})
+
+	t.Run("replica_wal_has_no_holes_with_raft_internal", func(t *testing.T) {
+		leaderDir := filepath.Join(baseDir, "leader_no_holes")
+		followerDir := filepath.Join(baseDir, "follower_no_holes")
+
+		leader, err := dbkernel.NewStorageEngine(leaderDir, "leader_nh", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		defer leader.Close(context.Background())
+
+		follower, err := dbkernel.NewStorageEngine(followerDir, "follower_nh", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		defer follower.Close(context.Background())
+
+		followerHandler := dbkernel.NewReplicaWALHandler(follower)
+
+		expectedLSNs := make(map[uint64]bool)
+		for i := 0; i < 10; i++ {
+			key := fmt.Sprintf("key_%d", i)
+			val := fmt.Sprintf("value_%d", i)
+			require.NoError(t, leader.PutKV([]byte(key), []byte(val)))
+		}
+
+		leaderReader, err := leader.NewReader()
+		require.NoError(t, err)
+		defer leaderReader.Close()
+
+		for {
+			walEncoded, offset, err := leaderReader.Next()
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+
+			fb := logrecord.GetRootAsLogRecord(walEncoded, 0)
+			expectedLSNs[fb.Lsn()] = true
+
+			err = followerHandler.ApplyRecord(walEncoded, offset)
+			require.NoError(t, err)
+		}
+
+		assert.Equal(t, 10, len(expectedLSNs), "should have 10 unique LSNs")
+
+		followerReader, err := follower.NewReader()
+		require.NoError(t, err)
+		defer followerReader.Close()
+
+		var actualLSNs []uint64
+		for {
+			walEncoded, _, err := followerReader.Next()
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+
+			fb := logrecord.GetRootAsLogRecord(walEncoded, 0)
+			actualLSNs = append(actualLSNs, fb.Lsn())
+		}
+
+		assert.Equal(t, len(expectedLSNs), len(actualLSNs),
+			"follower WAL should have same number of records as leader")
+
+		for i, lsn := range actualLSNs {
+			expectedLSN := uint64(i + 1)
+			assert.Equal(t, expectedLSN, lsn,
+				"LSN at position %d should be %d, got %d (no holes allowed)", i, expectedLSN, lsn)
+		}
+
+		for _, lsn := range actualLSNs {
+			assert.True(t, expectedLSNs[lsn], "LSN %d should be in expected set", lsn)
+		}
+	})
+
+	t.Run("raft_internal_then_kv_maintains_lsn_sequence", func(t *testing.T) {
+		reader, err := replicaEngine.NewReader()
+		require.NoError(t, err)
+		defer reader.Close()
+
+		var lsns []uint64
+		var opTypes []logrecord.LogOperationType
+		for {
+			walEncoded, _, err := reader.Next()
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+
+			fb := logrecord.GetRootAsLogRecord(walEncoded, 0)
+			lsns = append(lsns, fb.Lsn())
+			opTypes = append(opTypes, fb.OperationType())
+		}
+
+		require.GreaterOrEqual(t, len(lsns), 1, "should have at least 1 record")
+
+		assert.Equal(t, uint64(1), lsns[0], "first record should have LSN 1")
+		assert.Equal(t, logrecord.LogOperationTypeRaftInternal, opTypes[0],
+			"first record should be RaftInternal")
+
+		for i, lsn := range lsns {
+			expectedLSN := uint64(i + 1)
+			assert.Equal(t, expectedLSN, lsn,
+				"LSN at position %d should be %d, got %d (no holes)", i, expectedLSN, lsn)
+		}
+	})
+}

@@ -96,6 +96,19 @@ func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
 	return w, err
 }
 
+// WrapWAL creates a WalIO wrapper around an existing walfs.WALog.
+// This is used to wrap external WALs (like Raft log store's WAL) for reading.
+func WrapWAL(wal *walfs.WALog, namespace string) *WalIO {
+	taggedScope := umetrics.AutoScope().Tagged(map[string]string{
+		"namespace": namespace,
+	})
+	return &WalIO{
+		appendLog:   wal,
+		namespace:   namespace,
+		taggedScope: taggedScope,
+	}
+}
+
 // RunWalCleanup starts background cleanup routines for old WAL segments.
 func (w *WalIO) RunWalCleanup(ctx context.Context, interval time.Duration, predicate walfs.DeletionPredicate) {
 	go func() {
