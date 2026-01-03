@@ -1121,6 +1121,17 @@ func syncDir(dir string) error {
 	return df.Sync()
 }
 
+// ReaderOption configures a Reader.
+type ReaderOption func(*Reader)
+
+// WithDecoder sets a custom decoder for the reader.
+// When set, NextRecord() will use this decoder to convert raw bytes to decoded data.
+func WithDecoder(decoder RecordDecoder) ReaderOption {
+	return func(r *Reader) {
+		r.decoder = decoder
+	}
+}
+
 // Reader represents a high-level sequential reader over a WALog.
 // It reads across all available WAL segments in order, automatically
 // advancing from one segment to the next.
@@ -1132,18 +1143,26 @@ type Reader struct {
 	segmentIndex  int
 	currentReader *SegmentReader
 	startOffset   int64
+	decoder       RecordDecoder
 }
 
 // NewReader returns a new Reader that sequentially reads all segments in the WALog,
 // starting from the beginning (lowest SegmentID).
-func (wl *WALog) NewReader() *Reader {
+func (wl *WALog) NewReader(opts ...ReaderOption) *Reader {
 	segments := *wl.segmentSnapshot.Load()
 
-	return &Reader{
+	r := &Reader{
 		wal:           wl,
 		segments:      segments,
 		currentReader: nil,
+		decoder:       NoopDecoder{},
 	}
+
+	for _, opt := range opts {
+		opt(r)
+	}
+
+	return r
 }
 
 // Close closes all segment readers to release their references.
@@ -1192,7 +1211,11 @@ func (r *Reader) Next() ([]byte, RecordPosition, error) {
 		reader := r.currentReader
 		data, pos, err := reader.Next()
 		if err == nil {
-			return data, pos, nil
+			decoded, decErr := r.decoder.Decode(data)
+			if decErr != nil {
+				return nil, pos, decErr
+			}
+			return decoded, pos, nil
 		}
 		// the current segment is exhausted, moves to the next segment.
 		if errors.Is(err, io.EOF) {
@@ -1246,8 +1269,8 @@ func (r *Reader) LastRecordPosition() RecordPosition {
 
 // NewReaderAfter returns a reader that starts after the given RecordPosition.
 // It first creates a reader from that position, then skips one record.
-func (wl *WALog) NewReaderAfter(pos RecordPosition) (*Reader, error) {
-	reader, err := wl.NewReaderWithStart(pos)
+func (wl *WALog) NewReaderAfter(pos RecordPosition, opts ...ReaderOption) (*Reader, error) {
+	reader, err := wl.NewReaderWithStart(pos, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1259,9 +1282,9 @@ func (wl *WALog) NewReaderAfter(pos RecordPosition) (*Reader, error) {
 
 // NewReaderWithStart returns a new Reader that begins reading from the specified position.
 // If SegmentID is 0, the reader will begin from the very start of the WAL.
-func (wl *WALog) NewReaderWithStart(pos RecordPosition) (*Reader, error) {
+func (wl *WALog) NewReaderWithStart(pos RecordPosition, opts ...ReaderOption) (*Reader, error) {
 	if pos.SegmentID == 0 {
-		return wl.NewReader(), nil
+		return wl.NewReader(opts...), nil
 	}
 
 	segments := *wl.segmentSnapshot.Load()
@@ -1275,7 +1298,7 @@ func (wl *WALog) NewReaderWithStart(pos RecordPosition) (*Reader, error) {
 	for i := len(segments) - 1; i >= 0; i-- {
 		seg := segments[i]
 		if seg.ID() < pos.SegmentID {
-			// we’ve gone past the matching segment; stop
+			// we've gone past the matching segment; stop
 			break
 		}
 		if seg.ID() == pos.SegmentID {
@@ -1295,10 +1318,17 @@ func (wl *WALog) NewReaderWithStart(pos RecordPosition) (*Reader, error) {
 		return nil, ErrSegmentNotFound
 	}
 
-	return &Reader{
+	r := &Reader{
 		wal:           wl,
 		segments:      filtered,
 		startOffset:   startOffset,
 		currentReader: nil,
-	}, nil
+		decoder:       NoopDecoder{},
+	}
+
+	for _, opt := range opts {
+		opt(r)
+	}
+
+	return r, nil
 }
