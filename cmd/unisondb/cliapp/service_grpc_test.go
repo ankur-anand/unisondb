@@ -16,10 +16,9 @@ func TestGRPCService_Name(t *testing.T) {
 	assert.Equal(t, "grpc", svc.Name())
 }
 
-func TestGRPCService_Setup_DisabledInRelayerMode(t *testing.T) {
+func TestGRPCService_Setup_DisabledInReplicaMode(t *testing.T) {
 	deps := &Dependencies{
-		Mode:               "relayer",
-		RelayerGRPCEnabled: false,
+		Mode: "replica",
 		Config: config.Config{
 			Grpc: config.GrpcConfig{
 				ListenIP:      "127.0.0.1",
@@ -52,7 +51,7 @@ func TestGRPCService_Close_NilServer(t *testing.T) {
 
 func TestGRPCService_FullLifecycle(t *testing.T) {
 	deps := &Dependencies{
-		Mode: "replicator",
+		Mode: "server",
 		Env:  "dev",
 		Config: config.Config{
 			Grpc: config.GrpcConfig{

@@ -14,59 +14,40 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+// commonFlags are shared by all commands.
+var commonFlags = []cli.Flag{
+	&cli.StringFlag{
+		Name:    "config",
+		Aliases: []string{"c"},
+		Value:   "./config.toml",
+		Usage:   "Path to TOML config file",
+		EnvVars: []string{"UNISONDB_CONFIG"},
+	},
+	&cli.StringFlag{
+		Name:    "env",
+		Aliases: []string{"e"},
+		Value:   "dev",
+		Usage:   "Environment: dev, staging, prod",
+		EnvVars: []string{"UNISONDB_ENV"},
+	},
+	&cli.StringFlag{
+		Name:  "ports-file",
+		Usage: "Write bound ports to JSON file (for testing)",
+	},
+}
+
 func main() {
 	cliapp.PrintBanner()
-	var commands []*cli.Command
-
-	if replicatorCommand != nil {
-		commands = append(commands, replicatorCommand)
-	}
-
-	commands = append(commands, &cli.Command{
-		Name:  "relayer",
-		Usage: "Run in relayer mode",
-		Action: func(c *cli.Context) error {
-			return Run(c.Context, c.String("config"), c.String("env"),
-				"relayer", c.Bool("grpc"), c.String("ports-file"))
-		},
-	})
-
-	if fuzzerCommand != nil {
-		commands = append(commands, fuzzerCommand)
-	}
 
 	app := &cli.App{
 		Name:  "unisondb",
-		Usage: "Run UnisonDB",
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:    "config",
-				Aliases: []string{"c"},
-				Value:   "./config.toml",
-				Usage:   "Path to TOML config file",
-				EnvVars: []string{"UNISON_CONFIG"},
-			},
-			&cli.StringFlag{
-				Name:    "env",
-				Aliases: []string{"e"},
-				Value:   "dev",
-				Usage:   "Environment: dev, staging, prod",
-				EnvVars: []string{"UNISON_ENV"},
-			},
-			&cli.BoolFlag{
-				Name:    "grpc",
-				Aliases: []string{"G"},
-				Usage:   "Enable gRPC server in Relayer Mode",
-				EnvVars: []string{"UNISON_GRPC_ENABLED"},
-				Value:   false,
-			},
-			&cli.StringFlag{
-				Name:  "ports-file",
-				Usage: "Write bound ports to this JSON file after startup (for testing)",
-			},
+		Usage: "Database + Message Bus. Built for Edge.",
+		Commands: []*cli.Command{
+			serverCommand,
+			replicaCommand,
+			relayCommand,
+			fuzzCommand,
 		},
-
-		Commands: commands,
 	}
 
 	if err := app.Run(os.Args); err != nil {
@@ -79,14 +60,14 @@ func main() {
 }
 
 // Run starts the UnisonDB server with the specified configuration.
-func Run(_ context.Context, configPath, env, mode string, grpcEnabled bool, portsFile string) error {
+func Run(_ context.Context, configPath, env, mode, portsFile string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	srv := cliapp.Server{PortsFile: portsFile}
 
 	infraSetup := []func(context.Context) error{
-		srv.InitFromCLI(configPath, env, mode, grpcEnabled),
+		srv.InitFromCLI(configPath, env, mode),
 		srv.InitTelemetry,
 		srv.SetupStorageConfig,
 		srv.SetupNotifier,

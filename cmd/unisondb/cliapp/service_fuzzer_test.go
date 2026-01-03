@@ -15,9 +15,9 @@ func TestFuzzerService_Name(t *testing.T) {
 	assert.Equal(t, "fuzzer", svc.Name())
 }
 
-func TestFuzzerService_Setup_DisabledInReplicatorMode(t *testing.T) {
+func TestFuzzerService_Setup_DisabledInServerMode(t *testing.T) {
 	deps := &Dependencies{
-		Mode:    "replicator",
+		Mode:    "server",
 		Config:  config.Config{},
 		Engines: map[string]*dbkernel.Engine{},
 	}
@@ -31,7 +31,7 @@ func TestFuzzerService_Setup_DisabledInReplicatorMode(t *testing.T) {
 
 func TestFuzzerService_Setup_InvalidConfig(t *testing.T) {
 	deps := &Dependencies{
-		Mode: "fuzzer",
+		Mode: "fuzz",
 		Config: config.Config{
 			FuzzConfig: config.FuzzConfig{
 				OpsPerNamespace:     0,
@@ -50,7 +50,7 @@ func TestFuzzerService_Setup_InvalidConfig(t *testing.T) {
 
 func TestFuzzerService_Setup_ValidConfig(t *testing.T) {
 	deps := &Dependencies{
-		Mode: "fuzzer",
+		Mode: "fuzz",
 		Config: config.Config{
 			FuzzConfig: config.FuzzConfig{
 				OpsPerNamespace:     1000,

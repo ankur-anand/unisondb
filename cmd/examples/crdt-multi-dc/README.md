@@ -55,12 +55,12 @@ This example demonstrates how to build a CRDT-based distributed database using U
 ## Key Concepts
 
 ### Primary Servers (DC1 & DC2)
-- **Mode**: Replicator (read-write)
+- **Mode**: Server (read-write)
 - **Purpose**: Accept writes independently in different geographic locations
 - **Namespaces**: Each datacenter has its own namespace (`dc1`, `dc2`)
 
-### Relayer Node
-- **Mode**: Relayer (read and sync from primary)
+### Replica Node
+- **Mode**: Replica (read and sync from primary)
 - **Purpose**: Replicate from both datacenters and merge changes
 - **Namespaces**: Replicates both `dc1` and `dc2` namespaces
 - **ZeroMQ**: Publishes notifications for each namespace on separate ports
@@ -95,11 +95,11 @@ This example demonstrates how to build a CRDT-based distributed database using U
 ### 1. Start all UnisonDB nodes
 
 ```bash
-./cmd/unisondb/unisondb -config ./examples/crdt-multi-dc/configs/dc1.toml replicator
+./cmd/unisondb/unisondb server -config ./examples/crdt-multi-dc/configs/dc1.toml
 
-./cmd/unisondb/unisondb -config ./examples/crdt-multi-dc/configs/dc2.toml replicator
+./cmd/unisondb/unisondb server -config ./examples/crdt-multi-dc/configs/dc2.toml
 
-./cmd/unisondb/unisondb -config ./examples/crdt-multi-dc/configs/relayer.toml relayer
+./cmd/unisondb/unisondb replica -config ./examples/crdt-multi-dc/configs/relayer.toml
 ```
 
 This will start:

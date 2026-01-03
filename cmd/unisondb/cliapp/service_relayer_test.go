@@ -15,9 +15,9 @@ func TestRelayerService_Name(t *testing.T) {
 	assert.Equal(t, "relayer", svc.Name())
 }
 
-func TestRelayerService_Setup_DisabledInReplicatorMode(t *testing.T) {
+func TestRelayerService_Setup_DisabledInServerMode(t *testing.T) {
 	deps := &Dependencies{
-		Mode:    "replicator",
+		Mode:    "server",
 		Config:  config.Config{},
 		Engines: map[string]*dbkernel.Engine{},
 	}

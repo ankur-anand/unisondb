@@ -55,8 +55,8 @@ cd unisondb
 # Build
 go build -o unisondb ./cmd/unisondb
 
-# Run in replicator mode (primary)
-./unisondb --config config.toml replicator
+# Run in server mode (primary)
+./unisondb server --config config.toml
 
 # Use the HTTP API
 curl -X PUT http://localhost:4000/api/v1/default/kv/mykey \
@@ -199,22 +199,22 @@ UnisonDB is built on three foundational layers:
 UnisonDB stacks a multi-model engine on top of WALFS — a log-native core that unifies storage, replication, and streaming into one continuous data flow.
 
 ```
-+------------------------------------------------------+
-|                Multi-Model API Layer                 |
-|  (KV, Wide-Column, LOB, Txn Engine, Query Layer)     |
-+------------------------------------------------------+
-|                   Engine Layer                       |
-|   WALFS-backed MemTable + B-Tree Store               |
-|   (writes → WALFS, reads → B-Tree + MemTable)        |
-+------------------------------------------------------+
-|          WALFS (Core Log)          |  Replication Layer  |
++-----------------------------------------------------------+
+|                Multi-Model API Layer                      |
+|       (KV, Wide-Column, LOB, Txn Engine, Query)           |
++-----------------------------------------------------------+
+|                   Engine Layer                            |
+|   WALFS-backed MemTable + B-Tree Store                    |
+|   (writes → WALFS, reads → B-Tree + MemTable)             |
++-----------------------------------------------------------+
+|          WALFS (Core Log)          |  Replication Layer   |
 |  Append-only, mmap-based           |  WAL-based streaming |
 |  segmented log                     |  (followers tail WAL)|
 |  Commit-ordered, replication-safe  |  Offset tracking,    |
 |                                    |  catch-up, tailing   |
-+------------------------------------------------------+
-|                       Disk                           |
-+------------------------------------------------------+
++-----------------------------------------------------------+
+|                       Disk                                |
++-----------------------------------------------------------+
 ```
 
 

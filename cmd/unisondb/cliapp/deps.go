@@ -11,10 +11,9 @@ import (
 )
 
 type Dependencies struct {
-	Mode               string
-	Env                string
-	Config             config.Config
-	RelayerGRPCEnabled bool
+	Mode   string
+	Env    string
+	Config config.Config
 
 	// Storage
 	Engines       map[string]*dbkernel.Engine

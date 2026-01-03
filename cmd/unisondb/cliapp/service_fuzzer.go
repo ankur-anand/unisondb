@@ -22,7 +22,7 @@ func (f *FuzzerService) Name() string {
 }
 
 func (f *FuzzerService) Setup(ctx context.Context, deps *Dependencies) error {
-	if deps.Mode != modeFuzzer {
+	if deps.Mode != modeFuzz {
 		f.enabled = false
 		return nil
 	}

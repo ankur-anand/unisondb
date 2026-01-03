@@ -90,15 +90,14 @@ func (ms *Server) CloseServices(ctx context.Context) {
 
 func (ms *Server) BuildDeps() *Dependencies {
 	ms.deps = &Dependencies{
-		Mode:               ms.mode,
-		Env:                ms.env,
-		Config:             ms.cfg,
-		RelayerGRPCEnabled: ms.relayerGRPCEnabled,
-		Engines:            ms.engines,
-		StorageConfig:      ms.storageConfig,
-		Notifiers:          ms.notifiers,
-		Logger:             ms.pl,
-		FuzzStats:          ms.fuzzStats,
+		Mode:          ms.mode,
+		Env:           ms.env,
+		Config:        ms.cfg,
+		Engines:       ms.engines,
+		StorageConfig: ms.storageConfig,
+		Notifiers:     ms.notifiers,
+		Logger:        ms.pl,
+		FuzzStats:     ms.fuzzStats,
 	}
 	return ms.deps
 }

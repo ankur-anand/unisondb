@@ -30,7 +30,7 @@ func (r *RelayerService) Name() string {
 }
 
 func (r *RelayerService) Setup(ctx context.Context, deps *Dependencies) error {
-	if deps.Mode != modeRelayer {
+	if deps.Mode != modeReplica && deps.Mode != modeRelay {
 		r.enabled = false
 		return nil
 	}

@@ -130,16 +130,14 @@ func TestServer_RunServices(t *testing.T) {
 
 func TestServer_BuildDeps(t *testing.T) {
 	srv := &Server{
-		mode:               "replicator",
-		env:                "test",
-		relayerGRPCEnabled: true,
+		mode: "server",
+		env:  "test",
 	}
 
 	deps := srv.BuildDeps()
 
 	require.NotNil(t, deps)
-	assert.Equal(t, "replicator", deps.Mode)
+	assert.Equal(t, "server", deps.Mode)
 	assert.Equal(t, "test", deps.Env)
-	assert.True(t, deps.RelayerGRPCEnabled)
 	assert.Same(t, deps, srv.deps)
 }
