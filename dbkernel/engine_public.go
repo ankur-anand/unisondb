@@ -696,12 +696,18 @@ type Reader = wal.Reader
 
 // NewReader return a reader that reads from the beginning, until EOF is encountered.
 // It returns io.EOF when it reaches end of file.
+// In Raft mode, reads from the Raft WAL with RaftWALDecoder.
 func (e *Engine) NewReader() (*Reader, error) {
+	if e.IsRaftMode() && e.raftState.raftWalIO != nil {
+		opts := []wal.ReaderOption{wal.WithDecoder(wal.NewRaftWALDecoder(nil))}
+		return e.raftState.raftWalIO.NewReader(opts...)
+	}
 	return e.walIO.NewReader()
 }
 
 // NewReaderWithStart return a reader that reads from provided offset, until EOF is encountered.
 // It returns io.EOF when it reaches end of file.
+// In Raft mode, reads from the Raft WAL with RaftWALDecoder.
 func (e *Engine) NewReaderWithStart(startPos *Offset) (r *Reader, err error) {
 	// protect against very bad client
 	defer func() {
@@ -719,6 +725,12 @@ func (e *Engine) NewReaderWithStart(startPos *Offset) (r *Reader, err error) {
 	if startPos == nil {
 		return e.NewReader()
 	}
+
+	if e.IsRaftMode() && e.raftState.raftWalIO != nil {
+		opts := []wal.ReaderOption{wal.WithDecoder(wal.NewRaftWALDecoder(nil))}
+		return e.raftState.raftWalIO.NewReaderWithStart(startPos, opts...)
+	}
+
 	curOffset := e.currentOffset.Load()
 	if curOffset == nil && startPos != nil {
 		return nil, ErrInvalidOffset
@@ -735,11 +747,24 @@ func (e *Engine) NewReaderWithStart(startPos *Offset) (r *Reader, err error) {
 // and supports tail-following behavior.
 // It returns ErrNoNewData when no new entries are available *yet*,
 // instead of io.EOF.
+// In Raft mode, reads from the Raft WAL with RaftWALDecoder.
 func (e *Engine) NewReaderWithTail(startPos *Offset) (*Reader, error) {
-	if startPos == nil {
-		return e.walIO.NewReader(wal.WithActiveTail(true))
+	if e.IsRaftMode() && e.raftState.raftWalIO != nil {
+		opts := []wal.ReaderOption{
+			wal.WithActiveTail(true),
+			wal.WithDecoder(wal.NewRaftWALDecoder(nil)),
+		}
+		if startPos == nil {
+			return e.raftState.raftWalIO.NewReader(opts...)
+		}
+		return e.raftState.raftWalIO.NewReaderWithStart(startPos, opts...)
 	}
-	return e.walIO.NewReaderWithStart(startPos, wal.WithActiveTail(true))
+
+	opts := []wal.ReaderOption{wal.WithActiveTail(true)}
+	if startPos == nil {
+		return e.walIO.NewReader(opts...)
+	}
+	return e.walIO.NewReaderWithStart(startPos, opts...)
 }
 
 // GetLOB returns the full LOB value (joined).

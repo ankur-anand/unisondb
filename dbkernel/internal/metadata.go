@@ -70,6 +70,10 @@ func (m *Metadata) MarshalBinary() []byte {
 
 // Format: [RecordProcessed:8][Pos:12][RaftIndex:8][RaftTerm:8] = 36 bytes.
 func UnmarshalMetadata(data []byte) Metadata {
+	// min size check: 8 (RecordProcessed) + 12 (Pos) = 20 bytes
+	if len(data) < 20 {
+		return Metadata{}
+	}
 	index := binary.LittleEndian.Uint64(data[:8])
 	pos := wal.DecodeOffset(data[8:20])
 

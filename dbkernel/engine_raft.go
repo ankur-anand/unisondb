@@ -47,6 +47,10 @@ type raftState struct {
 	// the WAL's commit boundary. This enables ISR-style replication where
 	// followers stream from the WAL and only see committed entries.
 	walCommitCallback WALCommitCallback
+
+	// raftWalIO wraps the Raft log store's WAL for reading.
+	// In raft mode, readers use this WalIO with RaftWALDecoder.
+	raftWalIO *wal.WalIO
 }
 
 // SetPositionLookup sets the function used to look up WAL positions from Raft log indices.
@@ -64,6 +68,12 @@ func (e *Engine) SetRaftApplier(applier RaftApplier) {
 // committed entry, which can be used to update the WAL's commit boundary.
 func (e *Engine) SetWALCommitCallback(callback WALCommitCallback) {
 	e.raftState.walCommitCallback = callback
+}
+
+// SetRaftWAL sets the Raft log store's underlying WAL.
+// In raft mode, engine readers will use this WAL with RaftWALDecoder.
+func (e *Engine) SetRaftWAL(w *walfs.WALog) {
+	e.raftState.raftWalIO = wal.WrapWAL(w, e.namespace)
 }
 
 // Apply implements raft.FSM interface.
