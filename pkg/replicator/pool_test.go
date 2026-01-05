@@ -10,8 +10,7 @@ import (
 func TestReleaseRecordsResetsFields(t *testing.T) {
 	record := acquireWalRecord()
 	record.Record = []byte("payload")
-	record.Offset = 42
-	record.SegmentId = 9
+	record.Crc32Checksum = 42
 
 	ReleaseRecords([]*v1.WALRecord{record})
 
@@ -19,8 +18,8 @@ func TestReleaseRecordsResetsFields(t *testing.T) {
 	if pooled.Record != nil {
 		t.Fatalf("expected pooled record payload to be nil, got %v", pooled.Record)
 	}
-	if pooled.Offset != 0 || pooled.SegmentId != 0 {
-		t.Fatalf("expected pooled offset reset, got offset=%d segment=%d", pooled.Offset, pooled.SegmentId)
+	if pooled.Crc32Checksum != 0 {
+		t.Fatalf("expected pooled checksum reset, got checksum=%d", pooled.Crc32Checksum)
 	}
 
 	ReleaseRecords([]*v1.WALRecord{pooled})
@@ -34,8 +33,7 @@ func TestReleaseRecordsAllowsGC(t *testing.T) {
 		for j := 0; j < 4; j++ {
 			rec := acquireWalRecord()
 			rec.Record = make([]byte, 256)
-			rec.Offset = uint64(i*j + 1)
-			rec.SegmentId = uint32(i + j)
+			rec.Crc32Checksum = uint32(i*j + 1)
 			batch = append(batch, rec)
 		}
 		records[i] = batch
@@ -51,8 +49,8 @@ func TestReleaseRecordsAllowsGC(t *testing.T) {
 	if final.Record != nil {
 		t.Fatalf("pooled record retains payload reference, potential leak")
 	}
-	if final.Offset != 0 || final.SegmentId != 0 {
-		t.Fatalf("pooled offset not reset: offset=%d segment=%d", final.Offset, final.SegmentId)
+	if final.Crc32Checksum != 0 {
+		t.Fatalf("pooled checksum not reset: checksum=%d", final.Crc32Checksum)
 	}
 	ReleaseRecords([]*v1.WALRecord{final})
 }
