@@ -37,35 +37,15 @@ type Replicator struct {
 	batchSize        int
 	batchDuration    time.Duration
 	lastOffset       dbkernel.Offset
-	lastLSN          uint64 // LSN of the last record read (for LSN-based mode)
-	useLSNMode       bool   // Use LSN-based replication instead of offset-based
+	lastLSN          uint64
 	replicatorEngine string
 	reader           *dbkernel.Reader
 	ctxDone          chan struct{}
 	namespace        string
 }
 
-// NewReplicator returns an initialized Replicator that could be used for replicating
-// the wal.
+// NewReplicator returns an initialized Replicator that uses LSN-based replication.
 func NewReplicator(e *dbkernel.Engine, batchSize int,
-	batchDuration time.Duration,
-	startOffset *dbkernel.Offset, replicatorEngine string) *Replicator {
-	if startOffset == nil {
-		startOffset = &dbkernel.Offset{}
-	}
-	return &Replicator{
-		engine:           e,
-		batchSize:        batchSize,
-		batchDuration:    batchDuration,
-		lastOffset:       *startOffset,
-		replicatorEngine: replicatorEngine,
-		ctxDone:          make(chan struct{}),
-		namespace:        e.Namespace(),
-	}
-}
-
-// NewReplicatorWithLSN returns an initialized Replicator that uses LSN-based replication.
-func NewReplicatorWithLSN(e *dbkernel.Engine, batchSize int,
 	batchDuration time.Duration,
 	startLSN uint64, replicatorEngine string) *Replicator {
 	return &Replicator{
@@ -73,7 +53,6 @@ func NewReplicatorWithLSN(e *dbkernel.Engine, batchSize int,
 		batchSize:        batchSize,
 		batchDuration:    batchDuration,
 		lastLSN:          startLSN,
-		useLSNMode:       true,
 		replicatorEngine: replicatorEngine,
 		ctxDone:          make(chan struct{}),
 		namespace:        e.Namespace(),
@@ -137,7 +116,7 @@ func (r *Replicator) Replicate(ctx context.Context, recordsChan chan<- []*v1.WAL
 }
 
 // replicateFromReader reads the underlying wal until an err is encountered.
-func (r *Replicator) replicateFromReader(ctx context.Context, recordsChan chan<- []*v1.WALRecord) error {
+func (r *Replicator) replicateFromReader(_ context.Context, recordsChan chan<- []*v1.WALRecord) error {
 	batch := make([]*v1.WALRecord, 0, r.batchSize)
 	sendFunc := func() {
 		if len(batch) > 0 {
@@ -196,37 +175,16 @@ func (r *Replicator) getReader() (*dbkernel.Reader, error) {
 		return r.reader, nil
 	}
 
-	if r.useLSNMode {
-		reader, err := r.engine.NewReaderFromLSN(r.lastLSN, true)
+	reader, err := r.engine.NewReaderFromLSN(r.lastLSN, true)
+	if err != nil {
+		return nil, err
+	}
+
+	if r.lastLSN != 0 {
+		_, _, err = reader.Next()
 		if err != nil {
 			return nil, err
 		}
-
-		if r.lastLSN != 0 {
-			_, _, err = reader.Next()
-			if err != nil {
-				return nil, err
-			}
-		}
-		return reader, nil
 	}
-
-	// Offset-based
-	if r.lastOffset.IsZero() {
-		reader, err := r.engine.NewReaderWithTail(nil)
-		return reader, err
-	}
-
-	reader, err := r.engine.NewReaderWithTail(&r.lastOffset)
-	if err != nil {
-		return nil, err
-	}
-
-	// we consume the first record.
-	_, _, err = reader.Next()
-	if err != nil {
-		return nil, err
-	}
-
-	return reader, err
+	return reader, nil
 }
