@@ -100,6 +100,62 @@ func setupSingleNodeRaft(t *testing.T, dir string, fsm raft.FSM) (*raft.Raft, *r
 	return r, logStore, cleanup
 }
 
+func setupSingleNodeRaftWithEngineWAL(t *testing.T, engine *Engine) (*raft.Raft, *raftwalfs.LogStore, func()) {
+	t.Helper()
+
+	engineWAL := engine.WAL()
+	require.NotNil(t, engineWAL, "engine WAL should not be nil")
+
+	logStore, err := raftwalfs.NewLogStore(engineWAL, 0)
+	require.NoError(t, err)
+
+	stableStore := raft.NewInmemStore()
+	snapshotStore := raft.NewInmemSnapshotStore()
+
+	addr := raft.ServerAddress("127.0.0.1:0")
+	_, transport := raft.NewInmemTransport(addr)
+
+	config := raft.DefaultConfig()
+	config.LocalID = "node1"
+	config.HeartbeatTimeout = 50 * time.Millisecond
+	config.ElectionTimeout = 50 * time.Millisecond
+	config.LeaderLeaseTimeout = 50 * time.Millisecond
+	config.CommitTimeout = 5 * time.Millisecond
+	config.LogOutput = io.Discard
+
+	r, err := raft.NewRaft(config, engine, logStore, stableStore, snapshotStore, transport)
+	require.NoError(t, err)
+
+	configuration := raft.Configuration{
+		Servers: []raft.Server{
+			{
+				ID:      config.LocalID,
+				Address: transport.LocalAddr(),
+			},
+		},
+	}
+	err = r.BootstrapCluster(configuration).Error()
+	require.NoError(t, err)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if r.State() == raft.Leader {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.Equal(t, raft.Leader, r.State(), "node should be leader")
+
+	cleanup := func() {
+		future := r.Shutdown()
+		_ = future.Error()
+		_ = transport.Close()
+		_ = logStore.Close()
+	}
+
+	return r, logStore, cleanup
+}
+
 func TestEngine_RaftMode_KVOperations(t *testing.T) {
 	dir := t.TempDir()
 	namespace := "raft_kv_test"
@@ -1042,6 +1098,7 @@ func TestEngine_RaftMode_ReaderUsesDecoder(t *testing.T) {
 
 	config := NewDefaultEngineConfig()
 	config.ArenaSize = 1 << 20
+	config.WalConfig.RaftMode = true
 	engine, err := NewStorageEngine(dir, namespace, config)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -1049,19 +1106,19 @@ func TestEngine_RaftMode_ReaderUsesDecoder(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	r, logStore, cleanupRaft := setupSingleNodeRaft(t, dir, engine)
+	r, logStore, cleanupRaft := setupSingleNodeRaftWithEngineWAL(t, engine)
 	t.Cleanup(cleanupRaft)
 
 	applier := &raftApplierWrapper{raft: r, timeout: 5 * time.Second}
 	engine.SetRaftMode(true)
 	engine.SetRaftApplier(applier)
 	engine.SetPositionLookup(logStore.GetPosition)
-	engine.SetRaftWAL(logStore.WAL())
+	engine.SetWALCommitCallback(logStore.CommitPosition)
 
 	numEntries := 5
 	for i := 0; i < numEntries; i++ {
-		key := []byte(fmt.Sprintf("key-%d", i))
-		value := []byte(fmt.Sprintf("value-%d", i))
+		key := fmt.Appendf(nil, "key-%d", i)
+		value := fmt.Appendf(nil, "value-%d", i)
 		err = engine.PutKV(key, value)
 		require.NoError(t, err)
 	}
