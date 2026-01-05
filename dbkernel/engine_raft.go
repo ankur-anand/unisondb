@@ -246,6 +246,13 @@ func (e *Engine) SetRaftMode(enabled bool) {
 	e.raftState.raftMode = enabled
 }
 
+// WAL returns the underlying walfs.WALog for this engine.
+// In Raft mode, this WAL is shared with the Raft log store.
+// The WAL must be created with RaftMode=true in the config for proper Raft operation.
+func (e *Engine) WAL() *walfs.WALog {
+	return e.walIO.WAL()
+}
+
 // SnapshotIndexHolder returns the FlushedIndexHolder used for communicating the flushed index to FSMSnapshotStore.
 // This ensures that Raft's snapshot metadata uses the flushed index (actual B-tree state)
 // instead of the applied index (which may include unflushed memtable data).

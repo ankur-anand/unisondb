@@ -84,10 +84,23 @@ func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
 		taggedScope.Histogram(metricWalEntriesPerSegment, segmentEntryBuckets).RecordValue(float64(old))
 	}
 
-	wLog, err := walfs.NewWALog(dirname, ".seg", walfs.WithMaxSegmentSize(config.SegmentSize),
-		walfs.WithMSyncEveryWrite(config.FSync), walfs.WithBytesPerSync(int64(config.BytesPerSync)),
+	walOpts := []walfs.WALogOptions{
+		walfs.WithMaxSegmentSize(config.SegmentSize),
+		walfs.WithMSyncEveryWrite(config.FSync),
+		walfs.WithBytesPerSync(int64(config.BytesPerSync)),
 		walfs.WithOnSegmentRotated(callbackOnRotate),
-		walfs.WithAutoCleanupPolicy(config.MaxAge, config.MinSegment, config.MaxSegment, config.AutoCleanup))
+		walfs.WithAutoCleanupPolicy(config.MaxAge, config.MinSegment, config.MaxSegment, config.AutoCleanup),
+	}
+
+	// Raft mode
+	if config.RaftMode {
+		walOpts = append(walOpts,
+			walfs.WithClearIndexOnFlush(),
+			walfs.WithReaderCommitCheck(),
+		)
+	}
+
+	wLog, err := walfs.NewWALog(dirname, ".seg", walOpts...)
 
 	if err != nil {
 		return nil, err
@@ -107,6 +120,11 @@ func WrapWAL(wal *walfs.WALog, namespace string) *WalIO {
 		namespace:   namespace,
 		taggedScope: taggedScope,
 	}
+}
+
+// WAL returns the underlying walfs.WALog.
+func (w *WalIO) WAL() *walfs.WALog {
+	return w.appendLog
 }
 
 // RunWalCleanup starts background cleanup routines for old WAL segments.

@@ -6,25 +6,26 @@ import (
 	"github.com/hashicorp/raft"
 )
 
+// SafeGCIndexProvider provides the safe-to-GC index for log deletion.
+type SafeGCIndexProvider interface {
+	SafeGCIndex() (index uint64, ok bool)
+}
+
 // SafeGCLogStore wraps a LogStore to prevent premature log deletion.
 //
-// Raft by default wants to delete logs after snapshotting, but we store
-// events in those logs. A segment that's SEALED but not yet UPLOADED still
-// needs its log entries for processing.
-//
+// Raft by default wants to delete logs after snapshotting, but we might have not processed.
 // Raft calls DeleteRange(1, 400) after applying index 400. But if only
-// segments up to index 200 are uploaded, we'd lose data for indices 201-400.
+// segments up to index 200 are processed, other raft node lagging might be keep on asking from snapshot as this logs are gone.
 //
 // This wrapper intercepts DeleteRange and caps the max to our safe-to-GC
 // index. Raft asks to delete up to 400, we delete up to 200 instead.
 type SafeGCLogStore struct {
-	inner  raft.LogStore
-	holder *SafeGCIndexHolder
+	inner    raft.LogStore
+	provider SafeGCIndexProvider
 }
 
 // SafeGCIndexHolder holds the safe-to-GC index that represents the maximum
-// log index that can be safely deleted without losing data needed for pending
-// segment processing (e.g., segments that are SEALED but not yet UPLOADED).
+// log index that can be safely deleted without losing data.
 type SafeGCIndexHolder struct {
 	index atomic.Uint64
 }
@@ -34,17 +35,23 @@ func (h *SafeGCIndexHolder) Set(index uint64) {
 	h.index.Store(index)
 }
 
-// Get retrieves the safe-to-GC index.
-func (h *SafeGCIndexHolder) Get() (index uint64, ok bool) {
+// SafeGCIndex implements SafeGCIndexProvider.
+func (h *SafeGCIndexHolder) SafeGCIndex() (index uint64, ok bool) {
 	v := h.index.Load()
 	return v, v > 0
 }
 
+// Get retrieves the safe-to-GC index (alias for SafeGCIndex).
+func (h *SafeGCIndexHolder) Get() (index uint64, ok bool) {
+	return h.SafeGCIndex()
+}
+
 // NewSafeGCLogStore creates a new SafeGCLogStore wrapping the given LogStore.
-func NewSafeGCLogStore(inner raft.LogStore, holder *SafeGCIndexHolder) *SafeGCLogStore {
+// The provider supplies the safe-to-GC index (typically FlushedIndexHolder or SafeGCIndexHolder).
+func NewSafeGCLogStore(inner raft.LogStore, provider SafeGCIndexProvider) *SafeGCLogStore {
 	return &SafeGCLogStore{
-		inner:  inner,
-		holder: holder,
+		inner:    inner,
+		provider: provider,
 	}
 }
 
@@ -76,7 +83,7 @@ func (s *SafeGCLogStore) StoreLogs(logs []*raft.Log) error {
 // DeleteRange deletes a range of log entries, but limits the max to the
 // safe-to-GC index to preserve logs needed for pending segment processing.
 func (s *SafeGCLogStore) DeleteRange(min, max uint64) error {
-	safeIndex, ok := s.holder.Get()
+	safeIndex, ok := s.provider.SafeGCIndex()
 
 	if ok && safeIndex < max {
 		max = safeIndex
