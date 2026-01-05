@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
@@ -41,7 +42,8 @@ type raftState struct {
 
 	// snapshotIndexHolder communicates flushedIndex to FSMSnapshotStore.
 	// It's Set by Snapshot(), and read by FSMSnapshotStore.Create().
-	snapshotIndexHolder *FlushedIndexHolder
+	snapshotIndexHolder     *FlushedIndexHolder
+	snapshotIndexHolderOnce sync.Once
 
 	// walCommitCallback is called when a committed entry is applied to update
 	// the WAL's commit boundary. This enables ISR-style replication where
@@ -244,21 +246,13 @@ func (e *Engine) SetRaftMode(enabled bool) {
 	e.raftState.raftMode = enabled
 }
 
-// SnapshotIndexHolder returns the FlushedIndexHolder used to communicate
-// the flushed index to FSMSnapshotStore. This creates the holder if it doesn't exist.
-//
-// Usage: When setting up Raft, wrap your SnapshotStore with FSMSnapshotStore:
-//
-//	holder := engine.SnapshotIndexHolder()
-//	snapshotStore := dbkernel.NewFSMSnapshotStore(fileSnapshotStore, holder)
-//	raftConfig.SnapshotStore = snapshotStore
-//
+// SnapshotIndexHolder returns the FlushedIndexHolder used for communicating the flushed index to FSMSnapshotStore.
 // This ensures that Raft's snapshot metadata uses the flushed index (actual B-tree state)
 // instead of the applied index (which may include unflushed memtable data).
 func (e *Engine) SnapshotIndexHolder() *FlushedIndexHolder {
-	if e.raftState.snapshotIndexHolder == nil {
+	e.raftState.snapshotIndexHolderOnce.Do(func() {
 		e.raftState.snapshotIndexHolder = &FlushedIndexHolder{}
-	}
+	})
 	return e.raftState.snapshotIndexHolder
 }
 
@@ -271,9 +265,6 @@ type engineSnapshot struct {
 
 // Persist writes the snapshot to the given sink.
 func (s *engineSnapshot) Persist(sink raft.SnapshotSink) error {
-	s.engine.mu.RLock()
-	defer s.engine.mu.RUnlock()
-
 	if err := s.engine.dataStore.Snapshot(sink); err != nil {
 		_ = sink.Cancel()
 		return fmt.Errorf("snapshot btree: %w", err)
