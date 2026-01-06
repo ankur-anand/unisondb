@@ -81,7 +81,9 @@ func (e *Engine) SetWALCommitCallback(callback WALCommitCallback) {
 //  4. Persist() writes B-tree snapshot (contains data up to 100)
 //  5. On restore, Raft replays from 81, but B-tree already has 81-100
 func (e *Engine) Apply(log *raft.Log) interface{} {
-	if log.Type != raft.LogCommand {
+	// Only process command logs (application data)
+	// Skip configuration, noop, and other internal Raft log types
+	if log.Type != raft.LogCommand || len(log.Data) == 0 {
 		return nil
 	}
 
@@ -128,6 +130,15 @@ func (e *Engine) Apply(log *raft.Log) interface{} {
 
 	e.writeSeenCounter.Add(1)
 	return nil
+}
+
+// ApplyBatch implements raft.BatchingFSM.
+func (e *Engine) ApplyBatch(logs []*raft.Log) []interface{} {
+	results := make([]interface{}, len(logs))
+	for i, log := range logs {
+		results[i] = e.Apply(log)
+	}
+	return results
 }
 
 // Snapshot implements raft.FSM interface.

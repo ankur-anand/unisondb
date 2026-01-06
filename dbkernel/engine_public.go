@@ -760,6 +760,45 @@ func (e *Engine) NewReaderWithTail(startPos *Offset) (*Reader, error) {
 	return e.walIO.NewReaderWithStart(startPos, opts...)
 }
 
+// NewReaderFromLSN creates a WAL reader starting at the given LSN.
+// It finds the segment containing the LSN and positions the reader appropriately.
+// If tail is true, it supports tail-following behavior (returns ErrNoNewData instead of EOF).
+// In Raft mode, reads from the WAL with RaftWALDecoder.
+func (e *Engine) NewReaderFromLSN(startLSN uint64, tail bool) (*Reader, error) {
+	if startLSN == 0 {
+		if tail {
+			return e.NewReaderWithTail(nil)
+		}
+		return e.NewReader()
+	}
+
+	walog := e.WAL()
+
+	segID, slot, err := walog.SegmentForIndex(startLSN)
+	if err != nil {
+		return nil, fmt.Errorf("LSN %d not found: %w", startLSN, err)
+	}
+
+	entries, err := walog.SegmentIndex(segID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get segment index for segment %d: %w", segID, err)
+	}
+
+	if slot >= len(entries) {
+		return nil, fmt.Errorf("%w: slot %d out of range for segment %d", ErrInvalidOffset, slot, segID)
+	}
+
+	startOffset := &Offset{
+		SegmentID: segID,
+		Offset:    entries[slot].Offset,
+	}
+
+	if tail {
+		return e.NewReaderWithTail(startOffset)
+	}
+	return e.NewReaderWithStart(startOffset)
+}
+
 // GetLOB returns the full LOB value (joined).
 func (e *Engine) GetLOB(key []byte) ([]byte, error) {
 	if e.shutdown.Load() {

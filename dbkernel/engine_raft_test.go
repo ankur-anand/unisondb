@@ -203,8 +203,6 @@ func TestEngine_RaftMode_KVOperations(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, expectedValue, gotValue)
 	}
-
-	t.Logf("Applied index: %d, Applied term: %d", engine.AppliedIndex(), engine.AppliedTerm())
 }
 
 func TestEngine_RaftMode_RowOperations(t *testing.T) {
@@ -256,8 +254,6 @@ func TestEngine_RaftMode_RowOperations(t *testing.T) {
 	assert.Equal(t, []byte("Alice"), gotColumns["name"])
 	assert.Equal(t, []byte("31"), gotColumns["age"])
 	assert.Equal(t, []byte("NYC"), gotColumns["city"])
-
-	t.Logf("Applied index: %d, Applied term: %d", engine.AppliedIndex(), engine.AppliedTerm())
 }
 
 func TestEngine_RaftMode_DeleteOperations(t *testing.T) {
@@ -296,8 +292,6 @@ func TestEngine_RaftMode_DeleteOperations(t *testing.T) {
 
 	_, err = engine.GetKV(testKey)
 	assert.Error(t, err, "key should be deleted")
-
-	t.Logf("Applied index: %d, Applied term: %d", engine.AppliedIndex(), engine.AppliedTerm())
 }
 
 func TestEngine_RaftMode_SnapshotRestore(t *testing.T) {
@@ -328,10 +322,6 @@ func TestEngine_RaftMode_SnapshotRestore(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	t.Logf("Before snapshot - Applied: %d/%d, Flushed: %d/%d",
-		engine.AppliedIndex(), engine.AppliedTerm(),
-		engine.FlushedIndex(), engine.FlushedTerm())
-
 	require.Greater(t, engine.AppliedIndex(), uint64(0), "appliedIndex should be > 0 after writes")
 
 	snapshot, err := engine.Snapshot()
@@ -361,10 +351,6 @@ func TestEngine_RaftMode_SnapshotRestore(t *testing.T) {
 	assert.Equal(t, flushedTermBefore, engine2.AppliedTerm())
 	assert.Equal(t, flushedIndexBefore, engine2.FlushedIndex())
 	assert.Equal(t, flushedTermBefore, engine2.FlushedTerm())
-
-	t.Logf("After restore - Applied: %d/%d, Flushed: %d/%d",
-		engine2.AppliedIndex(), engine2.AppliedTerm(),
-		engine2.FlushedIndex(), engine2.FlushedTerm())
 }
 
 type mockSnapshotSink struct {
@@ -449,9 +435,6 @@ func TestEngine_RaftMode_ConcurrentOperations(t *testing.T) {
 			assert.Equal(t, []byte(expectedValue), gotValue)
 		}
 	}
-
-	t.Logf("Applied index: %d, Applied term: %d", engine.AppliedIndex(), engine.AppliedTerm())
-	t.Logf("Total operations: %d", numWorkers*numOpsPerWorker)
 }
 
 func TestEngine_RaftMode_LargeValues(t *testing.T) {
@@ -487,11 +470,7 @@ func TestEngine_RaftMode_LargeValues(t *testing.T) {
 		gotValue, err := engine.GetKV([]byte(key))
 		require.NoError(t, err)
 		assert.Equal(t, value, gotValue, "value size %d should match", size)
-
-		t.Logf("Successfully wrote and read %d byte value", size)
 	}
-
-	t.Logf("Applied index: %d, Applied term: %d", engine.AppliedIndex(), engine.AppliedTerm())
 }
 
 func TestEngine_RaftMode_MultipleRows(t *testing.T) {
@@ -535,9 +514,6 @@ func TestEngine_RaftMode_MultipleRows(t *testing.T) {
 		assert.Equal(t, []byte(fmt.Sprintf("user%d@example.com", i)), gotColumns["email"])
 		assert.Equal(t, []byte(fmt.Sprintf("%d", i*100)), gotColumns["score"])
 	}
-
-	t.Logf("Applied index: %d, Applied term: %d", engine.AppliedIndex(), engine.AppliedTerm())
-	t.Logf("Total rows: %d", numRows)
 }
 
 func TestEngine_RaftMode_MixedOperations(t *testing.T) {
@@ -591,8 +567,6 @@ func TestEngine_RaftMode_MixedOperations(t *testing.T) {
 		assert.Equal(t, []byte(fmt.Sprintf("val1-%d", i)), gotColumns["col1"])
 		assert.Equal(t, []byte(fmt.Sprintf("val2-%d", i)), gotColumns["col2"])
 	}
-
-	t.Logf("Applied index: %d, Applied term: %d", engine.AppliedIndex(), engine.AppliedTerm())
 }
 
 func TestEngine_RaftMode_AppliedIndexMonotonicity(t *testing.T) {
@@ -626,8 +600,6 @@ func TestEngine_RaftMode_AppliedIndexMonotonicity(t *testing.T) {
 		assert.Greater(t, currentIndex, previousIndex, "applied index should be monotonically increasing")
 		previousIndex = currentIndex
 	}
-
-	t.Logf("Final applied index: %d", engine.AppliedIndex())
 }
 
 func TestEngine_RaftMode_IdempotentApply(t *testing.T) {
@@ -658,9 +630,6 @@ func TestEngine_RaftMode_IdempotentApply(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	appliedBefore := engine.AppliedIndex()
-	t.Logf("Applied index before flush: %d, Flushed index: %d", appliedBefore, engine.FlushedIndex())
-
 	fsyncDone := make(chan struct{}, 1)
 	engine.setFsyncCallback(func() {
 		select {
@@ -681,7 +650,6 @@ func TestEngine_RaftMode_IdempotentApply(t *testing.T) {
 
 	flushedIndex := engine.FlushedIndex()
 	require.Greater(t, flushedIndex, uint64(0), "flushedIndex should be > 0 after flush")
-	t.Logf("Flushed index after flush: %d", flushedIndex)
 
 	kvEntry := logcodec.SerializeKVEntry([]byte("replay-key"), []byte("replay-value"))
 	record := logcodec.LogRecord{
@@ -727,9 +695,6 @@ func TestEngine_RaftMode_IdempotentApply(t *testing.T) {
 	gotValue, err := engine.GetKV([]byte("new-key-after-flush"))
 	require.NoError(t, err)
 	assert.Equal(t, []byte("new-value-after-flush"), gotValue)
-
-	t.Logf("Idempotent Apply test passed. Final applied: %d, flushed: %d",
-		engine.AppliedIndex(), engine.FlushedIndex())
 }
 
 func TestEngine_RaftMode_WALCommitCallback(t *testing.T) {
@@ -911,9 +876,6 @@ func TestEngine_RaftMode_WALCommitCallback_WithLogStoreCommitPosition(t *testing
 		"committed segment ID should be valid")
 	assert.Greater(t, finalCommitted.Offset, int64(0),
 		"committed offset should be valid")
-
-	t.Logf("Final committed position: SegmentID=%d, Offset=%d",
-		finalCommitted.SegmentID, finalCommitted.Offset)
 }
 
 func TestEngine_RaftMode_ISRReaderRespectsCommitBoundary(t *testing.T) {
@@ -1157,4 +1119,297 @@ func TestEngine_RaftMode_ReaderUsesDecoder(t *testing.T) {
 	assert.GreaterOrEqual(t, readCount, numEntries)
 	assert.Equal(t, numEntries, commandCount)
 	assert.Greater(t, raftInternalCount, 0, "should have RaftInternal entries for Raft noop/config")
+}
+
+func TestEngine_ApplyBatch(t *testing.T) {
+	t.Run("empty_batch_returns_empty_results", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "apply_batch_empty"
+
+		config := NewDefaultEngineConfig()
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.close(context.Background())
+		})
+
+		engine.SetRaftMode(true)
+
+		results := engine.ApplyBatch([]*raft.Log{})
+		assert.Empty(t, results, "empty batch should return empty results")
+
+		results = engine.ApplyBatch(nil)
+		assert.Empty(t, results, "nil batch should return empty results")
+	})
+
+	t.Run("non_command_logs_return_nil", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "apply_batch_non_command"
+
+		config := NewDefaultEngineConfig()
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.close(context.Background())
+		})
+
+		engine.SetRaftMode(true)
+
+		logs := []*raft.Log{
+			{
+				Index: 1,
+				Term:  1,
+				Type:  raft.LogNoop,
+				Data:  nil,
+			},
+			{
+				Index: 2,
+				Term:  1,
+				Type:  raft.LogConfiguration,
+				Data:  []byte("some config"),
+			},
+		}
+
+		results := engine.ApplyBatch(logs)
+		require.Len(t, results, 2)
+
+		assert.Nil(t, results[0], "noop log should return nil")
+		assert.Nil(t, results[1], "configuration log should return nil")
+	})
+
+	t.Run("empty_data_logs_return_nil", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "apply_batch_empty_data"
+
+		config := NewDefaultEngineConfig()
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.close(context.Background())
+		})
+
+		engine.SetRaftMode(true)
+
+		logs := []*raft.Log{
+			{
+				Index: 1,
+				Term:  1,
+				Type:  raft.LogCommand,
+				Data:  nil,
+			},
+			{
+				Index: 2,
+				Term:  1,
+				Type:  raft.LogCommand,
+				Data:  []byte{},
+			},
+		}
+
+		results := engine.ApplyBatch(logs)
+		require.Len(t, results, 2)
+
+		assert.Nil(t, results[0], "command with nil data should return nil")
+		assert.Nil(t, results[1], "command with empty data should return nil")
+	})
+
+	t.Run("results_length_matches_input", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "apply_batch_length"
+
+		config := NewDefaultEngineConfig()
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.close(context.Background())
+		})
+
+		engine.SetRaftMode(true)
+
+		testCases := []int{1, 5, 10, 50, 100}
+
+		for _, count := range testCases {
+			logs := make([]*raft.Log, count)
+			for i := 0; i < count; i++ {
+				logs[i] = &raft.Log{
+					Index: uint64(i + 1),
+					Term:  1,
+					Type:  raft.LogNoop,
+				}
+			}
+
+			results := engine.ApplyBatch(logs)
+			assert.Len(t, results, count, "results length should match input length for count=%d", count)
+		}
+	})
+
+	t.Run("with_full_raft_integration", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "apply_batch_full_raft"
+
+		config := NewDefaultEngineConfig()
+		config.ArenaSize = 1 << 20
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.close(context.Background())
+		})
+
+		r, logStore, cleanupRaft := setupSingleNodeRaft(t, dir, engine)
+		t.Cleanup(cleanupRaft)
+
+		applier := &raftApplierWrapper{raft: r, timeout: 5 * time.Second}
+		engine.SetRaftMode(true)
+		engine.SetRaftApplier(applier)
+		engine.SetPositionLookup(logStore.GetPosition)
+
+		numEntries := 10
+		for i := 0; i < numEntries; i++ {
+			key := fmt.Sprintf("batch-key-%d", i)
+			value := fmt.Sprintf("batch-value-%d", i)
+			err = engine.PutKV([]byte(key), []byte(value))
+			require.NoError(t, err)
+		}
+
+		for i := 0; i < numEntries; i++ {
+			key := fmt.Sprintf("batch-key-%d", i)
+			expectedValue := fmt.Sprintf("batch-value-%d", i)
+			gotValue, err := engine.GetKV([]byte(key))
+			require.NoError(t, err, "key %s should exist", key)
+			assert.Equal(t, []byte(expectedValue), gotValue)
+		}
+
+		assert.Greater(t, engine.AppliedIndex(), uint64(0), "applied index should advance")
+	})
+
+	t.Run("batch_applies_logs_in_order", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "apply_batch_order"
+
+		config := NewDefaultEngineConfig()
+		config.ArenaSize = 1 << 20
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.close(context.Background())
+		})
+
+		r, logStore, cleanupRaft := setupSingleNodeRaft(t, dir, engine)
+		t.Cleanup(cleanupRaft)
+
+		applier := &raftApplierWrapper{raft: r, timeout: 5 * time.Second}
+		engine.SetRaftMode(true)
+		engine.SetRaftApplier(applier)
+		engine.SetPositionLookup(logStore.GetPosition)
+
+		err = engine.PutKV([]byte("order-test"), []byte("value1"))
+		require.NoError(t, err)
+
+		err = engine.PutKV([]byte("order-test"), []byte("value2"))
+		require.NoError(t, err)
+
+		err = engine.PutKV([]byte("order-test"), []byte("final-value"))
+		require.NoError(t, err)
+
+		gotValue, err := engine.GetKV([]byte("order-test"))
+		require.NoError(t, err)
+		assert.Equal(t, []byte("final-value"), gotValue, "should have final value after ordered applies")
+	})
+
+	t.Run("batch_with_delete_operations", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "apply_batch_with_delete"
+
+		config := NewDefaultEngineConfig()
+		config.ArenaSize = 1 << 20
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.close(context.Background())
+		})
+
+		r, logStore, cleanupRaft := setupSingleNodeRaft(t, dir, engine)
+		t.Cleanup(cleanupRaft)
+
+		applier := &raftApplierWrapper{raft: r, timeout: 5 * time.Second}
+		engine.SetRaftMode(true)
+		engine.SetRaftApplier(applier)
+		engine.SetPositionLookup(logStore.GetPosition)
+
+		err = engine.PutKV([]byte("key1"), []byte("value1"))
+		require.NoError(t, err)
+		err = engine.PutKV([]byte("key2"), []byte("value2"))
+		require.NoError(t, err)
+
+		err = engine.DeleteKV([]byte("key1"))
+		require.NoError(t, err)
+
+		_, err = engine.GetKV([]byte("key1"))
+		assert.Error(t, err, "deleted key should not exist")
+
+		gotValue, err := engine.GetKV([]byte("key2"))
+		require.NoError(t, err)
+		assert.Equal(t, []byte("value2"), gotValue)
+	})
+
+	t.Run("ops_count_increments_correctly", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "apply_batch_ops"
+
+		config := NewDefaultEngineConfig()
+		config.ArenaSize = 1 << 20
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.close(context.Background())
+		})
+
+		r, logStore, cleanupRaft := setupSingleNodeRaft(t, dir, engine)
+		t.Cleanup(cleanupRaft)
+
+		applier := &raftApplierWrapper{raft: r, timeout: 5 * time.Second}
+		engine.SetRaftMode(true)
+		engine.SetRaftApplier(applier)
+		engine.SetPositionLookup(logStore.GetPosition)
+
+		initialOps := engine.OpsReceivedCount()
+
+		numOps := 5
+		for i := 0; i < numOps; i++ {
+			err = engine.PutKV([]byte(fmt.Sprintf("key-%d", i)), []byte(fmt.Sprintf("value-%d", i)))
+			require.NoError(t, err)
+		}
+
+		finalOps := engine.OpsReceivedCount()
+		assert.Equal(t, initialOps+uint64(numOps), finalOps,
+			"ops count should increase by number of operations")
+	})
+
+	t.Run("applied_index_and_term_update", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "apply_batch_index_term"
+
+		config := NewDefaultEngineConfig()
+		config.ArenaSize = 1 << 20
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.close(context.Background())
+		})
+
+		r, logStore, cleanupRaft := setupSingleNodeRaft(t, dir, engine)
+		t.Cleanup(cleanupRaft)
+
+		applier := &raftApplierWrapper{raft: r, timeout: 5 * time.Second}
+		engine.SetRaftMode(true)
+		engine.SetRaftApplier(applier)
+		engine.SetPositionLookup(logStore.GetPosition)
+
+		for i := 0; i < 5; i++ {
+			err = engine.PutKV([]byte(fmt.Sprintf("key-%d", i)), []byte(fmt.Sprintf("value-%d", i)))
+			require.NoError(t, err)
+		}
+
+		assert.Greater(t, engine.AppliedIndex(), uint64(0), "applied index should be > 0")
+		assert.Greater(t, engine.AppliedTerm(), uint64(0), "applied term should be > 0")
+	})
 }

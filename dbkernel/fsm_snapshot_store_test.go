@@ -84,9 +84,6 @@ func TestFSMSnapshotStore_WithRealRaft(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	t.Logf("Applied 20 logs. Applied index: %d, Flushed index: %d",
-		engine.AppliedIndex(), engine.FlushedIndex())
-
 	appliedBefore := engine.AppliedIndex()
 	flushedBefore := engine.FlushedIndex()
 	fmt.Println(flushedBefore)
@@ -101,15 +98,8 @@ func TestFSMSnapshotStore_WithRealRaft(t *testing.T) {
 	require.NotEmpty(t, snapshots, "should have at least one snapshot")
 
 	latestSnapshot := snapshots[0]
-	fmt.Println(latestSnapshot)
-	t.Logf("Snapshot created with index: %d, term: %d",
-		latestSnapshot.Index, latestSnapshot.Term)
-
 	assert.LessOrEqual(t, latestSnapshot.Index, appliedBefore,
 		"snapshot index should not exceed applied index")
-
-	t.Logf("Test passed! Snapshot index %d <= applied index %d",
-		latestSnapshot.Index, appliedBefore)
 }
 
 func TestFSMSnapshotStore_RestoreFromCheckpoint(t *testing.T) {
@@ -140,9 +130,6 @@ func TestFSMSnapshotStore_RestoreFromCheckpoint(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	t.Logf("Applied 10 logs. Applied: %d, Flushed: %d",
-		engine.AppliedIndex(), engine.FlushedIndex())
-
 	fsyncDone := make(chan struct{}, 1)
 	engine.setFsyncCallback(func() {
 		select {
@@ -161,9 +148,6 @@ func TestFSMSnapshotStore_RestoreFromCheckpoint(t *testing.T) {
 		t.Fatal("timeout waiting for fsync memtableRotateCallback")
 	}
 
-	t.Logf("After flush. Applied: %d, Flushed: %d",
-		engine.AppliedIndex(), engine.FlushedIndex())
-
 	for i := 10; i < 15; i++ {
 		err := engine.PutKV([]byte(fmt.Sprintf("key%d", i)), []byte(fmt.Sprintf("value%d", i)))
 		require.NoError(t, err)
@@ -171,28 +155,18 @@ func TestFSMSnapshotStore_RestoreFromCheckpoint(t *testing.T) {
 
 	appliedIndex := engine.AppliedIndex()
 	flushedIndex := engine.FlushedIndex()
-	t.Logf("Final state. Applied: %d, Flushed: %d", appliedIndex, flushedIndex)
 
 	assert.Less(t, flushedIndex, appliedIndex)
 
-	checkpointBefore, err := engine.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
-	if err != nil {
-		t.Logf("Debug: No checkpoint found before snapshot: %v", err)
-	} else if len(checkpointBefore) > 0 {
-		metaBefore := internal.UnmarshalMetadata(checkpointBefore)
-		t.Logf("Debug: B-tree metadata BEFORE snapshot: RecordProcessed=%d, RaftIndex=%d, RaftTerm=%d",
-			metaBefore.RecordProcessed, metaBefore.RaftIndex, metaBefore.RaftTerm)
-	} else {
-		t.Log("Debug: Empty checkpoint data before snapshot")
-	}
+	_, err = engine.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
+	assert.NoError(t, err)
 
 	holder := engine.SnapshotIndexHolder()
 	fsmSnapshot, err := engine.Snapshot()
 	require.NoError(t, err)
 
-	holderIndex, holderTerm := holder.Get()
+	holderIndex, _ := holder.Get()
 	assert.Equal(t, flushedIndex, holderIndex)
-	t.Logf("Holder set to index: %d, term: %d", holderIndex, holderTerm)
 
 	snapshotDir := filepath.Join(tmpDir, "snapshots")
 	require.NoError(t, os.MkdirAll(snapshotDir, 0755))
@@ -222,10 +196,6 @@ func TestFSMSnapshotStore_RestoreFromCheckpoint(t *testing.T) {
 
 	err = engine2.Restore(snapshotReader)
 	require.NoError(t, err)
-
-	t.Logf("Restored engine. Applied: %d, Flushed: %d",
-		engine2.AppliedIndex(), engine2.FlushedIndex())
-
 	assert.Equal(t, flushedIndex, engine2.AppliedIndex(),
 		"restored applied index should match flushed index from checkpoint")
 	assert.Equal(t, flushedIndex, engine2.FlushedIndex(),
@@ -238,8 +208,6 @@ func TestFSMSnapshotStore_RestoreFromCheckpoint(t *testing.T) {
 		assert.Equal(t, fmt.Sprintf("value%d", i), string(value),
 			"key %s should be restored", key)
 	}
-
-	t.Log("Restore test passed!")
 }
 
 func TestFSMSnapshotStore_SnapshotAndRestoreWithRaft(t *testing.T) {
@@ -320,9 +288,6 @@ func TestFSMSnapshotStore_SnapshotAndRestoreWithRaft(t *testing.T) {
 		t.Fatal("timeout waiting for fsync memtableRotateCallback")
 	}
 
-	flushedAfterFirst := engine.FlushedIndex()
-	t.Logf("After first flush: Applied=%d, Flushed=%d", engine.AppliedIndex(), flushedAfterFirst)
-
 	for i := 50; i < 75; i++ {
 		err := engine.PutKV([]byte(fmt.Sprintf("key%d", i)), []byte(fmt.Sprintf("value%d", i)))
 		require.NoError(t, err)
@@ -330,7 +295,6 @@ func TestFSMSnapshotStore_SnapshotAndRestoreWithRaft(t *testing.T) {
 
 	appliedBeforeSnapshot := engine.AppliedIndex()
 	flushedBeforeSnapshot := engine.FlushedIndex()
-	t.Logf("Before snapshot: Applied=%d, Flushed=%d", appliedBeforeSnapshot, flushedBeforeSnapshot)
 
 	require.Less(t, flushedBeforeSnapshot, appliedBeforeSnapshot,
 		"flushed should be less than applied before snapshot")
@@ -343,7 +307,6 @@ func TestFSMSnapshotStore_SnapshotAndRestoreWithRaft(t *testing.T) {
 	require.NotEmpty(t, snapshots)
 
 	latestSnap := snapshots[0]
-	t.Logf("Snapshot metadata: Index=%d, Term=%d", latestSnap.Index, latestSnap.Term)
 
 	assert.LessOrEqual(t, latestSnap.Index, appliedBeforeSnapshot,
 		"snapshot index should not exceed applied index")
@@ -369,8 +332,6 @@ func TestFSMSnapshotStore_SnapshotAndRestoreWithRaft(t *testing.T) {
 
 	err = engine2.Restore(io.NopCloser(bytes.NewReader(buf.Bytes())))
 	require.NoError(t, err)
-
-	t.Logf("After restore: Applied=%d, Flushed=%d", engine2.AppliedIndex(), engine2.FlushedIndex())
 
 	assert.Equal(t, engine2.AppliedIndex(), engine2.FlushedIndex(),
 		"restored engine should have applied == flushed")
@@ -458,9 +419,6 @@ func TestFSMSnapshotStore_RestoreAndLogReplay(t *testing.T) {
 		t.Fatal("timeout waiting for fsync memtableRotateCallback")
 	}
 
-	flushedAfterFirstBatch := engine.FlushedIndex()
-	t.Logf("After first batch: Applied=%d, Flushed=%d", engine.AppliedIndex(), flushedAfterFirstBatch)
-
 	for i := 50; i < 75; i++ {
 		err := engine.PutKV([]byte(fmt.Sprintf("key%d", i)), []byte(fmt.Sprintf("value%d", i)))
 		require.NoError(t, err)
@@ -468,7 +426,6 @@ func TestFSMSnapshotStore_RestoreAndLogReplay(t *testing.T) {
 
 	appliedBeforeSnapshot := engine.AppliedIndex()
 	flushedBeforeSnapshot := engine.FlushedIndex()
-	t.Logf("Before snapshot: Applied=%d, Flushed=%d", appliedBeforeSnapshot, flushedBeforeSnapshot)
 
 	require.Greater(t, appliedBeforeSnapshot, flushedBeforeSnapshot,
 		"should have unflushed data in memtable")
@@ -481,15 +438,12 @@ func TestFSMSnapshotStore_RestoreAndLogReplay(t *testing.T) {
 	require.NotEmpty(t, snapshots)
 
 	snapshotMeta := snapshots[0]
-	t.Logf("Snapshot taken at index=%d (flushed=%d, applied=%d)",
-		snapshotMeta.Index, flushedBeforeSnapshot, appliedBeforeSnapshot)
+	assert.Equal(t, snapshotMeta.Index, flushedBeforeSnapshot, snapshotMeta.Index, flushedBeforeSnapshot, appliedBeforeSnapshot)
 
 	assert.Equal(t, flushedBeforeSnapshot, snapshotMeta.Index,
 		"snapshot index should match flushedIndex")
 
-	firstIdx, _ := logStore.FirstIndex()
 	lastIdx, _ := logStore.LastIndex()
-	t.Logf("LogStore range: first=%d, last=%d", firstIdx, lastIdx)
 	assert.GreaterOrEqual(t, lastIdx, appliedBeforeSnapshot,
 		"LogStore should have logs up to appliedIndex")
 
@@ -514,8 +468,6 @@ func TestFSMSnapshotStore_RestoreAndLogReplay(t *testing.T) {
 	err = engine2.Restore(io.NopCloser(bytes.NewReader(snapshotBuf.Bytes())))
 	require.NoError(t, err)
 
-	t.Logf("After restore: Applied=%d, Flushed=%d", engine2.AppliedIndex(), engine2.FlushedIndex())
-
 	assert.Equal(t, flushedBeforeSnapshot, engine2.AppliedIndex(),
 		"restored appliedIndex should match snapshot index (flushedIndex)")
 
@@ -534,8 +486,6 @@ func TestFSMSnapshotStore_RestoreAndLogReplay(t *testing.T) {
 	}
 	t.Log("Confirmed keys 50-74 do NOT exist before log replay")
 
-	t.Logf("Replaying logs from %d to %d", flushedBeforeSnapshot+1, appliedBeforeSnapshot)
-
 	for idx := flushedBeforeSnapshot + 1; idx <= appliedBeforeSnapshot; idx++ {
 		log := new(raft.Log)
 		err := logStore.GetLog(idx, log)
@@ -546,8 +496,6 @@ func TestFSMSnapshotStore_RestoreAndLogReplay(t *testing.T) {
 			assert.Nil(t, result, "Apply should succeed for log %d", idx)
 		}
 	}
-
-	t.Logf("After replay: Applied=%d, Flushed=%d", engine2.AppliedIndex(), engine2.FlushedIndex())
 
 	for i := 0; i < 75; i++ {
 		key := fmt.Sprintf("key%d", i)
@@ -562,9 +510,6 @@ func TestFSMSnapshotStore_RestoreAndLogReplay(t *testing.T) {
 	assert.Equal(t, flushedBeforeSnapshot, engine2.FlushedIndex(),
 		"flushedIndex should still be snapshot index (no new flush)")
 
-	t.Logf("SUCCESS: Restore + Log Replay recovered all %d keys", 75)
-	t.Logf("  - B-tree (from snapshot): keys 0-49")
-	t.Logf("  - Memtable (from replay): keys 50-74")
 }
 
 type testFileSink struct {

@@ -223,6 +223,56 @@ func (wh *ReplicaWALHandler) ApplyRecords(encodedWals [][]byte, receivedOffsets 
 	return nil
 }
 
+// ApplyRecordsLSNOnly applies WAL records with LSN validation only.
+func (wh *ReplicaWALHandler) ApplyRecordsLSNOnly(encodedWals [][]byte) error {
+	if len(encodedWals) == 0 {
+		return nil
+	}
+
+	wh.mu.Lock()
+	defer wh.mu.Unlock()
+
+	expectedLSN := wh.engine.writeSeenCounter.Load() + 1
+	decodedRecords := make([]*logrecord.LogRecord, len(encodedWals))
+	logIndexes := make([]uint64, len(encodedWals))
+
+	for i, encodedWal := range encodedWals {
+		decoded := logrecord.GetRootAsLogRecord(encodedWal, 0)
+		if expectedLSN+uint64(i) != decoded.Lsn() {
+			return fmt.Errorf("%w at index %d: got %d, expected %d", ErrInvalidLSN, i, decoded.Lsn(), expectedLSN+uint64(i))
+		}
+		decodedRecords[i] = decoded
+		logIndexes[i] = decoded.Lsn()
+	}
+
+	offsets, err := wh.engine.walIO.BatchAppend(encodedWals, logIndexes)
+	if err != nil {
+		return err
+	}
+
+	wh.engine.writeSeenCounter.Add(uint64(len(encodedWals)))
+
+	for i, decoded := range decodedRecords {
+		remoteHLC := decoded.Hlc()
+		nowMs := HLCNow()
+		var physicalLatencyMs uint64
+		if nowMs >= remoteHLC {
+			physicalLatencyMs = nowMs - remoteHLC
+		} else {
+			physicalLatencyMs = 0
+		}
+
+		latency := time.Duration(physicalLatencyMs) * time.Millisecond
+		wh.engine.taggedScope.Histogram(mReplicationLatencySeconds, replicationLatencyBuckets).RecordDuration(latency)
+
+		if err := wh.handleRecord(decoded, offsets[i]); err != nil {
+			return fmt.Errorf("failed to handle record at index %d: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
 func isEqualOffset(local *Offset, remote Offset) bool {
 	if local.SegmentID == remote.SegmentID && local.Offset == remote.Offset {
 		return true
