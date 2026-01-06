@@ -16,12 +16,13 @@ import (
 	llhist "github.com/openhistogram/circonusllhist"
 )
 
-const segmentLagEmitThreshold = 3
+const (
+	lsnLagThreshold = 10000
+)
 
 // LocalWalRelayer encodes all the parameter needed to start local relayer and used for testing purpose only.
 type LocalWalRelayer struct {
 	id              string
-	lastOffset      *dbkernel.Offset
 	replicatedCount int
 	lsn             uint64
 	startTime       time.Time
@@ -40,7 +41,7 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 	hist *llhist.Histogram) error {
 	rpInstance := replicator.NewReplicator(engine,
 		50,
-		1*time.Second, n.lastOffset, "local")
+		1*time.Second, n.lsn, "local")
 
 	walReceiver := make(chan []*v1.WALRecord, 1000)
 	replicatorErrors := make(chan error, 2)
@@ -60,18 +61,10 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 	for {
 		select {
 		case <-doneCh:
-			var segmentLag int
-			segment := -1
-			if n.lastOffset != nil {
-				segmentLag = int(engine.CurrentOffset().SegmentID) - int(n.lastOffset.SegmentID)
-				segment = int(n.lastOffset.SegmentID)
-			}
-
 			slog.Debug("[unisondb.relayer]",
 				slog.String("event_type", "local.relayer.sync.stats"),
 				slog.String("namespace", namespace),
-				slog.Int("segment", segment),
-				slog.Int("segment_lag", segmentLag),
+				slog.Uint64("lsn", n.lsn),
 				slog.Int("replicated", n.replicatedCount),
 			)
 			return nil
@@ -102,10 +95,6 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 				n.lsn++
 			}
 			n.replicatedCount += len(records)
-			n.lastOffset = &dbkernel.Offset{
-				Offset:    int64(records[len(records)-1].Offset),
-				SegmentID: records[len(records)-1].SegmentId,
-			}
 			replicator.ReleaseRecords(records)
 
 		case err := <-replicatorErrors:
@@ -114,17 +103,17 @@ func (n *LocalWalRelayer) Run(ctx context.Context, engine *dbkernel.Engine, metr
 			}
 			panic(err)
 		case <-ticker.C:
-			if n.lastOffset != nil {
-				segmentLag := int(engine.CurrentOffset().SegmentID) - int(n.lastOffset.SegmentID)
-				if segmentLag >= segmentLagEmitThreshold {
-					slog.Info("[unisondb.relayer]",
-						slog.String("event_type", "local.relayer.sync.stats"),
-						slog.String("namespace", namespace),
-						slog.Int("segment", int(n.lastOffset.SegmentID)),
-						slog.Int("segment_lag", segmentLag),
-						slog.Int("replicated", n.replicatedCount),
-					)
-				}
+			currentLSN := engine.OpsReceivedCount()
+			lsnLag := currentLSN - n.lsn
+			if lsnLag >= lsnLagThreshold {
+				slog.Warn("[unisondb.relayer]",
+					slog.String("event_type", "local.relayer.sync.stats"),
+					slog.String("namespace", namespace),
+					slog.Uint64("lsn", n.lsn),
+					slog.Uint64("current_lsn", currentLSN),
+					slog.Uint64("lsn_lag", lsnLag),
+					slog.Int("replicated", n.replicatedCount),
+				)
 			}
 		}
 	}
