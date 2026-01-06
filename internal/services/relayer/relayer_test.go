@@ -21,59 +21,34 @@ import (
 	"golang.org/x/time/rate"
 )
 
-func TestRelayer_LogLag(t *testing.T) {
-	baseDir := t.TempDir()
-	namespace := "relayer"
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
 
-	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, dbkernel.NewDefaultEngineConfig())
-	assert.NoError(t, err)
+func (s *syncBuffer) Write(p []byte) (n int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.Write(p)
+}
 
-	t.Cleanup(func() {
-		assert.NoError(t, engine.Close(context.Background()))
-	})
-
-	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	relayer := NewRelayer(engine, namespace, nil, 1, logger)
-	// should not panic
-	relayer.logLag(nil, nil)
-
-	remoteOffset := &dbkernel.Offset{
-		SegmentID: 10,
-		Offset:    10,
-	}
-
-	localOffset := &dbkernel.Offset{
-		SegmentID: 8,
-		Offset:    8,
-	}
-
-	relayer.logLag(remoteOffset, localOffset)
-	logStr := logBuf.String()
-	assert.Contains(t, logStr, "segment.lag.threshold.exceeded")
-	assert.Contains(t, logStr, "namespace")
-	assert.Contains(t, logStr, "offset.remote.segment_id")
-	assert.Contains(t, logStr, "offset.remote.segment_id")
-
-	relayer.logLag(remoteOffset, nil)
-	relayer.logLag(nil, localOffset)
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.buf.String()
 }
 
 type mockStreamer struct {
 	injectErr    error
-	mockedOffset *dbkernel.Offset
 	engine       *dbkernel.Engine
 	walIOHandler WalIO
 }
 
-func (m *mockStreamer) GetLatestOffset(ctx context.Context) (*dbkernel.Offset, error) {
+func (m *mockStreamer) GetLatestLSN(ctx context.Context) (uint64, error) {
 	if m.injectErr != nil {
-		return nil, m.injectErr
+		return 0, m.injectErr
 	}
-	if m.mockedOffset != nil {
-		return m.mockedOffset, nil
-	}
-	return m.engine.CurrentOffset(), nil
+	return m.engine.OpsReceivedCount(), nil
 }
 
 func (m *mockStreamer) StreamWAL(ctx context.Context) error {
@@ -86,7 +61,7 @@ func (m *mockStreamer) StreamWAL(ctx context.Context) error {
 	}
 
 	for {
-		value, offset, err := reader.Next()
+		value, _, err := reader.Next()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -95,9 +70,7 @@ func (m *mockStreamer) StreamWAL(ctx context.Context) error {
 		}
 
 		err = m.walIOHandler.Write(&v1.WALRecord{
-			Record:    value,
-			SegmentId: offset.SegmentID,
-			Offset:    uint64(offset.Offset),
+			Record: value,
 		})
 		if err != nil {
 			return err
@@ -116,7 +89,7 @@ func TestRelayer_Monitor(t *testing.T) {
 		assert.NoError(t, engine.Close(context.Background()))
 	})
 
-	var logBuf bytes.Buffer
+	var logBuf syncBuffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	relayer := NewRelayer(engine, namespace, nil, 1, logger)
 
@@ -131,19 +104,11 @@ func TestRelayer_Monitor(t *testing.T) {
 	relayer.monitor(t.Context())
 	mockStreamer.injectErr = nil
 	relayer.monitor(t.Context())
-	mockStreamer.mockedOffset = &dbkernel.Offset{
-		SegmentID: 10,
-		Offset:    10,
-	}
-	relayer.monitor(t.Context())
-	err = relayer.StartRelay(t.Context())
-	assert.ErrorIs(t, err, ErrSegmentLagThresholdExceeded)
 	logStr := logBuf.String()
-	assert.Contains(t, logStr, "segment.lag.threshold.exceeded")
 	assert.Contains(t, logStr, "event_type=error")
 
-	assert.Equal(t, 1, testutil.CollectAndCount(segmentLagGauge))
-	assert.Equal(t, 1, testutil.CollectAndCount(segmentLagThresholdGauge))
+	assert.Equal(t, 1, testutil.CollectAndCount(lsnLagGauge))
+	assert.Equal(t, 1, testutil.CollectAndCount(lsnLagThresholdGauge))
 }
 
 func TestRelayer_StartRelay(t *testing.T) {
@@ -174,10 +139,9 @@ func TestRelayer_StartRelay(t *testing.T) {
 		assert.NoError(t, err, "error putting value to engine")
 	}
 
-	var logBuf bytes.Buffer
+	var logBuf syncBuffer
 	logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	relayer := NewRelayer(engine, namespace, nil, 1, logger)
-	relayer.offsetMonitorInterval = 1 * time.Millisecond
 
 	mockStreamer := &mockStreamer{
 		engine:       mockedEngine,
@@ -215,9 +179,7 @@ func TestRateLimitedWalIO_ContextCancellation(t *testing.T) {
 	rlWalIO := NewRateLimitedWalIO(ctx, mock, limiter)
 
 	record := &v1.WALRecord{
-		SegmentId: 0,
-		Offset:    0,
-		Record:    []byte("test-record"),
+		Record: []byte("test-record"),
 	}
 
 	err := rlWalIO.Write(record)
@@ -256,9 +218,9 @@ func TestRateLimitedWalIO_WriteBatch(t *testing.T) {
 		rlWalIO := NewRateLimitedWalIO(ctx, mock, limiter)
 
 		records := []*v1.WALRecord{
-			{SegmentId: 0, Offset: 0, Record: []byte("record1")},
-			{SegmentId: 0, Offset: 1, Record: []byte("record2")},
-			{SegmentId: 0, Offset: 2, Record: []byte("record3")},
+			{Record: []byte("record1")},
+			{Record: []byte("record2")},
+			{Record: []byte("record3")},
 		}
 
 		err := rlWalIO.WriteBatch(records)
@@ -289,9 +251,7 @@ func TestRateLimitedWalIO_WriteBatch(t *testing.T) {
 		records := make([]*v1.WALRecord, 10)
 		for i := 0; i < 10; i++ {
 			records[i] = &v1.WALRecord{
-				SegmentId: 0,
-				Offset:    uint64(i),
-				Record:    []byte(fmt.Sprintf("record%d", i)),
+				Record: []byte(fmt.Sprintf("record%d", i)),
 			}
 		}
 
@@ -305,9 +265,7 @@ func TestRateLimitedWalIO_WriteBatch(t *testing.T) {
 		records2 := make([]*v1.WALRecord, 5)
 		for i := 0; i < 5; i++ {
 			records2[i] = &v1.WALRecord{
-				SegmentId: 0,
-				Offset:    uint64(10 + i),
-				Record:    []byte(fmt.Sprintf("record%d", 10+i)),
+				Record: []byte(fmt.Sprintf("record%d", 10+i)),
 			}
 		}
 
@@ -328,7 +286,7 @@ func TestRateLimitedWalIO_WriteBatch(t *testing.T) {
 		rlWalIO := NewRateLimitedWalIO(ctx, mock, limiter)
 
 		firstRecord := []*v1.WALRecord{
-			{SegmentId: 0, Offset: 0, Record: []byte("record0")},
+			{Record: []byte("record0")},
 		}
 		err := rlWalIO.WriteBatch(firstRecord)
 		assert.NoError(t, err)
@@ -336,9 +294,7 @@ func TestRateLimitedWalIO_WriteBatch(t *testing.T) {
 		largeRecords := make([]*v1.WALRecord, 10)
 		for i := 0; i < 10; i++ {
 			largeRecords[i] = &v1.WALRecord{
-				SegmentId: 0,
-				Offset:    uint64(i + 1),
-				Record:    []byte(fmt.Sprintf("record%d", i+1)),
+				Record: []byte(fmt.Sprintf("record%d", i+1)),
 			}
 		}
 
@@ -370,9 +326,7 @@ func TestRateLimitedWalIO_WriteBatch(t *testing.T) {
 				records := make([]*v1.WALRecord, recordsPerBatch)
 				for i := 0; i < recordsPerBatch; i++ {
 					records[i] = &v1.WALRecord{
-						SegmentId: uint32(workerID),
-						Offset:    uint64(i),
-						Record:    []byte(fmt.Sprintf("worker%d-record%d", workerID, i)),
+						Record: []byte(fmt.Sprintf("worker%d-record%d", workerID, i)),
 					}
 				}
 				err := rlWalIO.WriteBatch(records)
@@ -397,7 +351,7 @@ func TestWalIOHandler_WriteBatch(t *testing.T) {
 	handler := dbkernel.NewReplicaWALHandler(engine)
 	walHandler := walIOHandler{replica: handler}
 
-	t.Run("batch_write_success", func(t *testing.T) {
+	t.Run("invalid_records_panic", func(t *testing.T) {
 		records := make([]*v1.WALRecord, 5)
 		for i := 0; i < 5; i++ {
 			kv := fmt.Sprintf("key%d", i)
@@ -406,15 +360,14 @@ func TestWalIOHandler_WriteBatch(t *testing.T) {
 			encodedKV := []byte(kv + ":" + value)
 
 			record := &v1.WALRecord{
-				SegmentId: 0,
-				Offset:    uint64(i),
-				Record:    encodedKV,
+				Record: encodedKV,
 			}
 			records[i] = record
 		}
 
-		err := walHandler.WriteBatch(records)
-		assert.Error(t, err, "should error with improperly encoded records")
+		assert.Panics(t, func() {
+			_ = walHandler.WriteBatch(records)
+		}, "should panic with improperly encoded records")
 	})
 
 	t.Run("empty_batch", func(t *testing.T) {
