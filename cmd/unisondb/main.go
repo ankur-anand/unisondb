@@ -87,6 +87,7 @@ func Run(_ context.Context, configPath, env, mode, portsFile string) error {
 
 	srv.BuildDeps()
 
+	srv.Register(&cliapp.RaftService{})
 	srv.Register(&cliapp.GRPCService{})
 	srv.Register(&cliapp.HTTPService{})
 	srv.Register(&cliapp.RelayerService{})

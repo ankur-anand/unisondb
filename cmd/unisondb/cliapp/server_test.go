@@ -97,23 +97,23 @@ func TestClampToUint32(t *testing.T) {
 	}
 }
 
-func TestBuildNamespaceSegmentLagMap(t *testing.T) {
+func TestBuildNamespaceLSNLagMap(t *testing.T) {
 	cfg := &config.Config{
 		RelayConfigs: map[string]config.RelayConfig{
 			"relay-a": {
-				Namespaces:          []string{"alpha", "beta"},
-				SegmentLagThreshold: 5,
+				Namespaces:      []string{"alpha", "beta"},
+				LSNLagThreshold: 5,
 			},
 			"relay-b": {
-				Namespaces:          []string{"gamma"},
-				SegmentLagThreshold: 7,
+				Namespaces:      []string{"gamma"},
+				LSNLagThreshold: 7,
 			},
 		},
 	}
 
-	got, err := buildNamespaceSegmentLagMap(cfg)
+	got, err := buildNamespaceLSNLagMap(cfg)
 	if err != nil {
-		t.Fatalf("buildNamespaceSegmentLagMap returned error: %v", err)
+		t.Fatalf("buildNamespaceLSNLagMap returned error: %v", err)
 	}
 
 	want := map[string]int{
@@ -133,21 +133,21 @@ func TestBuildNamespaceSegmentLagMap(t *testing.T) {
 	}
 }
 
-func TestBuildNamespaceSegmentLagMapDuplicateNamespace(t *testing.T) {
+func TestBuildNamespaceLSNLagMapDuplicateNamespace(t *testing.T) {
 	cfg := &config.Config{
 		RelayConfigs: map[string]config.RelayConfig{
 			"relay-a": {
-				Namespaces:          []string{"shared"},
-				SegmentLagThreshold: 5,
+				Namespaces:      []string{"shared"},
+				LSNLagThreshold: 5,
 			},
 			"relay-b": {
-				Namespaces:          []string{"shared"},
-				SegmentLagThreshold: 7,
+				Namespaces:      []string{"shared"},
+				LSNLagThreshold: 7,
 			},
 		},
 	}
 
-	_, err := buildNamespaceSegmentLagMap(cfg)
+	_, err := buildNamespaceLSNLagMap(cfg)
 	if err == nil {
 		t.Fatalf("expected error due to duplicate namespace, got nil")
 	}
@@ -156,14 +156,14 @@ func TestBuildNamespaceSegmentLagMapDuplicateNamespace(t *testing.T) {
 	}
 }
 
-func TestBuildNamespaceSegmentLagMapEmpty(t *testing.T) {
+func TestBuildNamespaceLSNLagMapEmpty(t *testing.T) {
 	cfg := &config.Config{
 		RelayConfigs: map[string]config.RelayConfig{},
 	}
 
-	got, err := buildNamespaceSegmentLagMap(cfg)
+	got, err := buildNamespaceLSNLagMap(cfg)
 	if err != nil {
-		t.Fatalf("buildNamespaceSegmentLagMap returned error: %v", err)
+		t.Fatalf("buildNamespaceLSNLagMap returned error: %v", err)
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected empty map, got %v", got)
@@ -453,16 +453,16 @@ func TestBuildNamespaceGrpcClientsSuccess(t *testing.T) {
 	cfg := config.Config{
 		RelayConfigs: map[string]config.RelayConfig{
 			"relay-a": {
-				Namespaces:          []string{"alpha", "beta"},
-				UpstreamAddress:     addr,
-				AllowInsecure:       true,
-				SegmentLagThreshold: 5,
+				Namespaces:      []string{"alpha", "beta"},
+				UpstreamAddress: addr,
+				AllowInsecure:   true,
+				LSNLagThreshold: 5,
 			},
 			"relay-b": {
-				Namespaces:          []string{"gamma"},
-				UpstreamAddress:     addr,
-				AllowInsecure:       true,
-				SegmentLagThreshold: 5,
+				Namespaces:      []string{"gamma"},
+				UpstreamAddress: addr,
+				AllowInsecure:   true,
+				LSNLagThreshold: 5,
 			},
 		},
 	}
