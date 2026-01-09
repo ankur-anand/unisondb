@@ -366,6 +366,14 @@ func (e *Engine) loadMetaValues() error {
 
 // recoverWAL recovers the wal if any pending writes are still not visible.
 func (e *Engine) recoverWAL() error {
+	if e.config.WalConfig.RaftMode {
+		slog.Info("[dbkernel]",
+			slog.String("message", "Skipping WAL recovery in Raft mode"),
+			slog.String("namespace", e.namespace),
+		)
+		return nil
+	}
+
 	checkpoint, err := e.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
 	if err != nil && !errors.Is(err, kvdrivers2.ErrKeyNotFound) {
 		return fmt.Errorf("recover WAL failed %w", err)

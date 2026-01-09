@@ -1413,3 +1413,38 @@ func TestEngine_ApplyBatch(t *testing.T) {
 		assert.Greater(t, engine.AppliedTerm(), uint64(0), "applied term should be > 0")
 	})
 }
+
+func TestEngine_RaftMode_SkipsWALRecovery(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "raft_skip_recovery_test"
+
+	config := NewDefaultEngineConfig()
+	config.ArenaSize = 1 << 20
+	config.WalConfig.RaftMode = true
+
+	engine, err := NewStorageEngine(dir, namespace, config)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.close(context.Background())
+		assert.NoError(t, err)
+	})
+
+	assert.Equal(t, 0, engine.RecoveredWALCount(),
+		"no entries should be recovered in Raft mode")
+
+	engine.SetRaftMode(true)
+
+	r, logStore, cleanupRaft := setupSingleNodeRaft(t, dir, engine)
+	t.Cleanup(cleanupRaft)
+
+	applier := &raftApplierWrapper{raft: r, timeout: 5 * time.Second}
+	engine.SetRaftApplier(applier)
+	engine.SetPositionLookup(logStore.GetPosition)
+
+	err = engine.PutKV([]byte("test-key"), []byte("test-value"))
+	require.NoError(t, err)
+
+	gotValue, err := engine.GetKV([]byte("test-key"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("test-value"), gotValue)
+}
