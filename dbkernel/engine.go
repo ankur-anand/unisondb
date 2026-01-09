@@ -22,6 +22,7 @@ import (
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	kvdrivers2 "github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/pkg/umetrics"
+	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/dustin/go-humanize"
@@ -236,7 +237,12 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 
 	engine.appendNotify = make(chan struct{})
 	if conf.WalConfig.AutoCleanup {
-		predicate := newWalCleanupPredicate(engine.GetWalCheckPoint)
+		var predicate walfs.DeletionPredicate
+		if conf.WalConfig.RaftMode {
+			predicate = newRaftWalCleanupPredicate(engine.walIO.WAL(), engine.FlushedIndex)
+		} else {
+			predicate = newWalCleanupPredicate(engine.GetWalCheckPoint)
+		}
 		engine.walIO.RunWalCleanup(ctx, conf.WalConfig.CleanupInterval, predicate)
 	}
 
@@ -252,6 +258,36 @@ func newWalCleanupPredicate(checkpoint func() (*internal.Metadata, error)) func(
 			return false
 		}
 		return checkpointMeta.Pos.SegmentID > segID
+	}
+}
+
+func newRaftWalCleanupPredicate(wlog *walfs.WALog, getFlushedIndex func() uint64) walfs.DeletionPredicate {
+	logIndex := wlog.LogIndex()
+	return func(segID wal.SegID) bool {
+		seg, ok := wlog.Segments()[segID]
+		if !ok {
+			return false
+		}
+
+		if wlog.Current() != nil && wlog.Current().ID() == segID {
+			return false
+		}
+
+		entryCount := seg.GetEntryCount()
+		if entryCount == 0 {
+			return false
+		}
+
+		firstIdx := seg.FirstLogIndex()
+		lastIdx := firstIdx + uint64(entryCount) - 1
+
+		// entries are still in index, raft need this for raft replication.
+		if _, ok := logIndex.Get(lastIdx); ok {
+			return false
+		}
+
+		// every entries present in segment are flushed to B-tree
+		return lastIdx <= getFlushedIndex()
 	}
 }
 
