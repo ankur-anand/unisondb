@@ -210,8 +210,8 @@ type segmentIndexEntry struct {
 	Length uint32
 }
 
-// IndexEntry exposes a record's physical location within a WAL segment.
-type IndexEntry struct {
+// SegmentIndexEntry exposes a record's physical location within a WAL segment.
+type SegmentIndexEntry struct {
 	SegmentID SegmentID
 	Offset    int64
 	Length    uint32
@@ -481,10 +481,10 @@ func (seg *Segment) appendIndexEntry(offset int64, length uint32) {
 }
 
 // IndexEntries returns a copy of the index metadata for this segment.
-func (seg *Segment) IndexEntries() []IndexEntry {
-	entries := make([]IndexEntry, len(seg.indexEntries))
+func (seg *Segment) IndexEntries() []SegmentIndexEntry {
+	entries := make([]SegmentIndexEntry, len(seg.indexEntries))
 	for i, entry := range seg.indexEntries {
-		entries[i] = IndexEntry{
+		entries[i] = SegmentIndexEntry{
 			SegmentID: seg.id,
 			Offset:    int64(entry.Offset),
 			Length:    entry.Length,
