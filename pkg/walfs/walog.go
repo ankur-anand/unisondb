@@ -256,6 +256,10 @@ func (wl *WALog) openSegment(id uint32) (*Segment, error) {
 		opts = append(opts, withClearIndexOnFlush())
 	}
 
+	if wl.logIndex != nil {
+		opts = append(opts, withLogIndex(wl.logIndex))
+	}
+
 	seg, err := OpenSegmentFile(wl.dir, wl.ext, id, opts...)
 	if err != nil {
 		return nil, err

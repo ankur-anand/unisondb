@@ -246,6 +246,7 @@ type Segment struct {
 	indexFlush        sync.WaitGroup
 	firstLogIndex     uint64
 	clearIndexOnFlush bool
+	logIndex          *ShardedIndex
 }
 
 // WithSyncOption sets the sync option for the Segment.
@@ -276,6 +277,14 @@ func withClearIndexOnFlush() func(*Segment) {
 func WithSegmentSize(size int64) func(*Segment) {
 	return func(s *Segment) {
 		s.mmapSize = size
+	}
+}
+
+// withLogIndex set up the log Index that will be used by the segment to populate
+// the log index when recovering the seal segment or after restart.
+func withLogIndex(logIndex *ShardedIndex) func(*Segment) {
+	return func(s *Segment) {
+		s.logIndex = logIndex
 	}
 }
 
@@ -391,26 +400,51 @@ func (seg *Segment) loadIndexFromFile() error {
 	count := int(info.Size() / indexEntrySize)
 	seg.indexEntries = make([]segmentIndexEntry, 0, count)
 	buf := make([]byte, indexEntrySize)
+	firstIdx := seg.firstLogIndex
+	indexBuild := seg.logIndex != nil && firstIdx > 0
+	var idx uint64
 	for i := 0; i < count; i++ {
 		if _, err := io.ReadFull(file, buf); err != nil {
 			return fmt.Errorf("read index: %w", err)
 		}
-		entry := segmentIndexEntry{
-			Offset: binary.LittleEndian.Uint64(buf[0:8]),
-			Length: binary.LittleEndian.Uint32(buf[8:12]),
+		offset := binary.LittleEndian.Uint64(buf[0:8])
+
+		if !seg.clearIndexOnFlush {
+			entry := segmentIndexEntry{
+				Offset: offset,
+				Length: binary.LittleEndian.Uint32(buf[8:12]),
+			}
+			seg.indexEntries = append(seg.indexEntries, entry)
 		}
-		seg.indexEntries = append(seg.indexEntries, entry)
+
+		if indexBuild {
+			seg.logIndex.Set(firstIdx+idx, RecordPosition{
+				SegmentID: seg.id,
+				Offset:    int64(offset),
+			})
+			idx++
+		}
 	}
 	return nil
 }
 
 func (seg *Segment) buildIndexFromSegment() {
 	seg.indexEntries = seg.indexEntries[:0]
+	firstIdx := seg.firstLogIndex
+	indexBuild := seg.logIndex != nil && firstIdx > 0
+	var idx uint64
 	seg.iterateValidEntries(func(offset int64, length uint32) bool {
 		seg.indexEntries = append(seg.indexEntries, segmentIndexEntry{
 			Offset: uint64(offset),
 			Length: length,
 		})
+		if indexBuild {
+			seg.logIndex.Set(firstIdx+idx, RecordPosition{
+				SegmentID: seg.id,
+				Offset:    offset,
+			})
+			idx++
+		}
 		return true
 	})
 }

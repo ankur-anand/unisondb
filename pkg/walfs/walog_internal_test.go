@@ -255,7 +255,7 @@ func TestClearIndexOnFlush_EnabledClearsAfterRotation(t *testing.T) {
 	assert.NotEmpty(t, entries, "active segment should still have index")
 }
 
-func TestClearIndexOnFlush_ReopenedSegmentsNotCleared(t *testing.T) {
+func TestClearIndexOnFlush_ReopenedSegmentsRemainCleared(t *testing.T) {
 	dir := t.TempDir()
 
 	wal1, err := NewWALog(dir, ".wal",
@@ -264,9 +264,11 @@ func TestClearIndexOnFlush_ReopenedSegmentsNotCleared(t *testing.T) {
 	require.NoError(t, err)
 
 	data := make([]byte, 100)
+	positions := make(map[uint64]RecordPosition)
 	for i := 0; i < 3; i++ {
-		_, err := wal1.Write(data, uint64(i+1))
+		pos, err := wal1.Write(data, uint64(i+1))
 		require.NoError(t, err)
+		positions[uint64(i+1)] = pos
 	}
 
 	seg1 := wal1.Current()
@@ -275,6 +277,12 @@ func TestClearIndexOnFlush_ReopenedSegmentsNotCleared(t *testing.T) {
 
 	require.True(t, seg1.IsSealed())
 	assert.Empty(t, seg1.IndexEntries(), "sealed segment should be cleared after flush in first session")
+
+	for i := 0; i < 2; i++ {
+		pos, err := wal1.Write(data, uint64(i+4))
+		require.NoError(t, err)
+		positions[uint64(i+4)] = pos
+	}
 
 	require.NoError(t, wal1.Close())
 
@@ -293,19 +301,15 @@ func TestClearIndexOnFlush_ReopenedSegmentsNotCleared(t *testing.T) {
 			}
 		}
 	}
-	assert.Greater(t, sealedWithIndex, 0,
-		"reopened sealed segments should have index loaded from disk even with ClearIndexOnFlush enabled")
+	assert.Equal(t, 0, sealedWithIndex,
+		"reopened sealed segments should keep index cleared when ClearIndexOnFlush is enabled")
 
-	for _, seg := range wal2.Segments() {
-		seg.ClearIndexFromMemory()
+	for idx, pos := range positions {
+		got, ok := wal2.logIndex.Get(idx)
+		require.True(t, ok)
+		assert.Equal(t, pos, got)
 	}
-
-	for id, seg := range wal2.Segments() {
-		if seg.IsSealed() {
-			entries := seg.IndexEntries()
-			assert.Empty(t, entries, "manually cleared segment %d should have empty index", id)
-		}
-	}
+	assert.Equal(t, int64(len(positions)), wal2.logIndex.Len())
 }
 
 func TestClearIndexOnFlush_DisabledDoesNotClearOnRotation(t *testing.T) {
@@ -588,4 +592,38 @@ func TestWALog_LogIndexDeleteSegmentsRemovesEntries(t *testing.T) {
 		_, ok := wal.logIndex.Get(currentSeg.FirstLogIndex())
 		assert.True(t, ok)
 	}
+}
+
+func TestWALog_LogIndexRebuiltOnReopen(t *testing.T) {
+	dir := t.TempDir()
+	wal, err := NewWALog(dir, ".wal", WithMaxSegmentSize(512))
+	require.NoError(t, err)
+
+	data := bytes.Repeat([]byte("r"), 80)
+	positions := make(map[uint64]RecordPosition)
+
+	for i := 0; i < 6; i++ {
+		pos, err := wal.Write(data, uint64(i+1))
+		require.NoError(t, err)
+		positions[uint64(i+1)] = pos
+		if i == 2 {
+			seg := wal.Current()
+			require.NoError(t, wal.RotateSegment())
+			seg.WaitForIndexFlush()
+		}
+	}
+
+	require.Greater(t, wal.SegmentRotatedCount(), int64(0))
+	require.NoError(t, wal.Close())
+
+	reopened, err := NewWALog(dir, ".wal", WithMaxSegmentSize(512))
+	require.NoError(t, err)
+	defer reopened.Close()
+
+	for idx, pos := range positions {
+		got, ok := reopened.logIndex.Get(idx)
+		require.True(t, ok)
+		assert.Equal(t, pos, got)
+	}
+	assert.Equal(t, int64(len(positions)), reopened.logIndex.Len())
 }
