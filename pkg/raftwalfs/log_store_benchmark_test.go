@@ -225,7 +225,7 @@ func BenchmarkLogStore_DeleteRange(b *testing.B) {
 }
 
 func BenchmarkShardedIndex_Set(b *testing.B) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 	pos := walfs.RecordPosition{SegmentID: 1, Offset: 100}
 
 	b.ReportAllocs()
@@ -237,7 +237,7 @@ func BenchmarkShardedIndex_Set(b *testing.B) {
 }
 
 func BenchmarkShardedIndex_Get(b *testing.B) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 	pos := walfs.RecordPosition{SegmentID: 1, Offset: 100}
 
 	const total = 100000
@@ -273,16 +273,16 @@ func BenchmarkShardedIndex_SetBatch(b *testing.B) {
 
 	for _, batchSize := range batchSizes {
 		b.Run(fmt.Sprintf("batch=%d", batchSize), func(b *testing.B) {
-			idx := NewShardedIndex()
+			idx := walfs.NewShardedIndex()
 
 			b.ReportAllocs()
 			b.ResetTimer()
 
 			baseIdx := uint64(0)
 			for i := 0; i < b.N; i++ {
-				entries := make([]IndexEntry, batchSize)
+				entries := make([]walfs.IndexEntry, batchSize)
 				for j := 0; j < batchSize; j++ {
-					entries[j] = IndexEntry{
+					entries[j] = walfs.IndexEntry{
 						Index: baseIdx + uint64(j),
 						Pos:   walfs.RecordPosition{SegmentID: 1, Offset: int64(j * 100)},
 					}
@@ -301,7 +301,7 @@ func BenchmarkShardedIndex_DeleteRange(b *testing.B) {
 
 			for i := 0; i < b.N; i++ {
 				b.StopTimer()
-				idx := NewShardedIndex()
+				idx := walfs.NewShardedIndex()
 				pos := walfs.RecordPosition{SegmentID: 1, Offset: 100}
 
 				for j := uint64(0); j < uint64(rangeSize*2); j++ {
@@ -316,7 +316,7 @@ func BenchmarkShardedIndex_DeleteRange(b *testing.B) {
 }
 
 func BenchmarkShardedIndex_GetFirstLast(b *testing.B) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 	pos := walfs.RecordPosition{SegmentID: 1, Offset: 100}
 
 	for i := uint64(1); i <= 10000; i++ {
@@ -332,7 +332,7 @@ func BenchmarkShardedIndex_GetFirstLast(b *testing.B) {
 }
 
 func BenchmarkShardedIndex_Concurrent(b *testing.B) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 	pos := walfs.RecordPosition{SegmentID: 1, Offset: 100}
 
 	// Pre-populate

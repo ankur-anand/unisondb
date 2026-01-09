@@ -1,10 +1,8 @@
-package raftwalfs
+package walfs
 
 import (
 	"sync"
 	"sync/atomic"
-
-	"github.com/ankur-anand/unisondb/pkg/walfs"
 )
 
 const (
@@ -22,7 +20,7 @@ type ShardedIndex struct {
 
 type indexShard struct {
 	mu    sync.RWMutex
-	items map[uint64]walfs.RecordPosition
+	items map[uint64]RecordPosition
 }
 
 // NewShardedIndex creates a sharded index with the specified number of shards.
@@ -32,7 +30,7 @@ func NewShardedIndex() *ShardedIndex {
 	shards := make([]*indexShard, shardCount)
 	for i := 0; i < shardCount; i++ {
 		shards[i] = &indexShard{
-			items: make(map[uint64]walfs.RecordPosition),
+			items: make(map[uint64]RecordPosition),
 		}
 	}
 
@@ -49,7 +47,7 @@ func (s *ShardedIndex) getShard(index uint64) *indexShard {
 }
 
 // Set stores the position for an index.
-func (s *ShardedIndex) Set(index uint64, pos walfs.RecordPosition) {
+func (s *ShardedIndex) Set(index uint64, pos RecordPosition) {
 	shard := s.getShard(index)
 	shard.mu.Lock()
 	_, existed := shard.items[index]
@@ -63,7 +61,7 @@ func (s *ShardedIndex) Set(index uint64, pos walfs.RecordPosition) {
 
 // Get retrieves the position for an index.
 // Returns the position and true if found, zero value and false otherwise.
-func (s *ShardedIndex) Get(index uint64) (walfs.RecordPosition, bool) {
+func (s *ShardedIndex) Get(index uint64) (RecordPosition, bool) {
 	shard := s.getShard(index)
 	shard.mu.RLock()
 	pos, ok := shard.items[index]
@@ -141,7 +139,7 @@ func (s *ShardedIndex) DeleteRange(min, max uint64) int64 {
 // IndexEntry represents an index to position mapping for batch operations.
 type IndexEntry struct {
 	Index uint64
-	Pos   walfs.RecordPosition
+	Pos   RecordPosition
 }
 
 // SetBatch stores multiple index→position mappings.
@@ -196,7 +194,7 @@ func (s *ShardedIndex) SetBatch(entries []IndexEntry) {
 
 // IsCurrentEntry checks if the given position is the current one for an index.
 // Returns true if the index exists and the position matches exactly.
-func (s *ShardedIndex) IsCurrentEntry(index uint64, segmentID walfs.SegmentID, offset int64) bool {
+func (s *ShardedIndex) IsCurrentEntry(index uint64, segmentID SegmentID, offset int64) bool {
 	pos, ok := s.Get(index)
 	if !ok {
 		return false
@@ -228,7 +226,7 @@ func (s *ShardedIndex) Clear() {
 		go func(sh *indexShard) {
 			defer wg.Done()
 			sh.mu.Lock()
-			sh.items = make(map[uint64]walfs.RecordPosition)
+			sh.items = make(map[uint64]RecordPosition)
 			sh.mu.Unlock()
 		}(shard)
 	}
@@ -238,7 +236,7 @@ func (s *ShardedIndex) Clear() {
 
 // Range iterates over all entries and calls fn for each.
 // If fn returns false, iteration stops.
-func (s *ShardedIndex) Range(fn func(index uint64, pos walfs.RecordPosition) bool) {
+func (s *ShardedIndex) Range(fn func(index uint64, pos RecordPosition) bool) {
 	for _, shard := range s.shards {
 		shard.mu.RLock()
 		for idx, pos := range shard.items {

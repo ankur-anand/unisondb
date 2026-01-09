@@ -1,10 +1,9 @@
-package raftwalfs
+package walfs
 
 import (
 	"sync"
 	"testing"
 
-	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,7 +21,7 @@ func TestShardedIndex_SetAndGet(t *testing.T) {
 	idx := NewShardedIndex()
 
 	t.Run("set and get single entry", func(t *testing.T) {
-		pos := walfs.RecordPosition{SegmentID: 1, Offset: 100}
+		pos := RecordPosition{SegmentID: 1, Offset: 100}
 		idx.Set(1, pos)
 
 		got, ok := idx.Get(1)
@@ -37,16 +36,16 @@ func TestShardedIndex_SetAndGet(t *testing.T) {
 	})
 
 	t.Run("overwrite existing entry", func(t *testing.T) {
-		idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
+		idx.Set(1, RecordPosition{SegmentID: 1, Offset: 100})
 		initialLen := idx.Len()
 
-		idx.Set(1, walfs.RecordPosition{SegmentID: 2, Offset: 200})
+		idx.Set(1, RecordPosition{SegmentID: 2, Offset: 200})
 
 		assert.Equal(t, initialLen, idx.Len())
 
 		got, ok := idx.Get(1)
 		assert.True(t, ok)
-		assert.Equal(t, walfs.SegmentID(2), got.SegmentID)
+		assert.Equal(t, SegmentID(2), got.SegmentID)
 		assert.Equal(t, int64(200), got.Offset)
 	})
 }
@@ -55,7 +54,7 @@ func TestShardedIndex_SetDistributesAcrossShards(t *testing.T) {
 	idx := NewShardedIndex()
 
 	for i := uint64(0); i < 1000; i++ {
-		idx.Set(i, walfs.RecordPosition{SegmentID: walfs.SegmentID(i), Offset: int64(i * 100)})
+		idx.Set(i, RecordPosition{SegmentID: SegmentID(i), Offset: int64(i * 100)})
 	}
 
 	assert.Equal(t, int64(1000), idx.Len())
@@ -63,7 +62,7 @@ func TestShardedIndex_SetDistributesAcrossShards(t *testing.T) {
 	for i := uint64(0); i < 1000; i++ {
 		pos, ok := idx.Get(i)
 		assert.True(t, ok, "entry %d should exist", i)
-		assert.Equal(t, walfs.SegmentID(i), pos.SegmentID)
+		assert.Equal(t, SegmentID(i), pos.SegmentID)
 		assert.Equal(t, int64(i*100), pos.Offset)
 	}
 }
@@ -72,7 +71,7 @@ func TestShardedIndex_Delete(t *testing.T) {
 	idx := NewShardedIndex()
 
 	t.Run("delete existing entry", func(t *testing.T) {
-		idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
+		idx.Set(1, RecordPosition{SegmentID: 1, Offset: 100})
 		assert.Equal(t, int64(1), idx.Len())
 
 		idx.Delete(1)
@@ -83,7 +82,7 @@ func TestShardedIndex_Delete(t *testing.T) {
 	})
 
 	t.Run("delete non-existent entry", func(t *testing.T) {
-		idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
+		idx.Set(1, RecordPosition{SegmentID: 1, Offset: 100})
 		initialLen := idx.Len()
 
 		idx.Delete(999)
@@ -91,7 +90,7 @@ func TestShardedIndex_Delete(t *testing.T) {
 	})
 
 	t.Run("double delete", func(t *testing.T) {
-		idx.Set(5, walfs.RecordPosition{SegmentID: 1, Offset: 100})
+		idx.Set(5, RecordPosition{SegmentID: 1, Offset: 100})
 
 		idx.Delete(5)
 		assert.Equal(t, int64(1), idx.Len())
@@ -105,7 +104,7 @@ func TestShardedIndex_DeleteRange_Comprehensive(t *testing.T) {
 	t.Run("delete range in middle", func(t *testing.T) {
 		idx := NewShardedIndex()
 		for i := uint64(1); i <= 10; i++ {
-			idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i * 100)})
+			idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i * 100)})
 		}
 
 		deleted := idx.DeleteRange(3, 7)
@@ -126,7 +125,7 @@ func TestShardedIndex_DeleteRange_Comprehensive(t *testing.T) {
 	t.Run("delete range at start", func(t *testing.T) {
 		idx := NewShardedIndex()
 		for i := uint64(1); i <= 10; i++ {
-			idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
+			idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i)})
 		}
 
 		deleted := idx.DeleteRange(1, 5)
@@ -137,7 +136,7 @@ func TestShardedIndex_DeleteRange_Comprehensive(t *testing.T) {
 	t.Run("delete range at end", func(t *testing.T) {
 		idx := NewShardedIndex()
 		for i := uint64(1); i <= 10; i++ {
-			idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
+			idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i)})
 		}
 
 		deleted := idx.DeleteRange(6, 10)
@@ -148,7 +147,7 @@ func TestShardedIndex_DeleteRange_Comprehensive(t *testing.T) {
 	t.Run("delete all entries", func(t *testing.T) {
 		idx := NewShardedIndex()
 		for i := uint64(1); i <= 10; i++ {
-			idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
+			idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i)})
 		}
 
 		deleted := idx.DeleteRange(1, 10)
@@ -159,7 +158,7 @@ func TestShardedIndex_DeleteRange_Comprehensive(t *testing.T) {
 	t.Run("delete range with min > max", func(t *testing.T) {
 		idx := NewShardedIndex()
 		for i := uint64(1); i <= 10; i++ {
-			idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
+			idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i)})
 		}
 
 		deleted := idx.DeleteRange(10, 1)
@@ -177,7 +176,7 @@ func TestShardedIndex_DeleteRange_Comprehensive(t *testing.T) {
 	t.Run("delete range with gaps", func(t *testing.T) {
 		idx := NewShardedIndex()
 		for i := uint64(2); i <= 20; i += 2 {
-			idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
+			idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i)})
 		}
 		assert.Equal(t, int64(10), idx.Len())
 
@@ -189,7 +188,7 @@ func TestShardedIndex_DeleteRange_Comprehensive(t *testing.T) {
 	t.Run("delete large range", func(t *testing.T) {
 		idx := NewShardedIndex()
 		for i := uint64(0); i < 10000; i++ {
-			idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
+			idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i)})
 		}
 
 		deleted := idx.DeleteRange(1000, 8999)
@@ -206,7 +205,7 @@ func TestShardedIndex_SetBatch_Comprehensive(t *testing.T) {
 		for i := 0; i < 100; i++ {
 			entries[i] = IndexEntry{
 				Index: uint64(i + 1),
-				Pos:   walfs.RecordPosition{SegmentID: walfs.SegmentID(i), Offset: int64(i * 100)},
+				Pos:   RecordPosition{SegmentID: SegmentID(i), Offset: int64(i * 100)},
 			}
 		}
 
@@ -216,7 +215,7 @@ func TestShardedIndex_SetBatch_Comprehensive(t *testing.T) {
 		for i := 0; i < 100; i++ {
 			pos, ok := idx.Get(uint64(i + 1))
 			assert.True(t, ok)
-			assert.Equal(t, walfs.SegmentID(i), pos.SegmentID)
+			assert.Equal(t, SegmentID(i), pos.SegmentID)
 			assert.Equal(t, int64(i*100), pos.Offset)
 		}
 	})
@@ -235,28 +234,28 @@ func TestShardedIndex_SetBatch_Comprehensive(t *testing.T) {
 		idx := NewShardedIndex()
 
 		entries := []IndexEntry{
-			{Index: 1, Pos: walfs.RecordPosition{SegmentID: 1, Offset: 100}},
-			{Index: 2, Pos: walfs.RecordPosition{SegmentID: 1, Offset: 200}},
-			{Index: 1, Pos: walfs.RecordPosition{SegmentID: 2, Offset: 300}},
+			{Index: 1, Pos: RecordPosition{SegmentID: 1, Offset: 100}},
+			{Index: 2, Pos: RecordPosition{SegmentID: 1, Offset: 200}},
+			{Index: 1, Pos: RecordPosition{SegmentID: 2, Offset: 300}},
 		}
 
 		idx.SetBatch(entries)
 		assert.Equal(t, int64(2), idx.Len())
 
 		pos, _ := idx.Get(1)
-		assert.Equal(t, walfs.SegmentID(2), pos.SegmentID)
+		assert.Equal(t, SegmentID(2), pos.SegmentID)
 		assert.Equal(t, int64(300), pos.Offset)
 	})
 
 	t.Run("set batch updates existing entries", func(t *testing.T) {
 		idx := NewShardedIndex()
 
-		idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
-		idx.Set(2, walfs.RecordPosition{SegmentID: 1, Offset: 200})
+		idx.Set(1, RecordPosition{SegmentID: 1, Offset: 100})
+		idx.Set(2, RecordPosition{SegmentID: 1, Offset: 200})
 
 		entries := []IndexEntry{
-			{Index: 2, Pos: walfs.RecordPosition{SegmentID: 2, Offset: 999}},
-			{Index: 3, Pos: walfs.RecordPosition{SegmentID: 2, Offset: 300}},
+			{Index: 2, Pos: RecordPosition{SegmentID: 2, Offset: 999}},
+			{Index: 3, Pos: RecordPosition{SegmentID: 2, Offset: 300}},
 		}
 
 		idx.SetBatch(entries)
@@ -270,7 +269,7 @@ func TestShardedIndex_SetBatch_Comprehensive(t *testing.T) {
 func TestShardedIndex_IsCurrentEntry_Comprehensive(t *testing.T) {
 	idx := NewShardedIndex()
 
-	idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
+	idx.Set(1, RecordPosition{SegmentID: 1, Offset: 100})
 
 	t.Run("exact match", func(t *testing.T) {
 		assert.True(t, idx.IsCurrentEntry(1, 1, 100))
@@ -298,13 +297,13 @@ func TestShardedIndex_Len(t *testing.T) {
 
 	assert.Equal(t, int64(0), idx.Len())
 
-	idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
+	idx.Set(1, RecordPosition{SegmentID: 1, Offset: 100})
 	assert.Equal(t, int64(1), idx.Len())
 
-	idx.Set(2, walfs.RecordPosition{SegmentID: 1, Offset: 200})
+	idx.Set(2, RecordPosition{SegmentID: 1, Offset: 200})
 	assert.Equal(t, int64(2), idx.Len())
 
-	idx.Set(1, walfs.RecordPosition{SegmentID: 2, Offset: 300})
+	idx.Set(1, RecordPosition{SegmentID: 2, Offset: 300})
 	assert.Equal(t, int64(2), idx.Len())
 
 	idx.Delete(1)
@@ -318,7 +317,7 @@ func TestShardedIndex_LenSlow(t *testing.T) {
 	idx := NewShardedIndex()
 
 	for i := uint64(0); i < 1000; i++ {
-		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
+		idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i)})
 	}
 
 	assert.Equal(t, idx.Len(), idx.LenSlow())
@@ -333,7 +332,7 @@ func TestShardedIndex_Clear(t *testing.T) {
 	idx := NewShardedIndex()
 
 	for i := uint64(0); i < 1000; i++ {
-		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
+		idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i)})
 	}
 	assert.Equal(t, int64(1000), idx.Len())
 
@@ -344,23 +343,23 @@ func TestShardedIndex_Clear(t *testing.T) {
 	_, ok := idx.Get(500)
 	assert.False(t, ok)
 
-	idx.Set(1, walfs.RecordPosition{SegmentID: 2, Offset: 100})
+	idx.Set(1, RecordPosition{SegmentID: 2, Offset: 100})
 	assert.Equal(t, int64(1), idx.Len())
 
 	pos, ok := idx.Get(1)
 	assert.True(t, ok)
-	assert.Equal(t, walfs.SegmentID(2), pos.SegmentID)
+	assert.Equal(t, SegmentID(2), pos.SegmentID)
 }
 
 func TestShardedIndex_Range_Comprehensive(t *testing.T) {
 	t.Run("iterate all entries", func(t *testing.T) {
 		idx := NewShardedIndex()
 		for i := uint64(1); i <= 100; i++ {
-			idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i * 10)})
+			idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i * 10)})
 		}
 
 		visited := make(map[uint64]bool)
-		idx.Range(func(index uint64, pos walfs.RecordPosition) bool {
+		idx.Range(func(index uint64, pos RecordPosition) bool {
 			visited[index] = true
 			assert.Equal(t, int64(index*10), pos.Offset)
 			return true
@@ -375,11 +374,11 @@ func TestShardedIndex_Range_Comprehensive(t *testing.T) {
 	t.Run("early termination", func(t *testing.T) {
 		idx := NewShardedIndex()
 		for i := uint64(1); i <= 100; i++ {
-			idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
+			idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i)})
 		}
 
 		count := 0
-		idx.Range(func(index uint64, pos walfs.RecordPosition) bool {
+		idx.Range(func(index uint64, pos RecordPosition) bool {
 			count++
 			return count < 10
 		})
@@ -391,7 +390,7 @@ func TestShardedIndex_Range_Comprehensive(t *testing.T) {
 		idx := NewShardedIndex()
 
 		count := 0
-		idx.Range(func(index uint64, pos walfs.RecordPosition) bool {
+		idx.Range(func(index uint64, pos RecordPosition) bool {
 			count++
 			return true
 		})
@@ -412,7 +411,7 @@ func TestShardedIndex_GetFirstLast_Comprehensive(t *testing.T) {
 
 	t.Run("single entry", func(t *testing.T) {
 		idx := NewShardedIndex()
-		idx.Set(42, walfs.RecordPosition{SegmentID: 1, Offset: 100})
+		idx.Set(42, RecordPosition{SegmentID: 1, Offset: 100})
 
 		first, last, ok := idx.GetFirstLast()
 		assert.True(t, ok)
@@ -422,10 +421,10 @@ func TestShardedIndex_GetFirstLast_Comprehensive(t *testing.T) {
 
 	t.Run("multiple entries", func(t *testing.T) {
 		idx := NewShardedIndex()
-		idx.Set(10, walfs.RecordPosition{})
-		idx.Set(5, walfs.RecordPosition{})
-		idx.Set(100, walfs.RecordPosition{})
-		idx.Set(50, walfs.RecordPosition{})
+		idx.Set(10, RecordPosition{})
+		idx.Set(5, RecordPosition{})
+		idx.Set(100, RecordPosition{})
+		idx.Set(50, RecordPosition{})
 
 		first, last, ok := idx.GetFirstLast()
 		assert.True(t, ok)
@@ -436,7 +435,7 @@ func TestShardedIndex_GetFirstLast_Comprehensive(t *testing.T) {
 	t.Run("non-contiguous entries", func(t *testing.T) {
 		idx := NewShardedIndex()
 		for _, i := range []uint64{1000, 5, 500, 999, 1} {
-			idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
+			idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i)})
 		}
 
 		first, last, ok := idx.GetFirstLast()
@@ -448,7 +447,7 @@ func TestShardedIndex_GetFirstLast_Comprehensive(t *testing.T) {
 	t.Run("after deletions", func(t *testing.T) {
 		idx := NewShardedIndex()
 		for i := uint64(1); i <= 10; i++ {
-			idx.Set(i, walfs.RecordPosition{})
+			idx.Set(i, RecordPosition{})
 		}
 
 		idx.Delete(1)
@@ -462,9 +461,9 @@ func TestShardedIndex_GetFirstLast_Comprehensive(t *testing.T) {
 
 	t.Run("high index values", func(t *testing.T) {
 		idx := NewShardedIndex()
-		idx.Set(1<<40, walfs.RecordPosition{})
-		idx.Set(1<<50, walfs.RecordPosition{})
-		idx.Set(1<<45, walfs.RecordPosition{})
+		idx.Set(1<<40, RecordPosition{})
+		idx.Set(1<<50, RecordPosition{})
+		idx.Set(1<<45, RecordPosition{})
 
 		first, last, ok := idx.GetFirstLast()
 		assert.True(t, ok)
@@ -477,7 +476,7 @@ func TestShardedIndex_ConcurrentReads(t *testing.T) {
 	idx := NewShardedIndex()
 
 	for i := uint64(0); i < 10000; i++ {
-		idx.Set(i, walfs.RecordPosition{SegmentID: walfs.SegmentID(i % 100), Offset: int64(i)})
+		idx.Set(i, RecordPosition{SegmentID: SegmentID(i % 100), Offset: int64(i)})
 	}
 
 	var wg sync.WaitGroup
@@ -512,8 +511,8 @@ func TestShardedIndex_ConcurrentWrites(t *testing.T) {
 			defer wg.Done()
 			base := uint64(goroutine * 1000)
 			for i := uint64(0); i < 1000; i++ {
-				idx.Set(base+i, walfs.RecordPosition{
-					SegmentID: walfs.SegmentID(goroutine),
+				idx.Set(base+i, RecordPosition{
+					SegmentID: SegmentID(goroutine),
 					Offset:    int64(i),
 				})
 			}
@@ -528,7 +527,7 @@ func TestShardedIndex_ConcurrentMixed(t *testing.T) {
 	idx := NewShardedIndex()
 
 	for i := uint64(0); i < 5000; i++ {
-		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
+		idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i)})
 	}
 
 	var wg sync.WaitGroup
@@ -549,7 +548,7 @@ func TestShardedIndex_ConcurrentMixed(t *testing.T) {
 			defer wg.Done()
 			base := uint64(5000 + goroutine*1000)
 			for i := uint64(0); i < 1000; i++ {
-				idx.Set(base+i, walfs.RecordPosition{SegmentID: 1, Offset: int64(base + i)})
+				idx.Set(base+i, RecordPosition{SegmentID: 1, Offset: int64(base + i)})
 			}
 		}(g)
 	}
@@ -563,7 +562,7 @@ func TestShardedIndex_ConcurrentDeleteRange(t *testing.T) {
 	idx := NewShardedIndex()
 
 	for i := uint64(0); i < 10000; i++ {
-		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
+		idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i)})
 	}
 
 	var wg sync.WaitGroup
@@ -603,7 +602,7 @@ func TestShardedIndex_ConcurrentSetBatch(t *testing.T) {
 			for i := 0; i < 100; i++ {
 				entries[i] = IndexEntry{
 					Index: base + uint64(i),
-					Pos:   walfs.RecordPosition{SegmentID: walfs.SegmentID(goroutine), Offset: int64(i)},
+					Pos:   RecordPosition{SegmentID: SegmentID(goroutine), Offset: int64(i)},
 				}
 			}
 			idx.SetBatch(entries)
@@ -619,7 +618,7 @@ func TestShardedIndex_ShardDistribution(t *testing.T) {
 	idx := NewShardedIndex()
 
 	for i := uint64(0); i < uint64(defaultShardCount*10); i++ {
-		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
+		idx.Set(i, RecordPosition{SegmentID: 1, Offset: int64(i)})
 	}
 
 	shardCounts := make([]int, defaultShardCount)
@@ -641,7 +640,7 @@ func TestShardedIndex_ShardDistribution(t *testing.T) {
 func TestShardedIndex_ZeroIndex(t *testing.T) {
 	idx := NewShardedIndex()
 
-	idx.Set(0, walfs.RecordPosition{SegmentID: 1, Offset: 100})
+	idx.Set(0, RecordPosition{SegmentID: 1, Offset: 100})
 
 	pos, ok := idx.Get(0)
 	assert.True(t, ok)
@@ -656,11 +655,11 @@ func TestShardedIndex_MaxUint64Index(t *testing.T) {
 	idx := NewShardedIndex()
 
 	maxIdx := ^uint64(0)
-	idx.Set(maxIdx, walfs.RecordPosition{SegmentID: 999, Offset: 12345})
+	idx.Set(maxIdx, RecordPosition{SegmentID: 999, Offset: 12345})
 
 	pos, ok := idx.Get(maxIdx)
 	assert.True(t, ok)
-	assert.Equal(t, walfs.SegmentID(999), pos.SegmentID)
+	assert.Equal(t, SegmentID(999), pos.SegmentID)
 	assert.Equal(t, int64(12345), pos.Offset)
 }
 
@@ -686,7 +685,7 @@ func TestShardedIndex_BatchOperationsLargeScale(t *testing.T) {
 	for i := 0; i < 100000; i++ {
 		entries[i] = IndexEntry{
 			Index: uint64(i),
-			Pos:   walfs.RecordPosition{SegmentID: walfs.SegmentID(i % 1000), Offset: int64(i)},
+			Pos:   RecordPosition{SegmentID: SegmentID(i % 1000), Offset: int64(i)},
 		}
 	}
 

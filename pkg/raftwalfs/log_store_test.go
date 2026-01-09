@@ -530,7 +530,7 @@ func TestLogStore_InterfaceCompliance(t *testing.T) {
 }
 
 func TestShardedIndex_Basic(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
 	idx.Set(2, walfs.RecordPosition{SegmentID: 1, Offset: 200})
@@ -551,7 +551,7 @@ func TestShardedIndex_Basic(t *testing.T) {
 }
 
 func TestShardedIndex_DeleteRange(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	for i := uint64(1); i <= 10; i++ {
 		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i * 100)})
@@ -572,7 +572,7 @@ func TestShardedIndex_DeleteRange(t *testing.T) {
 }
 
 func TestShardedIndex_GetFirstLast(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	_, _, ok := idx.GetFirstLast()
 	assert.False(t, ok)
@@ -588,9 +588,9 @@ func TestShardedIndex_GetFirstLast(t *testing.T) {
 }
 
 func TestShardedIndex_SetBatch(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
-	entries := []IndexEntry{
+	entries := []walfs.IndexEntry{
 		{Index: 1, Pos: walfs.RecordPosition{SegmentID: 1, Offset: 100}},
 		{Index: 2, Pos: walfs.RecordPosition{SegmentID: 1, Offset: 200}},
 		{Index: 3, Pos: walfs.RecordPosition{SegmentID: 1, Offset: 300}},
@@ -961,7 +961,7 @@ func TestLogStore_ManySmallLogs(t *testing.T) {
 }
 
 func TestShardedIndex_ClearAndReuse(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	for i := uint64(1); i <= 100; i++ {
 		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
@@ -982,7 +982,7 @@ func TestShardedIndex_ClearAndReuse(t *testing.T) {
 }
 
 func TestShardedIndex_IsCurrentEntry(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
 
@@ -993,7 +993,7 @@ func TestShardedIndex_IsCurrentEntry(t *testing.T) {
 }
 
 func TestShardedIndex_UpdateExisting(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
 	assert.Equal(t, int64(1), idx.Len())
@@ -1007,7 +1007,7 @@ func TestShardedIndex_UpdateExisting(t *testing.T) {
 }
 
 func TestShardedIndex_Range(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	for i := uint64(1); i <= 10; i++ {
 		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i * 100)})
@@ -1023,7 +1023,7 @@ func TestShardedIndex_Range(t *testing.T) {
 }
 
 func TestShardedIndex_RangeEarlyStop(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	for i := uint64(1); i <= 100; i++ {
 		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
@@ -1039,12 +1039,12 @@ func TestShardedIndex_RangeEarlyStop(t *testing.T) {
 }
 
 func TestShardedIndex_EmptyBatchOperations(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	idx.SetBatch(nil)
 	assert.Equal(t, int64(0), idx.Len())
 
-	idx.SetBatch([]IndexEntry{})
+	idx.SetBatch([]walfs.IndexEntry{})
 	assert.Equal(t, int64(0), idx.Len())
 
 	deleted := idx.DeleteRange(1, 100)
@@ -1052,7 +1052,7 @@ func TestShardedIndex_EmptyBatchOperations(t *testing.T) {
 }
 
 func TestShardedIndex_DeleteNonExistent(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
 
@@ -1064,7 +1064,7 @@ func TestShardedIndex_DeleteNonExistent(t *testing.T) {
 }
 
 func TestShardedIndex_LenVsLenSlow(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	for i := uint64(0); i < 1000; i++ {
 		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})

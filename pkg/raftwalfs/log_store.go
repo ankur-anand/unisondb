@@ -43,7 +43,7 @@ type LogStore struct {
 
 	committedIndex atomic.Uint64
 
-	index *ShardedIndex
+	index *walfs.ShardedIndex
 
 	closed   atomic.Bool
 	closedCh chan struct{}
@@ -54,7 +54,7 @@ func NewLogStore(wal *walfs.WALog, committedIndex uint64, opts ...LogStoreOption
 	store := &LogStore{
 		wal:      wal,
 		codec:    BinaryCodecV1{},
-		index:    NewShardedIndex(),
+		index:    walfs.NewShardedIndex(),
 		closedCh: make(chan struct{}),
 	}
 
@@ -92,7 +92,7 @@ func (l *LogStore) recoverIndex() error {
 	slices.Sort(keys)
 
 	var first, last uint64
-	var entries []IndexEntry
+	var entries []walfs.IndexEntry
 
 	for _, key := range keys {
 		segment := segments[key]
@@ -113,7 +113,7 @@ func (l *LogStore) recoverIndex() error {
 
 		for i, entry := range idxEntries {
 			logIndex := segFirstIdx + uint64(i)
-			entries = append(entries, IndexEntry{
+			entries = append(entries, walfs.IndexEntry{
 				Index: logIndex,
 				Pos: walfs.RecordPosition{
 					Offset:    entry.Offset,
@@ -253,9 +253,9 @@ func (l *LogStore) StoreLogs(logs []*raft.Log) error {
 		return fmt.Errorf("wal write batch: %w", err)
 	}
 
-	entries := make([]IndexEntry, len(logs))
+	entries := make([]walfs.IndexEntry, len(logs))
 	for i, log := range logs {
-		entries[i] = IndexEntry{
+		entries[i] = walfs.IndexEntry{
 			Index: log.Index,
 			Pos:   positions[i],
 		}
