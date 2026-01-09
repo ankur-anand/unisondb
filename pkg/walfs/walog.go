@@ -148,7 +148,6 @@ type WALog struct {
 	writeMu        sync.RWMutex
 	currentSegment *Segment
 	segments       map[SegmentID]*Segment
-	segmentRanges  []segmentRange
 
 	// in the read-path we will update the snapshot segment that reader can
 	// use exclusively.
@@ -174,32 +173,6 @@ type WALog struct {
 	logIndex            *ShardedIndex
 }
 
-type segmentRange struct {
-	id         SegmentID
-	firstIndex uint64
-	entryCount int64
-}
-
-func (wl *WALog) ensureSegmentRangesLocked() {
-	ranges := wl.segmentRanges[:0]
-	for id, seg := range wl.segments {
-		first := seg.FirstLogIndex()
-		if first == 0 {
-			continue
-		}
-		count := seg.GetEntryCount()
-		ranges = append(ranges, segmentRange{
-			id:         id,
-			firstIndex: first,
-			entryCount: count,
-		})
-	}
-	sort.Slice(ranges, func(i, j int) bool {
-		return ranges[i].firstIndex < ranges[j].firstIndex
-	})
-	wl.segmentRanges = ranges
-}
-
 // NewWALog returns an initialized WALog that manages the segments in the provided dir with the given ext.
 func NewWALog(dir string, ext string, opts ...WALogOptions) (*WALog, error) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -211,7 +184,6 @@ func NewWALog(dir string, ext string, opts ...WALogOptions) (*WALog, error) {
 		ext:                 ext,
 		maxSegmentSize:      segmentSize,
 		segments:            make(map[SegmentID]*Segment),
-		segmentRanges:       make([]segmentRange, 0),
 		forceSyncEveryWrite: MsyncNone,
 		bytesPerSync:        0,
 		segmentMaxAge:       0,
@@ -232,8 +204,6 @@ func NewWALog(dir string, ext string, opts ...WALogOptions) (*WALog, error) {
 	if err := manager.recoverSegments(); err != nil {
 		return nil, fmt.Errorf("segment recovery failed: %w", err)
 	}
-
-	manager.ensureSegmentRangesLocked()
 
 	return manager, nil
 }
@@ -717,7 +687,6 @@ func (wl *WALog) Truncate(logIndex uint64) error {
 		return nil
 	}
 
-	wl.ensureSegmentRangesLocked()
 	wl.snapshotSegments()
 
 	return nil
@@ -818,7 +787,6 @@ func (wl *WALog) resetAfterFullTruncate(segmentToTruncate SegmentID) error {
 	}
 
 	wl.logIndex.Clear()
-	wl.segmentRanges = nil
 	wl.snapshotSegments()
 
 	seg, err := wl.openSegment(1)
