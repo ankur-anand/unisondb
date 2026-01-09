@@ -2434,6 +2434,45 @@ func TestSegmentForIndexReturnsCorrectEntry(t *testing.T) {
 	assert.Equal(t, payloads[1], append([]byte(nil), record...))
 }
 
+func TestPositionForIndexReturnsRecordPosition(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal")
+	require.NoError(t, err)
+	defer wal.Close()
+
+	pos1, err := wal.Write([]byte("pos-1"), 1)
+	require.NoError(t, err)
+
+	require.NoError(t, wal.RotateSegment())
+
+	pos2, err := wal.Write([]byte("pos-2"), 2)
+	require.NoError(t, err)
+
+	got, err := wal.PositionForIndex(1)
+	require.NoError(t, err)
+	assert.Equal(t, pos1, got)
+
+	got, err = wal.PositionForIndex(2)
+	require.NoError(t, err)
+	assert.Equal(t, pos2, got)
+}
+
+func TestPositionForIndexNotFound(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal")
+	require.NoError(t, err)
+	defer wal.Close()
+
+	_, err = wal.Write([]byte("pos-1"), 1)
+	require.NoError(t, err)
+
+	pos, err := wal.PositionForIndex(2)
+	assert.Error(t, err)
+	assert.Equal(t, walfs.NilRecordPosition, pos)
+}
+
 func TestSegmentForIndexConcurrentAccess(t *testing.T) {
 	dir := t.TempDir()
 

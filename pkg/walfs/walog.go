@@ -603,8 +603,8 @@ func (wl *WALog) Current() *Segment {
 // SegmentIndex returns the physical index entries for a segment. For sealed segments the
 // returned slice is complete. For the active segment, the slice reflects the entries written so far.
 func (wl *WALog) SegmentIndex(id SegmentID) ([]SegmentIndexEntry, error) {
-	wl.writeMu.RLock()
-	defer wl.writeMu.RUnlock()
+	wl.writeMu.Lock()
+	defer wl.writeMu.Unlock()
 
 	seg, ok := wl.segments[id]
 	if !ok {
@@ -613,10 +613,23 @@ func (wl *WALog) SegmentIndex(id SegmentID) ([]SegmentIndexEntry, error) {
 	return seg.IndexEntries(), nil
 }
 
+// PositionForIndex returns the RecordPosition for the given log index.
+func (wl *WALog) PositionForIndex(idx uint64) (RecordPosition, error) {
+	if wl.logIndex == nil {
+		return NilRecordPosition, errors.New("log index not initialized")
+	}
+
+	pos, ok := wl.logIndex.Get(idx)
+	if !ok {
+		return NilRecordPosition, fmt.Errorf("log index %d not found", idx)
+	}
+	return pos, nil
+}
+
 // SegmentForIndex returns the segment ID and slot containing the given log index.
 func (wl *WALog) SegmentForIndex(idx uint64) (SegmentID, int, error) {
-	wl.writeMu.RLock()
-	defer wl.writeMu.RUnlock()
+	wl.writeMu.Lock()
+	defer wl.writeMu.Unlock()
 
 	wl.ensureSegmentRangesLocked()
 	for _, r := range wl.segmentRanges {
