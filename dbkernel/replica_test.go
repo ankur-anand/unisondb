@@ -621,13 +621,10 @@ func TestReplicaApplyRecordPersistsLogIndex(t *testing.T) {
 
 	requireSegmentFirstIndex(t, walog, lsn)
 
-	segID, slot, err := walog.SegmentForIndex(lsn)
+	pos, err := walog.PositionForIndex(lsn)
 	require.NoError(t, err)
-	indexEntries, err := walog.SegmentIndex(segID)
-	require.NoError(t, err)
-	require.Less(t, slot, len(indexEntries))
 
-	data, _, err := walog.Segments()[segID].Read(indexEntries[slot].Offset)
+	data, err := walog.Read(pos)
 	require.NoError(t, err)
 	copyData := append([]byte(nil), data...)
 	recordFB := logrecord.GetRootAsLogRecord(copyData, 0)
@@ -691,13 +688,10 @@ func TestReplicaApplyRecordsPersistLogIndex(t *testing.T) {
 	requireSegmentFirstIndex(t, walog, lsns[0])
 
 	for _, lsn := range lsns {
-		segID, slot, err := walog.SegmentForIndex(lsn)
+		pos, err := walog.PositionForIndex(lsn)
 		require.NoError(t, err)
-		indexEntries, err := walog.SegmentIndex(segID)
-		require.NoError(t, err)
-		require.Less(t, slot, len(indexEntries))
 
-		data, _, err := walog.Segments()[segID].Read(indexEntries[slot].Offset)
+		data, err := walog.Read(pos)
 		require.NoError(t, err)
 		recordCopy := append([]byte(nil), data...)
 		fb := logrecord.GetRootAsLogRecord(recordCopy, 0)

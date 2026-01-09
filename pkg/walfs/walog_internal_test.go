@@ -125,8 +125,9 @@ func TestTruncateWithinTailWithActiveReaders(t *testing.T) {
 		}
 	}
 
-	targetID, _, err := wl.SegmentForIndex(45)
+	pos, err := wl.PositionForIndex(45)
 	require.NoError(t, err)
+	targetID := pos.SegmentID
 
 	targetSeg := segments[1]
 	reader := targetSeg.NewReader()
@@ -169,8 +170,9 @@ func TestTruncateTargetSegmentWithActiveReader(t *testing.T) {
 			maxID = id
 		}
 	}
-	targetID, _, err := wl.SegmentForIndex(45)
+	pos, err := wl.PositionForIndex(45)
 	require.NoError(t, err)
+	targetID := pos.SegmentID
 
 	targetSeg := segments[targetID]
 

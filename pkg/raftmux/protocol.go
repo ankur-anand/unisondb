@@ -16,8 +16,7 @@ var (
 	ErrNamespaceEmpty   = errors.New("raftmux: namespace cannot be empty")
 )
 
-// WriteHeader writes the namespace header to w.
-// Format: [version:1][length:1][namespace:N]
+// Format: [version:1][length:1][namespace:N].
 func WriteHeader(w io.Writer, namespace string) error {
 	if namespace == "" {
 		return ErrNamespaceEmpty

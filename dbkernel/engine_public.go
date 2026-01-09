@@ -774,23 +774,14 @@ func (e *Engine) NewReaderFromLSN(startLSN uint64, tail bool) (*Reader, error) {
 
 	walog := e.WAL()
 
-	segID, slot, err := walog.SegmentForIndex(startLSN)
+	pos, err := walog.PositionForIndex(startLSN)
 	if err != nil {
 		return nil, fmt.Errorf("LSN %d not found: %w", startLSN, err)
 	}
 
-	entries, err := walog.SegmentIndex(segID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get segment index for segment %d: %w", segID, err)
-	}
-
-	if slot >= len(entries) {
-		return nil, fmt.Errorf("%w: slot %d out of range for segment %d", ErrInvalidOffset, slot, segID)
-	}
-
 	startOffset := &Offset{
-		SegmentID: segID,
-		Offset:    entries[slot].Offset,
+		SegmentID: pos.SegmentID,
+		Offset:    pos.Offset,
 	}
 
 	if tail {

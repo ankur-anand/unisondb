@@ -475,6 +475,7 @@ func (wl *WALog) WriteBatch(records [][]byte, logIndexes []uint64) ([]RecordPosi
 	return wl.writeBatchLocked(records, logIndexes)
 }
 
+// nolint:gocognit
 func (wl *WALog) writeBatchLocked(records [][]byte, logIndexes []uint64) ([]RecordPosition, error) {
 	var allPositions []RecordPosition
 	remaining := records
@@ -602,6 +603,7 @@ func (wl *WALog) Current() *Segment {
 
 // SegmentIndex returns the physical index entries for a segment. For sealed segments the
 // returned slice is complete. For the active segment, the slice reflects the entries written so far.
+// Warning: when ClearIndexOnFlush is enabled, sealed segments may return an empty slice.
 func (wl *WALog) SegmentIndex(id SegmentID) ([]SegmentIndexEntry, error) {
 	wl.writeMu.Lock()
 	defer wl.writeMu.Unlock()
@@ -624,26 +626,6 @@ func (wl *WALog) PositionForIndex(idx uint64) (RecordPosition, error) {
 		return NilRecordPosition, fmt.Errorf("log index %d not found", idx)
 	}
 	return pos, nil
-}
-
-// SegmentForIndex returns the segment ID and slot containing the given log index.
-func (wl *WALog) SegmentForIndex(idx uint64) (SegmentID, int, error) {
-	wl.writeMu.Lock()
-	defer wl.writeMu.Unlock()
-
-	wl.ensureSegmentRangesLocked()
-	for _, r := range wl.segmentRanges {
-		if r.firstIndex == 0 {
-			continue
-		}
-		high := r.firstIndex + uint64(r.entryCount)
-		if idx < r.firstIndex || idx >= high {
-			continue
-		}
-		slot := int(idx - r.firstIndex)
-		return r.id, slot, nil
-	}
-	return 0, 0, fmt.Errorf("log index %d not found", idx)
 }
 
 // RotateSegment rotates the current segment and create a new active segment.
