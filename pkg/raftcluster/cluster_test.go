@@ -11,6 +11,7 @@ import (
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/hashicorp/raft"
+	"github.com/stretchr/testify/require"
 )
 
 // countingFSM counts applied logs for verification.
@@ -167,6 +168,47 @@ func TestCluster_BatchApply(t *testing.T) {
 	for i, fsm := range fsms {
 		if fsm.Count() < 100 {
 			t.Errorf("node %d: expected count >= 100, got %d", i, fsm.Count())
+		}
+	}
+}
+
+func TestCluster_NumVoters(t *testing.T) {
+	clusters, _ := setupTestCluster(t, 17200)
+	defer func() {
+		for _, c := range clusters {
+			c.Close()
+		}
+	}()
+
+	for i, c := range clusters {
+		count, err := c.Cluster.NumVoters()
+		if err != nil {
+			t.Fatalf("node %d NumVoters error: %v", i, err)
+		}
+		if count != len(clusters) {
+			t.Fatalf("node %d expected %d voters, got %d", i, len(clusters), count)
+		}
+	}
+}
+
+func TestCluster_RaftConfiguration(t *testing.T) {
+	clusters, _ := setupTestCluster(t, 17300)
+	defer func() {
+		for _, c := range clusters {
+			c.Close()
+		}
+	}()
+
+	for i, c := range clusters {
+		cfg, err := c.Cluster.RaftConfiguration()
+		require.NoError(t, err, "node %d", i)
+		if len(cfg.Servers) != len(clusters) {
+			t.Fatalf("node %d expected %d servers, got %d", i, len(clusters), len(cfg.Servers))
+		}
+		for _, server := range cfg.Servers {
+			if server.Suffrage != raft.Voter {
+				t.Fatalf("node %d expected voter, got %v", i, server.Suffrage)
+			}
 		}
 	}
 }

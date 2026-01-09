@@ -2,6 +2,7 @@ package raftcluster
 
 import (
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/hashicorp/raft"
@@ -82,7 +83,39 @@ func (c *Cluster) Close() error {
 		return nil
 	}
 	c.closed = true
+
+	slog.Info("raftcluster: leaving cluster")
+	// number of known peers
+	if c.IsLeader() {
+
+	}
+
 	return c.raft.Shutdown().Error()
+}
+
+// NumVoters helper functions returns the number of voting peers in the current raft configurations.
+func (c *Cluster) NumVoters() (int, error) {
+	config := c.raft.GetConfiguration()
+	if err := config.Error(); err != nil {
+		return 0, err
+	}
+	cfg := config.Configuration()
+	var numVoters int
+	for _, server := range cfg.Servers {
+		if server.Suffrage == raft.Voter {
+			numVoters++
+		}
+	}
+	return numVoters, nil
+}
+
+func (c *Cluster) RaftConfiguration() (*raft.Configuration, error) {
+	config := c.raft.GetConfiguration()
+	if err := config.Error(); err != nil {
+		return nil, err
+	}
+	cfg := config.Configuration()
+	return &cfg, nil
 }
 
 // Stats holds cluster statistics.
