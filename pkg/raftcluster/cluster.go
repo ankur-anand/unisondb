@@ -118,6 +118,37 @@ func (c *Cluster) RaftConfiguration() (*raft.Configuration, error) {
 	return &cfg, nil
 }
 
+// RemoveServer removes a server from Raft if it exists in the latest configuration.
+func (c *Cluster) RemoveServer(id raft.ServerID) error {
+	cfg, err := c.RaftConfiguration()
+	if err != nil {
+		return err
+	}
+	for _, server := range cfg.Servers {
+		if server.ID != id {
+			continue
+		}
+		slog.Info("[raftcluster]",
+			slog.String("message", "removing raft server"),
+			slog.String("server_id", string(id)),
+			slog.String("address", string(server.Address)),
+			slog.String("state", c.raft.State().String()),
+		)
+		future := c.raft.RemoveServer(server.ID, 0, 0)
+		if err := future.Error(); err != nil {
+			return err
+		}
+		slog.Info("[raftcluster]",
+			slog.String("message", "removed raft server"),
+			slog.String("server_id", string(id)),
+			slog.String("address", string(server.Address)),
+			slog.String("state", c.raft.State().String()),
+		)
+		return nil
+	}
+	return nil
+}
+
 // Stats holds cluster statistics.
 type Stats struct {
 	IsLeader bool

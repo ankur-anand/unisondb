@@ -213,6 +213,70 @@ func TestCluster_RaftConfiguration(t *testing.T) {
 	}
 }
 
+func TestCluster_RemoveServer(t *testing.T) {
+	clusters, _ := setupTestCluster(t, 17400)
+	defer func() {
+		for _, c := range clusters {
+			c.Close()
+		}
+	}()
+
+	leader := findLeader(clusters)
+	if leader == nil {
+		t.Fatal("no leader found")
+	}
+
+	cfg, err := leader.RaftConfiguration()
+	if err != nil {
+		t.Fatalf("raft configuration: %v", err)
+	}
+
+	var removeID raft.ServerID
+	for _, server := range cfg.Servers {
+		if server.Address != leader.Leader() {
+			removeID = server.ID
+			break
+		}
+	}
+	if removeID == "" {
+		t.Fatal("no follower to remove")
+	}
+
+	if err := leader.RemoveServer(removeID); err != nil {
+		t.Fatalf("RemoveServer: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		cfg, err := leader.RaftConfiguration()
+		if err != nil {
+			t.Fatalf("raft configuration after remove: %v", err)
+		}
+		found := false
+		for _, server := range cfg.Servers {
+			if server.ID == removeID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server %s still in config", removeID)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	count, err := leader.NumVoters()
+	if err != nil {
+		t.Fatalf("NumVoters: %v", err)
+	}
+	if count != len(clusters)-1 {
+		t.Fatalf("expected %d voters, got %d", len(clusters)-1, count)
+	}
+}
+
 func setupBenchCluster(b *testing.B, basePort int, msync bool) []*BuiltCluster {
 	b.Helper()
 
