@@ -322,62 +322,6 @@ func (l *LogStore) WAL() *walfs.WALog {
 	return l.wal
 }
 
-// DeletionPredicate returns a function that determines if a WAL segment is safe to delete.
-// A segment is safe to delete if all its log entries have been compacted (index <= compactedIndex).
-//
-// The getCompactedIndex function is called each time the predicate is evaluated,
-// allowing the compacted index to be fetched dynamically (e.g., from Raft's last snapshot index).
-//
-// Usage with WAL cleanup:
-//
-//	predicate := store.DeletionPredicate(func() uint64 {
-//	    return raft.LastSnapshotIndex()
-//	})
-//	for segID, seg := range store.WAL().Segments() {
-//	    if predicate(segID) {
-//	        seg.MarkForDeletion()
-//	    }
-//	}
-//
-// Segments containing only entries at or below the compacted index can be safely removed.
-//   - A segment is safe to delete if:
-//     a. It exists in the WAL
-//     b. It's not the active segment
-//     c. It has valid log entries (firstLogIndex > 0 and entryCount > 0)
-//     d. All its log entries are at or below the compactedIndex
-func (l *LogStore) DeletionPredicate(getCompactedIndex func() uint64) walfs.DeletionPredicate {
-	return func(segID walfs.SegmentID) bool {
-		l.mu.RLock()
-		defer l.mu.RUnlock()
-
-		seg, ok := l.wal.Segments()[segID]
-		if !ok {
-			return false
-		}
-
-		if l.wal.Current() != nil && l.wal.Current().ID() == segID {
-			return false
-		}
-
-		firstIdx := seg.FirstLogIndex()
-		if firstIdx == 0 {
-			return false
-		}
-
-		entryCount := seg.GetEntryCount()
-		if entryCount == 0 {
-			return false
-		}
-
-		lastIdx := firstIdx + uint64(entryCount) - 1
-
-		compactedIndex := getCompactedIndex()
-
-		// Only Safe to delete if all entries are at or below compacted index
-		return lastIdx <= compactedIndex
-	}
-}
-
 // IsMonotonic implements raft.MonotonicLogStore.
 func (l *LogStore) IsMonotonic() bool {
 	return true
