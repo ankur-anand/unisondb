@@ -571,6 +571,11 @@ func (wl *WALog) Current() *Segment {
 	return wl.currentSegment
 }
 
+// LogIndex returns the shared sharded index mapping log index to record position.
+func (wl *WALog) LogIndex() *ShardedIndex {
+	return wl.logIndex
+}
+
 // SegmentIndex returns the physical index entries for a segment. For sealed segments the
 // returned slice is complete. For the active segment, the slice reflects the entries written so far.
 // Warning: when ClearIndexOnFlush is enabled, sealed segments may return an empty slice.

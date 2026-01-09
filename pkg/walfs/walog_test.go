@@ -2385,6 +2385,25 @@ func TestSegmentCleanupRemovesDataAndIndex(t *testing.T) {
 	require.NoError(t, wal.Close())
 }
 
+func TestWALogGetLogIndexShared(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal")
+	require.NoError(t, err)
+	defer wal.Close()
+
+	idx := wal.LogIndex()
+	require.NotNil(t, idx)
+	assert.Same(t, idx, wal.LogIndex())
+
+	pos, err := wal.Write([]byte("pos-1"), 1)
+	require.NoError(t, err)
+
+	got, ok := idx.Get(1)
+	require.True(t, ok)
+	assert.Equal(t, pos, got)
+}
+
 func TestPositionForIndexReturnsRecordPosition(t *testing.T) {
 	dir := t.TempDir()
 

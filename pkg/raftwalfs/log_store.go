@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -54,7 +52,7 @@ func NewLogStore(wal *walfs.WALog, committedIndex uint64, opts ...LogStoreOption
 	store := &LogStore{
 		wal:      wal,
 		codec:    BinaryCodecV1{},
-		index:    walfs.NewShardedIndex(),
+		index:    wal.LogIndex(),
 		closedCh: make(chan struct{}),
 	}
 
@@ -83,59 +81,16 @@ func NewLogStore(wal *walfs.WALog, committedIndex uint64, opts ...LogStoreOption
 
 // recoverIndex rebuilds the in-memory index from all WAL segments.
 func (l *LogStore) recoverIndex() error {
-	segments := l.wal.Segments()
-	if len(segments) == 0 {
+	first, last, ok := l.index.GetFirstLast()
+
+	if ok {
+		l.firstIndex.Store(first)
+		l.lastIndex.Store(last)
 		return nil
 	}
 
-	keys := slices.Collect(maps.Keys(segments))
-	slices.Sort(keys)
-
-	var first, last uint64
-	var entries []walfs.IndexEntry
-
-	for _, key := range keys {
-		segment := segments[key]
-		segFirstIdx := segment.FirstLogIndex()
-		if segFirstIdx == 0 {
-			continue
-		}
-
-		idxEntries := segment.IndexEntries()
-		if len(idxEntries) == 0 {
-			continue
-		}
-
-		// first/last
-		if first == 0 || segFirstIdx < first {
-			first = segFirstIdx
-		}
-
-		for i, entry := range idxEntries {
-			logIndex := segFirstIdx + uint64(i)
-			entries = append(entries, walfs.IndexEntry{
-				Index: logIndex,
-				Pos: walfs.RecordPosition{
-					Offset:    entry.Offset,
-					SegmentID: entry.SegmentID,
-				},
-			})
-			if logIndex > last {
-				last = logIndex
-			}
-		}
-
-		// free memory
-		// make sure to initialize the walfs with clear to segment rotation for index.
-		segment.ClearIndexFromMemory()
-	}
-
-	if len(entries) > 0 {
-		l.index.SetBatch(entries)
-	}
-
-	l.firstIndex.Store(first)
-	l.lastIndex.Store(last)
+	l.firstIndex.Store(0)
+	l.lastIndex.Store(0)
 
 	return nil
 }
@@ -248,19 +203,10 @@ func (l *LogStore) StoreLogs(logs []*raft.Log) error {
 		logIndexes[i] = log.Index
 	}
 
-	positions, err := l.wal.WriteBatch(records, logIndexes)
+	_, err := l.wal.WriteBatch(records, logIndexes)
 	if err != nil {
 		return fmt.Errorf("wal write batch: %w", err)
 	}
-
-	entries := make([]walfs.IndexEntry, len(logs))
-	for i, log := range logs {
-		entries[i] = walfs.IndexEntry{
-			Index: log.Index,
-			Pos:   positions[i],
-		}
-	}
-	l.index.SetBatch(entries)
 
 	if first == 0 {
 		l.firstIndex.Store(logs[0].Index)
@@ -371,7 +317,7 @@ func (l *LogStore) Sync() error {
 	return l.wal.Sync()
 }
 
-// WAL returns the underlying WAL for advanced operations.
+// WAL returns the underlying WAL.
 func (l *LogStore) WAL() *walfs.WALog {
 	return l.wal
 }
