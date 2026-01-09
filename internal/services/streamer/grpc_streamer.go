@@ -59,8 +59,7 @@ func (s *GrpcStreamer) Close() {
 	close(s.shutdown)
 }
 
-// GetLatestOffset returns the latest wal offset of the wal for the provided namespace.
-func (s *GrpcStreamer) GetLatestOffset(ctx context.Context, _ *v1.GetLatestOffsetRequest) (*v1.GetLatestOffsetResponse, error) {
+func (s *GrpcStreamer) GetLatestLSN(ctx context.Context, _ *v1.GetLatestLSNRequest) (*v1.GetLatestLSNResponse, error) {
 	namespace, reqID, method := grpcutils.GetRequestInfo(ctx)
 
 	if namespace == "" {
@@ -72,11 +71,8 @@ func (s *GrpcStreamer) GetLatestOffset(ctx context.Context, _ *v1.GetLatestOffse
 		return nil, services.ToGRPCError(namespace, reqID, method, services.ErrNamespaceNotExists)
 	}
 
-	offset := engine.CurrentOffset()
-	if offset == nil {
-		return &v1.GetLatestOffsetResponse{}, nil
-	}
-	return &v1.GetLatestOffsetResponse{Offset: offset.Encode()}, nil
+	lsn := engine.OpsReceivedCount()
+	return &v1.GetLatestLSNResponse{Lsn: lsn}, nil
 }
 
 // StreamWalRecords stream the underlying WAL record on the connection stream.
@@ -92,45 +88,23 @@ func (s *GrpcStreamer) StreamWalRecords(request *v1.StreamWalRecordsRequest, g g
 		return services.ToGRPCError(namespace, reqID, method, services.ErrNamespaceNotExists)
 	}
 
-	// it can contain terrible data
-	meta, err := decodeMetadata(request.GetOffset())
-	if err != nil {
-		slog.Error("[unisondb.streamer.grpc]",
-			slog.String("event_type", "metadata.decoding.failed"),
-			slog.Any("error", err),
-			slog.Any("server_offset", engine.CurrentOffset()),
-			slog.Group("request",
-				slog.String("namespace", namespace),
-				slog.String("id", string(reqID)),
-				slog.Any("offset", request.GetOffset()),
-			),
-		)
-		return services.ToGRPCError(namespace, reqID, method, services.ErrInvalidMetadata)
-	}
-	// create a new replicator instance.
-	slog.Debug("[unisondb.streamer.grpc] streaming WAL",
-		"method", method,
-		reqIDKey, reqID,
-		"namespace", namespace,
-		"offset", meta,
-	)
-
 	walReceiver := make(chan []*v1.WALRecord, 2)
 	replicatorErr := make(chan error, 1)
 
 	ctx, cancel := context.WithCancel(g.Context())
 	defer cancel()
 
+	startLSN := request.GetStartLsn()
+	slog.Debug("[unisondb.streamer.grpc] streaming WAL",
+		"method", method,
+		reqIDKey, reqID,
+		"namespace", namespace,
+		"start_lsn", startLSN,
+	)
+
 	rpInstance := replicator.NewReplicator(engine,
 		batchSize,
-		batchWaitTime, meta, "grpc")
-
-	currentOffset := engine.CurrentOffset()
-	// Reject if client requests non-zero offset but server has no data.
-	// Allow bootstrapping case where both client and server start from {0,0}.
-	if meta != nil && currentOffset == nil && !meta.IsZero() {
-		return services.ToGRPCError(namespace, reqID, method, services.ErrInvalidMetadata)
-	}
+		batchWaitTime, startLSN, "grpc")
 
 	// when server is closed, the goroutine would be closed upon
 	// cancel of ctx.
@@ -303,21 +277,4 @@ func (s *GrpcStreamer) flushBatch(batch []*v1.WALRecord, g grpc.ServerStream) er
 		return fmt.Errorf("failed to send WAL records: %w", err)
 	}
 	return nil
-}
-
-// decodeMetadata protects from panic and decodes.
-func decodeMetadata(data []byte) (o *dbkernel.Offset, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("decode ChunkPosition: Panic recovered %v", r)
-		}
-	}()
-	if len(data) == 0 {
-		return nil, nil
-	}
-	o = dbkernel.DecodeOffset(data)
-	if o == nil {
-		return nil, errors.New("failed to decode offset: invalid or corrupt data")
-	}
-	return o, err
 }

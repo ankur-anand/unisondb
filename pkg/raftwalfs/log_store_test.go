@@ -530,7 +530,7 @@ func TestLogStore_InterfaceCompliance(t *testing.T) {
 }
 
 func TestShardedIndex_Basic(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
 	idx.Set(2, walfs.RecordPosition{SegmentID: 1, Offset: 200})
@@ -551,7 +551,7 @@ func TestShardedIndex_Basic(t *testing.T) {
 }
 
 func TestShardedIndex_DeleteRange(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	for i := uint64(1); i <= 10; i++ {
 		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i * 100)})
@@ -572,7 +572,7 @@ func TestShardedIndex_DeleteRange(t *testing.T) {
 }
 
 func TestShardedIndex_GetFirstLast(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	_, _, ok := idx.GetFirstLast()
 	assert.False(t, ok)
@@ -588,9 +588,9 @@ func TestShardedIndex_GetFirstLast(t *testing.T) {
 }
 
 func TestShardedIndex_SetBatch(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
-	entries := []IndexEntry{
+	entries := []walfs.IndexEntry{
 		{Index: 1, Pos: walfs.RecordPosition{SegmentID: 1, Offset: 100}},
 		{Index: 2, Pos: walfs.RecordPosition{SegmentID: 1, Offset: 200}},
 		{Index: 3, Pos: walfs.RecordPosition{SegmentID: 1, Offset: 300}},
@@ -961,7 +961,7 @@ func TestLogStore_ManySmallLogs(t *testing.T) {
 }
 
 func TestShardedIndex_ClearAndReuse(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	for i := uint64(1); i <= 100; i++ {
 		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
@@ -982,7 +982,7 @@ func TestShardedIndex_ClearAndReuse(t *testing.T) {
 }
 
 func TestShardedIndex_IsCurrentEntry(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
 
@@ -993,7 +993,7 @@ func TestShardedIndex_IsCurrentEntry(t *testing.T) {
 }
 
 func TestShardedIndex_UpdateExisting(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
 	assert.Equal(t, int64(1), idx.Len())
@@ -1007,7 +1007,7 @@ func TestShardedIndex_UpdateExisting(t *testing.T) {
 }
 
 func TestShardedIndex_Range(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	for i := uint64(1); i <= 10; i++ {
 		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i * 100)})
@@ -1023,7 +1023,7 @@ func TestShardedIndex_Range(t *testing.T) {
 }
 
 func TestShardedIndex_RangeEarlyStop(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	for i := uint64(1); i <= 100; i++ {
 		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
@@ -1039,12 +1039,12 @@ func TestShardedIndex_RangeEarlyStop(t *testing.T) {
 }
 
 func TestShardedIndex_EmptyBatchOperations(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	idx.SetBatch(nil)
 	assert.Equal(t, int64(0), idx.Len())
 
-	idx.SetBatch([]IndexEntry{})
+	idx.SetBatch([]walfs.IndexEntry{})
 	assert.Equal(t, int64(0), idx.Len())
 
 	deleted := idx.DeleteRange(1, 100)
@@ -1052,7 +1052,7 @@ func TestShardedIndex_EmptyBatchOperations(t *testing.T) {
 }
 
 func TestShardedIndex_DeleteNonExistent(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	idx.Set(1, walfs.RecordPosition{SegmentID: 1, Offset: 100})
 
@@ -1064,7 +1064,7 @@ func TestShardedIndex_DeleteNonExistent(t *testing.T) {
 }
 
 func TestShardedIndex_LenVsLenSlow(t *testing.T) {
-	idx := NewShardedIndex()
+	idx := walfs.NewShardedIndex()
 
 	for i := uint64(0); i < 1000; i++ {
 		idx.Set(i, walfs.RecordPosition{SegmentID: 1, Offset: int64(i)})
@@ -1204,157 +1204,5 @@ func TestDecodeRaftLog(t *testing.T) {
 	t.Run("error on short data", func(t *testing.T) {
 		_, err := BinaryCodecV1{}.Decode([]byte{1, 2, 3})
 		assert.Error(t, err)
-	})
-}
-
-func TestLogStore_DeletionPredicate(t *testing.T) {
-	t.Run("empty store", func(t *testing.T) {
-		store := newTestStore(t)
-
-		predicate := store.DeletionPredicate(func() uint64 { return 100 })
-
-		assert.False(t, predicate(999))
-	})
-
-	t.Run("active segment not deletable", func(t *testing.T) {
-		store := newTestStore(t)
-
-		require.NoError(t, store.StoreLogs([]*raft.Log{
-			makeLog(1, 1, "a"),
-			makeLog(2, 1, "b"),
-			makeLog(3, 1, "c"),
-		}))
-
-		predicate := store.DeletionPredicate(func() uint64 { return 100 })
-
-		activeSegID := store.wal.Current().ID()
-		assert.False(t, predicate(activeSegID))
-	})
-
-	t.Run("sealed segment with entries above compacted index", func(t *testing.T) {
-		store := newTestStore(t, walfs.WithMaxSegmentSize(256))
-
-		for i := 1; i <= 50; i++ {
-			require.NoError(t, store.StoreLog(makeLog(uint64(i), 1, "data-data-data")))
-		}
-
-		segments := store.wal.Segments()
-		require.Greater(t, len(segments), 1, "should have multiple segments")
-
-		predicate := store.DeletionPredicate(func() uint64 { return 10 })
-
-		for segID, seg := range segments {
-			if store.wal.Current().ID() == segID {
-				assert.False(t, predicate(segID), "active segment should not be deletable")
-				continue
-			}
-
-			firstIdx := seg.FirstLogIndex()
-			entryCount := seg.GetEntryCount()
-			if entryCount == 0 || firstIdx == 0 {
-				continue
-			}
-			lastIdx := firstIdx + uint64(entryCount) - 1
-
-			if lastIdx <= 10 {
-				assert.True(t, predicate(segID),
-					"segment %d with entries [%d-%d] should be deletable (compacted=10)",
-					segID, firstIdx, lastIdx)
-			} else {
-				assert.False(t, predicate(segID),
-					"segment %d with entries [%d-%d] should NOT be deletable (compacted=10)",
-					segID, firstIdx, lastIdx)
-			}
-		}
-	})
-
-	t.Run("sealed segment with all entries compacted", func(t *testing.T) {
-		store := newTestStore(t, walfs.WithMaxSegmentSize(256))
-
-		for i := 1; i <= 50; i++ {
-			require.NoError(t, store.StoreLog(makeLog(uint64(i), 1, "data-data-data")))
-		}
-
-		segments := store.wal.Segments()
-		require.Greater(t, len(segments), 1, "should have multiple segments")
-
-		predicate := store.DeletionPredicate(func() uint64 { return 50 })
-
-		deletableCount := 0
-		for segID := range segments {
-			if store.wal.Current().ID() == segID {
-				assert.False(t, predicate(segID), "active segment should not be deletable")
-				continue
-			}
-			if predicate(segID) {
-				deletableCount++
-			}
-		}
-
-		assert.Greater(t, deletableCount, 0, "should have some deletable sealed segments")
-	})
-
-	t.Run("predicate with zero compacted index", func(t *testing.T) {
-		store := newTestStore(t, walfs.WithMaxSegmentSize(256))
-
-		for i := 1; i <= 30; i++ {
-			require.NoError(t, store.StoreLog(makeLog(uint64(i), 1, "data-data-data")))
-		}
-
-		predicate := store.DeletionPredicate(func() uint64 { return 0 })
-
-		segments := store.wal.Segments()
-		for segID := range segments {
-			assert.False(t, predicate(segID),
-				"segment %d should not be deletable with compactedIndex=0", segID)
-		}
-	})
-
-	t.Run("non-existent segment", func(t *testing.T) {
-		store := newTestStore(t)
-
-		require.NoError(t, store.StoreLog(makeLog(1, 1, "data")))
-
-		predicate := store.DeletionPredicate(func() uint64 { return 100 })
-
-		assert.False(t, predicate(12345))
-	})
-
-	t.Run("dynamic compacted index", func(t *testing.T) {
-		store := newTestStore(t, walfs.WithMaxSegmentSize(256))
-
-		for i := 1; i <= 50; i++ {
-			require.NoError(t, store.StoreLog(makeLog(uint64(i), 1, "data-data-data")))
-		}
-
-		segments := store.wal.Segments()
-		require.Greater(t, len(segments), 1, "should have multiple segments")
-
-		var compactedIndex uint64 = 0
-		predicate := store.DeletionPredicate(func() uint64 { return compactedIndex })
-
-		var testSegID walfs.SegmentID
-		var testSegLastIdx uint64
-		for segID, seg := range segments {
-			if store.wal.Current().ID() == segID {
-				continue
-			}
-			firstIdx := seg.FirstLogIndex()
-			entryCount := seg.GetEntryCount()
-			if entryCount > 0 && firstIdx > 0 {
-				testSegID = segID
-				testSegLastIdx = firstIdx + uint64(entryCount) - 1
-				break
-			}
-		}
-		require.NotZero(t, testSegID, "should have a sealed segment to test")
-
-		assert.False(t, predicate(testSegID), "should not be deletable with compactedIndex=0")
-
-		compactedIndex = testSegLastIdx
-		assert.True(t, predicate(testSegID), "should be deletable after compactedIndex updated")
-
-		compactedIndex = testSegLastIdx - 1
-		assert.False(t, predicate(testSegID), "should not be deletable after compactedIndex lowered")
 	})
 }

@@ -21,8 +21,7 @@ func releaseWalRecord(record *v1.WALRecord) {
 		return
 	}
 	record.Record = nil
-	record.Offset = 0
-	record.SegmentId = 0
+	record.Crc32Checksum = 0
 
 	walRecordPool.Put(record)
 }

@@ -94,6 +94,9 @@ type Config struct {
 	MinSegment      int           `toml:"min_segment"`
 	MaxSegment      int           `toml:"max_segment"`
 	CleanupInterval time.Duration `toml:"cleanup_interval"`
+
+	// RaftMode
+	RaftMode bool `toml:"raft_mode"`
 }
 
 func NewDefaultConfig() *Config {

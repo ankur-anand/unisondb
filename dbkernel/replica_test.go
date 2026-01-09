@@ -621,13 +621,10 @@ func TestReplicaApplyRecordPersistsLogIndex(t *testing.T) {
 
 	requireSegmentFirstIndex(t, walog, lsn)
 
-	segID, slot, err := walog.SegmentForIndex(lsn)
+	pos, err := walog.PositionForIndex(lsn)
 	require.NoError(t, err)
-	indexEntries, err := walog.SegmentIndex(segID)
-	require.NoError(t, err)
-	require.Less(t, slot, len(indexEntries))
 
-	data, _, err := walog.Segments()[segID].Read(indexEntries[slot].Offset)
+	data, err := walog.Read(pos)
 	require.NoError(t, err)
 	copyData := append([]byte(nil), data...)
 	recordFB := logrecord.GetRootAsLogRecord(copyData, 0)
@@ -691,13 +688,10 @@ func TestReplicaApplyRecordsPersistLogIndex(t *testing.T) {
 	requireSegmentFirstIndex(t, walog, lsns[0])
 
 	for _, lsn := range lsns {
-		segID, slot, err := walog.SegmentForIndex(lsn)
+		pos, err := walog.PositionForIndex(lsn)
 		require.NoError(t, err)
-		indexEntries, err := walog.SegmentIndex(segID)
-		require.NoError(t, err)
-		require.Less(t, slot, len(indexEntries))
 
-		data, _, err := walog.Segments()[segID].Read(indexEntries[slot].Offset)
+		data, err := walog.Read(pos)
 		require.NoError(t, err)
 		recordCopy := append([]byte(nil), data...)
 		fb := logrecord.GetRootAsLogRecord(recordCopy, 0)
@@ -920,5 +914,396 @@ func TestReplicaWALHandler_RaftInternalRecords(t *testing.T) {
 			assert.Equal(t, expectedLSN, lsn,
 				"LSN at position %d should be %d, got %d (no holes)", i, expectedLSN, lsn)
 		}
+	})
+}
+
+func TestReplicaWALHandler_ApplyRecordsLSNOnly(t *testing.T) {
+	t.Run("empty_batch_returns_nil", func(t *testing.T) {
+		baseDir := t.TempDir()
+		replicaDir := filepath.Join(baseDir, "replica")
+
+		replicaEngine, err := dbkernel.NewStorageEngine(replicaDir, "test_lsn_only", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = replicaEngine.Close(context.Background())
+		})
+
+		replicator := dbkernel.NewReplicaWALHandler(replicaEngine)
+
+		err = replicator.ApplyRecordsLSNOnly(nil)
+		assert.NoError(t, err, "empty batch should return nil")
+
+		err = replicator.ApplyRecordsLSNOnly([][]byte{})
+		assert.NoError(t, err, "empty slice should return nil")
+
+		assert.Equal(t, uint64(0), replicaEngine.OpsReceivedCount(), "ops count should be 0")
+	})
+
+	t.Run("invalid_lsn_sequence_errors", func(t *testing.T) {
+		baseDir := t.TempDir()
+		replicaDir := filepath.Join(baseDir, "replica")
+
+		replicaEngine, err := dbkernel.NewStorageEngine(replicaDir, "test_lsn_only", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = replicaEngine.Close(context.Background())
+		})
+
+		replicator := dbkernel.NewReplicaWALHandler(replicaEngine)
+		record := logcodec.LogRecord{
+			LSN:           0,
+			HLC:           uint64(dbkernel.HLCNow()),
+			OperationType: logrecord.LogOperationTypeInsert,
+			EntryType:     logrecord.LogEntryTypeKV,
+			TxnState:      logrecord.TransactionStateNone,
+		}
+		encoded := record.FBEncode(64)
+
+		err = replicator.ApplyRecordsLSNOnly([][]byte{encoded})
+		assert.ErrorIs(t, err, dbkernel.ErrInvalidLSN, "should error on invalid LSN")
+		assert.Equal(t, uint64(0), replicaEngine.OpsReceivedCount(), "ops count should still be 0")
+	})
+
+	t.Run("lsn_gap_in_batch_errors", func(t *testing.T) {
+		baseDir := t.TempDir()
+		replicaDir := filepath.Join(baseDir, "replica")
+
+		replicaEngine, err := dbkernel.NewStorageEngine(replicaDir, "test_lsn_only", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = replicaEngine.Close(context.Background())
+		})
+
+		replicator := dbkernel.NewReplicaWALHandler(replicaEngine)
+		record1 := logcodec.LogRecord{
+			LSN:           1,
+			HLC:           uint64(dbkernel.HLCNow()),
+			OperationType: logrecord.LogOperationTypeInsert,
+			EntryType:     logrecord.LogEntryTypeKV,
+			TxnState:      logrecord.TransactionStateNone,
+		}
+		record3 := logcodec.LogRecord{
+			LSN:           3,
+			HLC:           uint64(dbkernel.HLCNow()),
+			OperationType: logrecord.LogOperationTypeInsert,
+			EntryType:     logrecord.LogEntryTypeKV,
+			TxnState:      logrecord.TransactionStateNone,
+		}
+
+		batch := [][]byte{record1.FBEncode(64), record3.FBEncode(64)}
+		err = replicator.ApplyRecordsLSNOnly(batch)
+		assert.ErrorIs(t, err, dbkernel.ErrInvalidLSN, "should error on LSN gap")
+		assert.Contains(t, err.Error(), "at index 1", "error should indicate which record failed")
+	})
+
+	t.Run("valid_continuous_lsn_applies_successfully", func(t *testing.T) {
+		baseDir := t.TempDir()
+		leaderDir := filepath.Join(baseDir, "leader")
+		replicaDir := filepath.Join(baseDir, "replica")
+
+		leader, err := dbkernel.NewStorageEngine(leaderDir, "leader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = leader.Close(context.Background())
+		})
+
+		replica, err := dbkernel.NewStorageEngine(replicaDir, "replica", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = replica.Close(context.Background())
+		})
+
+		replicator := dbkernel.NewReplicaWALHandler(replica)
+
+		kvPairs := make(map[string]string)
+		for i := 0; i < 10; i++ {
+			key := fmt.Sprintf("lsn_only_key_%d", i)
+			value := fmt.Sprintf("lsn_only_value_%d", i)
+			kvPairs[key] = value
+			require.NoError(t, leader.PutKV([]byte(key), []byte(value)))
+		}
+
+		reader, err := leader.NewReader()
+		require.NoError(t, err)
+		defer reader.Close()
+
+		var batch [][]byte
+		for {
+			walEncoded, _, err := reader.Next()
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			batch = append(batch, walEncoded)
+		}
+
+		err = replicator.ApplyRecordsLSNOnly(batch)
+		require.NoError(t, err, "should apply records with valid LSN sequence")
+		for key, expectedValue := range kvPairs {
+			gotValue, err := replica.GetKV([]byte(key))
+			require.NoError(t, err, "should be able to read key %s", key)
+			assert.Equal(t, expectedValue, string(gotValue), "value mismatch for key %s", key)
+		}
+
+		assert.Equal(t, leader.OpsReceivedCount(), replica.OpsReceivedCount(),
+			"ops count should match between leader and replica")
+	})
+
+	t.Run("offsets_differ_but_lsn_validates", func(t *testing.T) {
+		baseDir := t.TempDir()
+		leaderDir := filepath.Join(baseDir, "leader")
+		replicaDir := filepath.Join(baseDir, "replica")
+
+		leader, err := dbkernel.NewStorageEngine(leaderDir, "leader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = leader.Close(context.Background())
+		})
+
+		replica, err := dbkernel.NewStorageEngine(replicaDir, "replica", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = replica.Close(context.Background())
+		})
+
+		replicator := dbkernel.NewReplicaWALHandler(replica)
+		require.NoError(t, leader.PutKV([]byte("test_key"), []byte("test_value")))
+		reader, err := leader.NewReader()
+		require.NoError(t, err)
+		defer reader.Close()
+
+		walEncoded, _, err := reader.Next()
+		require.NoError(t, err)
+
+		err = replicator.ApplyRecordsLSNOnly([][]byte{walEncoded})
+		require.NoError(t, err, "ApplyRecordsLSNOnly should succeed")
+
+		gotValue, err := replica.GetKV([]byte("test_key"))
+		require.NoError(t, err)
+		assert.Equal(t, []byte("test_value"), gotValue)
+	})
+
+	t.Run("batch_with_multiple_operations", func(t *testing.T) {
+		baseDir := t.TempDir()
+		leaderDir := filepath.Join(baseDir, "leader")
+		replicaDir := filepath.Join(baseDir, "replica")
+
+		leader, err := dbkernel.NewStorageEngine(leaderDir, "leader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = leader.Close(context.Background())
+		})
+
+		replica, err := dbkernel.NewStorageEngine(replicaDir, "replica", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = replica.Close(context.Background())
+		})
+
+		replicator := dbkernel.NewReplicaWALHandler(replica)
+
+		require.NoError(t, leader.PutKV([]byte("key1"), []byte("value1")))
+		require.NoError(t, leader.PutKV([]byte("key2"), []byte("value2")))
+
+		require.NoError(t, leader.DeleteKV([]byte("key1")))
+		require.NoError(t, leader.PutKV([]byte("key3"), []byte("value3")))
+
+		reader, err := leader.NewReader()
+		require.NoError(t, err)
+		defer reader.Close()
+
+		var batch [][]byte
+		for {
+			walEncoded, _, err := reader.Next()
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			batch = append(batch, walEncoded)
+		}
+
+		require.Len(t, batch, 4, "should have 4 operations")
+
+		err = replicator.ApplyRecordsLSNOnly(batch)
+		require.NoError(t, err)
+
+		_, err = replica.GetKV([]byte("key1"))
+		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound, "key1 should be deleted")
+
+		val2, err := replica.GetKV([]byte("key2"))
+		require.NoError(t, err)
+		assert.Equal(t, []byte("value2"), val2)
+
+		val3, err := replica.GetKV([]byte("key3"))
+		require.NoError(t, err)
+		assert.Equal(t, []byte("value3"), val3)
+	})
+
+	t.Run("incremental_batch_application", func(t *testing.T) {
+		baseDir := t.TempDir()
+		leaderDir := filepath.Join(baseDir, "leader")
+		replicaDir := filepath.Join(baseDir, "replica")
+
+		leader, err := dbkernel.NewStorageEngine(leaderDir, "leader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = leader.Close(context.Background())
+		})
+
+		replica, err := dbkernel.NewStorageEngine(replicaDir, "replica", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = replica.Close(context.Background())
+		})
+
+		replicator := dbkernel.NewReplicaWALHandler(replica)
+
+		for batch := 0; batch < 3; batch++ {
+			for i := 0; i < 5; i++ {
+				key := fmt.Sprintf("batch%d_key%d", batch, i)
+				value := fmt.Sprintf("batch%d_value%d", batch, i)
+				require.NoError(t, leader.PutKV([]byte(key), []byte(value)))
+			}
+		}
+
+		reader, err := leader.NewReader()
+		require.NoError(t, err)
+		defer reader.Close()
+
+		batchSize := 5
+		var currentBatch [][]byte
+
+		for {
+			walEncoded, _, err := reader.Next()
+			if err == io.EOF {
+				if len(currentBatch) > 0 {
+					err = replicator.ApplyRecordsLSNOnly(currentBatch)
+					require.NoError(t, err)
+				}
+				break
+			}
+			require.NoError(t, err)
+
+			currentBatch = append(currentBatch, walEncoded)
+			if len(currentBatch) >= batchSize {
+				err = replicator.ApplyRecordsLSNOnly(currentBatch)
+				require.NoError(t, err)
+				currentBatch = nil
+			}
+		}
+
+		for batch := 0; batch < 3; batch++ {
+			for i := 0; i < 5; i++ {
+				key := fmt.Sprintf("batch%d_key%d", batch, i)
+				expectedValue := fmt.Sprintf("batch%d_value%d", batch, i)
+				gotValue, err := replica.GetKV([]byte(key))
+				require.NoError(t, err, "should read key %s", key)
+				assert.Equal(t, expectedValue, string(gotValue))
+			}
+		}
+
+		assert.Equal(t, leader.OpsReceivedCount(), replica.OpsReceivedCount())
+	})
+
+	t.Run("raft_internal_records_apply", func(t *testing.T) {
+		baseDir := t.TempDir()
+		replicaDir := filepath.Join(baseDir, "replica")
+
+		replica, err := dbkernel.NewStorageEngine(replicaDir, "replica", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = replica.Close(context.Background())
+		})
+
+		replicator := dbkernel.NewReplicaWALHandler(replica)
+
+		raftInternal := logcodec.LogRecord{
+			LSN:           1,
+			HLC:           uint64(dbkernel.HLCNow()),
+			OperationType: logrecord.LogOperationTypeRaftInternal,
+			EntryType:     logrecord.LogEntryTypeKV,
+			TxnState:      logrecord.TransactionStateNone,
+		}
+
+		kvRecord := logcodec.LogRecord{
+			LSN:           2,
+			HLC:           uint64(dbkernel.HLCNow()),
+			OperationType: logrecord.LogOperationTypeInsert,
+			EntryType:     logrecord.LogEntryTypeKV,
+			TxnState:      logrecord.TransactionStateNone,
+		}
+
+		batch := [][]byte{
+			raftInternal.FBEncode(64),
+			kvRecord.FBEncode(64),
+		}
+
+		err = replicator.ApplyRecordsLSNOnly(batch)
+		require.NoError(t, err, "should apply batch with RaftInternal record")
+
+		assert.Equal(t, uint64(2), replica.OpsReceivedCount(),
+			"both records should be counted")
+	})
+
+	t.Run("lsn_continuity_across_batches", func(t *testing.T) {
+		baseDir := t.TempDir()
+		replicaDir := filepath.Join(baseDir, "replica")
+
+		replica, err := dbkernel.NewStorageEngine(replicaDir, "replica", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = replica.Close(context.Background())
+		})
+
+		replicator := dbkernel.NewReplicaWALHandler(replica)
+
+		batch1 := [][]byte{
+			(&logcodec.LogRecord{
+				LSN:           1,
+				HLC:           uint64(dbkernel.HLCNow()),
+				OperationType: logrecord.LogOperationTypeInsert,
+				EntryType:     logrecord.LogEntryTypeKV,
+				TxnState:      logrecord.TransactionStateNone,
+			}).FBEncode(64),
+			(&logcodec.LogRecord{
+				LSN:           2,
+				HLC:           uint64(dbkernel.HLCNow()),
+				OperationType: logrecord.LogOperationTypeInsert,
+				EntryType:     logrecord.LogEntryTypeKV,
+				TxnState:      logrecord.TransactionStateNone,
+			}).FBEncode(64),
+		}
+
+		err = replicator.ApplyRecordsLSNOnly(batch1)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(2), replica.OpsReceivedCount())
+
+		batch2 := [][]byte{
+			(&logcodec.LogRecord{
+				LSN:           3,
+				HLC:           uint64(dbkernel.HLCNow()),
+				OperationType: logrecord.LogOperationTypeInsert,
+				EntryType:     logrecord.LogEntryTypeKV,
+				TxnState:      logrecord.TransactionStateNone,
+			}).FBEncode(64),
+		}
+
+		err = replicator.ApplyRecordsLSNOnly(batch2)
+		require.NoError(t, err)
+		assert.Equal(t, uint64(3), replica.OpsReceivedCount())
+
+		batchWrongLSN := [][]byte{
+			(&logcodec.LogRecord{
+				LSN:           5, // Should be 4
+				HLC:           uint64(dbkernel.HLCNow()),
+				OperationType: logrecord.LogOperationTypeInsert,
+				EntryType:     logrecord.LogEntryTypeKV,
+				TxnState:      logrecord.TransactionStateNone,
+			}).FBEncode(64),
+		}
+
+		err = replicator.ApplyRecordsLSNOnly(batchWrongLSN)
+		assert.ErrorIs(t, err, dbkernel.ErrInvalidLSN)
+		assert.Equal(t, uint64(3), replica.OpsReceivedCount(), "count should not change after failed batch")
 	})
 }

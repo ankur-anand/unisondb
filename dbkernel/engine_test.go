@@ -1303,16 +1303,10 @@ func TestStorageEnginePersistsWalLogIndexes(t *testing.T) {
 }
 
 func readWalRecordLSN(t *testing.T, walog *walfs.WALog, idx uint64) uint64 {
-	segID, slot, err := walog.SegmentForIndex(idx)
+	pos, err := walog.PositionForIndex(idx)
 	require.NoError(t, err)
 
-	indexEntries, err := walog.SegmentIndex(segID)
-	require.NoError(t, err)
-	require.True(t, slot < len(indexEntries))
-
-	entry := indexEntries[slot]
-	segment := walog.Segments()[segID]
-	data, _, err := segment.Read(entry.Offset)
+	data, err := walog.Read(pos)
 	require.NoError(t, err)
 
 	copyData := append([]byte(nil), data...)
@@ -1497,4 +1491,161 @@ func TestMinActiveTxnBegin(t *testing.T) {
 	e.mu.Unlock()
 
 	require.Equal(t, uint64(math.MaxUint64), min)
+}
+
+func TestNewRaftWalCleanupPredicate(t *testing.T) {
+	t.Run("segment_not_found", func(t *testing.T) {
+		dir := t.TempDir()
+		wlog, err := walfs.NewWALog(dir, ".seg", walfs.WithMaxSegmentSize(1024))
+		require.NoError(t, err)
+		defer wlog.Close()
+
+		predicate := newRaftWalCleanupPredicate(wlog, func() uint64 { return 100 })
+		assert.False(t, predicate(999))
+	})
+
+	t.Run("active_segment_not_deleted", func(t *testing.T) {
+		dir := t.TempDir()
+		wlog, err := walfs.NewWALog(dir, ".seg", walfs.WithMaxSegmentSize(1024))
+		require.NoError(t, err)
+		defer wlog.Close()
+
+		_, err = wlog.Write([]byte("data"), 1)
+		require.NoError(t, err)
+
+		current := wlog.Current()
+		require.NotNil(t, current)
+
+		predicate := newRaftWalCleanupPredicate(wlog, func() uint64 { return 100 })
+		assert.False(t, predicate(current.ID()))
+	})
+
+	t.Run("empty_segment_not_deleted", func(t *testing.T) {
+		dir := t.TempDir()
+		wlog, err := walfs.NewWALog(dir, ".seg", walfs.WithMaxSegmentSize(512))
+		require.NoError(t, err)
+		defer wlog.Close()
+
+		for i := 0; i < 50; i++ {
+			_, err = wlog.Write([]byte("data-entry"), uint64(i+1))
+			require.NoError(t, err)
+		}
+
+		var sealedSegID walfs.SegmentID
+		for segID, seg := range wlog.Segments() {
+			if wlog.Current() == nil || wlog.Current().ID() != segID {
+				if seg.GetEntryCount() == 0 {
+					sealedSegID = segID
+					break
+				}
+			}
+		}
+
+		if sealedSegID != 0 {
+			predicate := newRaftWalCleanupPredicate(wlog, func() uint64 { return 100 })
+			assert.False(t, predicate(sealedSegID))
+		}
+	})
+
+	t.Run("index_in_sharded_index_not_deleted", func(t *testing.T) {
+		dir := t.TempDir()
+		wlog, err := walfs.NewWALog(dir, ".seg", walfs.WithMaxSegmentSize(512))
+		require.NoError(t, err)
+		defer wlog.Close()
+
+		for i := 0; i < 20; i++ {
+			_, err = wlog.Write([]byte("data-entry"), uint64(i+1))
+			require.NoError(t, err)
+		}
+
+		var sealedSegID walfs.SegmentID
+		var lastIdx uint64
+		for segID, seg := range wlog.Segments() {
+			if wlog.Current() != nil && wlog.Current().ID() == segID {
+				continue
+			}
+			entryCount := seg.GetEntryCount()
+			if entryCount > 0 {
+				sealedSegID = segID
+				firstIdx := seg.FirstLogIndex()
+				lastIdx = firstIdx + uint64(entryCount) - 1
+				break
+			}
+		}
+
+		if sealedSegID != 0 && lastIdx > 0 {
+			predicate := newRaftWalCleanupPredicate(wlog, func() uint64 { return 100 })
+			assert.False(t, predicate(sealedSegID))
+		}
+	})
+
+	t.Run("flushed_and_compacted_segment_deleted", func(t *testing.T) {
+		dir := t.TempDir()
+		wlog, err := walfs.NewWALog(dir, ".seg", walfs.WithMaxSegmentSize(512), walfs.WithClearIndexOnFlush())
+		require.NoError(t, err)
+		defer wlog.Close()
+
+		for i := 0; i < 30; i++ {
+			_, err = wlog.Write([]byte("data-entry"), uint64(i+1))
+			require.NoError(t, err)
+		}
+
+		var sealedSegID walfs.SegmentID
+		var lastIdx uint64
+		for segID, seg := range wlog.Segments() {
+			if wlog.Current() != nil && wlog.Current().ID() == segID {
+				continue
+			}
+			entryCount := seg.GetEntryCount()
+			if entryCount > 0 {
+				sealedSegID = segID
+				firstIdx := seg.FirstLogIndex()
+				lastIdx = firstIdx + uint64(entryCount) - 1
+				break
+			}
+		}
+
+		if sealedSegID != 0 && lastIdx > 0 {
+			logIndex := wlog.LogIndex()
+			logIndex.Delete(lastIdx)
+
+			predicate := newRaftWalCleanupPredicate(wlog, func() uint64 { return lastIdx + 10 })
+			assert.True(t, predicate(sealedSegID))
+		}
+	})
+
+	t.Run("not_yet_flushed_not_deleted", func(t *testing.T) {
+		dir := t.TempDir()
+		wlog, err := walfs.NewWALog(dir, ".seg", walfs.WithMaxSegmentSize(512), walfs.WithClearIndexOnFlush())
+		require.NoError(t, err)
+		defer wlog.Close()
+
+		for i := 0; i < 30; i++ {
+			_, err = wlog.Write([]byte("data-entry"), uint64(i+1))
+			require.NoError(t, err)
+		}
+
+		var sealedSegID walfs.SegmentID
+		var lastIdx uint64
+		for segID, seg := range wlog.Segments() {
+			if wlog.Current() != nil && wlog.Current().ID() == segID {
+				continue
+			}
+			entryCount := seg.GetEntryCount()
+			if entryCount > 0 {
+				sealedSegID = segID
+				firstIdx := seg.FirstLogIndex()
+				lastIdx = firstIdx + uint64(entryCount) - 1
+				break
+			}
+		}
+
+		if sealedSegID != 0 && lastIdx > 0 {
+			logIndex := wlog.LogIndex()
+			logIndex.Delete(lastIdx)
+
+			predicate := newRaftWalCleanupPredicate(wlog, func() uint64 { return lastIdx - 1 })
+			assert.False(t, predicate(sealedSegID))
+		}
+	})
 }

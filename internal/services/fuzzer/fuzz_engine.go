@@ -4,12 +4,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"math/rand"
+	"math/rand/v2"
 	"sync"
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel"
-	"github.com/brianvoe/gofakeit/v7"
 	"github.com/prometheus/common/helpers/templates"
 	"golang.org/x/sync/errgroup"
 )
@@ -44,11 +43,20 @@ func NewKeyPool(size, minLen, maxLen int) *KeyPool {
 }
 
 const charset = "abcdefghijklmnopqrstuvwxyz0123456789"
+const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 func randKey(length int) []byte {
 	b := make([]byte, length)
 	for i := range b {
-		b[i] = charset[rand.Intn(len(charset))]
+		b[i] = charset[rand.IntN(len(charset))]
+	}
+	return b
+}
+
+func fastRandLetters(length int) []byte {
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = letters[rand.IntN(len(letters))]
 	}
 	return b
 }
@@ -56,7 +64,7 @@ func randKey(length int) []byte {
 func generateFuzzKeyPool(count, minLen, maxLen int) [][]byte {
 	pool := make([][]byte, 0, count)
 	for len(pool) < count {
-		pool = append(pool, randKey(rand.Intn(maxLen-minLen+1)+minLen))
+		pool = append(pool, randKey(rand.IntN(maxLen-minLen+1)+minLen))
 	}
 	return pool
 }
@@ -73,8 +81,7 @@ func (kp *KeyPool) Get(n int) [][]byte {
 
 	out := make([][]byte, 0, n)
 	for i := 0; i < n; i++ {
-		var idx = rand.Intn(len(kp.keys))
-
+		idx := rand.IntN(len(kp.keys))
 		out = append(out, kp.keys[idx])
 	}
 	return out
@@ -85,16 +92,16 @@ func (kp *KeyPool) Mutate() {
 	defer kp.mu.Unlock()
 
 	// mutate 1-10% of the keys.
-	mutations := rand.Intn(kp.size/10) + 1
+	mutations := rand.IntN(kp.size/10) + 1
 	for i := 0; i < mutations; i++ {
-		idx := rand.Intn(len(kp.keys))
-		action := rand.Intn(2)
+		idx := rand.IntN(len(kp.keys))
+		action := rand.IntN(2)
 		switch action {
 		case 0:
-			newKey := randKey(rand.Intn(kp.maxLen-kp.minLen+1) + kp.minLen)
+			newKey := randKey(rand.IntN(kp.maxLen-kp.minLen+1) + kp.minLen)
 			kp.keys[idx] = newKey
 		case 1:
-			dup := kp.keys[rand.Intn(len(kp.keys))]
+			dup := kp.keys[rand.IntN(len(kp.keys))]
 			kp.keys[idx] = dup
 		}
 	}
@@ -123,8 +130,8 @@ func (cp *ColumnPool) Get(n int) map[string][]byte {
 
 	out := make(map[string][]byte, n)
 	for i := 0; i < n; i++ {
-		col := cp.columns[rand.Intn(len(cp.columns))]
-		out[col] = []byte(gofakeit.LetterN(256))
+		col := cp.columns[rand.IntN(len(cp.columns))]
+		out[col] = fastRandLetters(256)
 	}
 	return out
 }
@@ -133,9 +140,9 @@ func (cp *ColumnPool) Mutate() {
 	cp.mu.Lock()
 	defer cp.mu.Unlock()
 
-	mutations := rand.Intn(cp.size/5) + 1 // mutate 1-20% of columns.
+	mutations := rand.IntN(cp.size/5) + 1 // mutate 1-20% of columns.
 	for i := 0; i < mutations; i++ {
-		idx := rand.Intn(len(cp.columns))
+		idx := rand.IntN(len(cp.columns))
 		cp.columns[idx] = randColumnName()
 	}
 }
@@ -169,16 +176,16 @@ func NewValuePool(sizes []int, countPerSize int) *ValuePool {
 
 func fillRandomBytes(b []byte) {
 	for i := range b {
-		b[i] = byte(rand.Intn(256))
+		b[i] = byte(rand.IntN(256))
 	}
 }
 
 func (vp *ValuePool) Get() []byte {
 	// 90% chance for small value
 	if rand.Float64() < 0.9 {
-		return vp.smallValues[rand.Intn(len(vp.smallValues))]
+		return vp.smallValues[rand.IntN(len(vp.smallValues))]
 	}
-	return vp.largeValues[rand.Intn(len(vp.largeValues))]
+	return vp.largeValues[rand.IntN(len(vp.largeValues))]
 }
 
 // FuzzEngineOps concurrently runs fuzzing operations against an Engine using multiple worker goroutines.
@@ -261,7 +268,7 @@ func executeRandomOp(e Engine, keyPool, rowKeyPool *KeyPool, columnPool *ColumnP
 	values := [][]byte{valuePool.Get(), valuePool.Get(), valuePool.Get()}
 
 	rowKey := rowKeyPool.Get(1)[0]
-	columns := columnPool.Get(rand.Intn(5) + 1)
+	columns := columnPool.Get(rand.IntN(5) + 1)
 
 	ops := []struct {
 		name string
@@ -300,7 +307,7 @@ func executeRandomOp(e Engine, keyPool, rowKeyPool *KeyPool, columnPool *ColumnP
 		)
 	}
 	start := time.Now()
-	op := ops[rand.Intn(len(ops))]
+	op := ops[rand.IntN(len(ops))]
 	if err := op.fn(); err != nil {
 		slog.Error("[unisondb.fuzzer] Operation failed", "op", op.name, "err", err)
 	}

@@ -226,6 +226,98 @@ func TestSegmentFirstLogIndexPersistsWhenSealed(t *testing.T) {
 	assert.Equal(t, uint64(777), meta.FirstLogIndex)
 }
 
+func TestOpenSegmentFile_PopulatesLogIndexFromSealedIndex(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+
+	data := bytes.Repeat([]byte("s"), 40)
+	positions := make(map[uint64]RecordPosition)
+	for i := 0; i < 3; i++ {
+		pos, err := seg.Write(data, uint64(i+1))
+		require.NoError(t, err)
+		positions[uint64(i+1)] = pos
+	}
+
+	require.NoError(t, seg.SealSegment())
+	seg.WaitForIndexFlush()
+	require.NoError(t, seg.Close())
+
+	idx := NewShardedIndex()
+	reopened, err := OpenSegmentFile(dir, ".wal", 1, withLogIndex(idx))
+	require.NoError(t, err)
+	defer reopened.Close()
+
+	for i := 1; i <= 3; i++ {
+		got, ok := idx.Get(uint64(i))
+		require.True(t, ok)
+		assert.Equal(t, positions[uint64(i)], got)
+	}
+	assert.Equal(t, int64(3), idx.Len())
+}
+
+func TestOpenSegmentFile_PopulatesLogIndexFromUnsealedSegment(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+
+	data := bytes.Repeat([]byte("u"), 40)
+	positions := make(map[uint64]RecordPosition)
+	for i := 0; i < 4; i++ {
+		pos, err := seg.Write(data, uint64(i+5))
+		require.NoError(t, err)
+		positions[uint64(i+5)] = pos
+	}
+
+	require.NoError(t, seg.Close())
+
+	idx := NewShardedIndex()
+	reopened, err := OpenSegmentFile(dir, ".wal", 1, withLogIndex(idx))
+	require.NoError(t, err)
+	defer reopened.Close()
+
+	for i := 5; i <= 8; i++ {
+		got, ok := idx.Get(uint64(i))
+		require.True(t, ok)
+		assert.Equal(t, positions[uint64(i)], got)
+	}
+	assert.Equal(t, int64(4), idx.Len())
+}
+
+func TestOpenSegmentFile_SkipsIndexEntriesWhenClearIndexOnFlush(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+
+	data := bytes.Repeat([]byte("c"), 32)
+	positions := make(map[uint64]RecordPosition)
+	for i := 0; i < 3; i++ {
+		pos, err := seg.Write(data, uint64(i+10))
+		require.NoError(t, err)
+		positions[uint64(i+10)] = pos
+	}
+
+	require.NoError(t, seg.SealSegment())
+	seg.WaitForIndexFlush()
+	require.NoError(t, seg.Close())
+
+	idx := NewShardedIndex()
+	reopened, err := OpenSegmentFile(dir, ".wal", 1, withClearIndexOnFlush(), withLogIndex(idx))
+	require.NoError(t, err)
+	defer reopened.Close()
+
+	assert.Empty(t, reopened.IndexEntries())
+	for i := 10; i <= 12; i++ {
+		got, ok := idx.Get(uint64(i))
+		require.True(t, ok)
+		assert.Equal(t, positions[uint64(i)], got)
+	}
+	assert.Equal(t, int64(3), idx.Len())
+}
+
 func TestSegment_SequentialWrites(t *testing.T) {
 	tmpDir := t.TempDir()
 

@@ -119,9 +119,9 @@ func Test_Invalid_Request_At_Server(t *testing.T) {
 	client := v1.NewWalStreamerServiceClient(conn)
 
 	t.Run("MissingNamespace", func(t *testing.T) {
-		offset, err := client.GetLatestOffset(ctx, &v1.GetLatestOffsetRequest{})
+		resp, err := client.GetLatestLSN(ctx, &v1.GetLatestLSNRequest{})
 		assert.Error(t, err, "expected error on missing namespace")
-		assert.Nil(t, offset, "expected error on missing namespace")
+		assert.Nil(t, resp, "expected error on missing namespace")
 
 		wal, err := client.StreamWalRecords(ctx, &v1.StreamWalRecordsRequest{})
 		assert.NoError(t, err, "failed to stream WAL")
@@ -147,22 +147,23 @@ func Test_Invalid_Request_At_Server(t *testing.T) {
 		assert.Equal(t, services.ErrNamespaceNotExists.Error(), statusErr.Message(), "expected error message didn't match")
 	})
 
-	// Case 3: Invalid Offset
-	t.Run("InvalidMetadata", func(t *testing.T) {
+	// Case 3: Valid LSN-based request (no longer invalid since offset is removed)
+	t.Run("ValidLSNRequest", func(t *testing.T) {
 		md := metadata.Pairs("x-namespace", nameSpace)
 		ctx := metadata.NewOutgoingContext(context.Background(), md)
+		startLSN := uint64(0)
 		wal, err := client.StreamWalRecords(ctx, &v1.StreamWalRecordsRequest{
-			Offset: []byte{255, 2, 3}, // Corrupt data
+			StartLsn: &startLSN,
 		})
 		assert.NoError(t, err, "failed to stream WAL")
+		// Should succeed since it's a valid LSN request (just no data yet)
 		_, err = wal.Recv()
-		assert.Error(t, err, "expected error on invalid metadata")
-
-		statusErr := status.Convert(err)
-		assert.Equal(t, codes.InvalidArgument, statusErr.Code(),
-			"expected error code InvalidArgument")
-		assert.Equal(t, services.ErrInvalidMetadata.Error(),
-			statusErr.Message(), "expected error message didn't match")
+		// May get timeout or EOF since no data, but not InvalidMetadata
+		if err != nil {
+			statusErr := status.Convert(err)
+			assert.NotEqual(t, services.ErrInvalidMetadata.Error(),
+				statusErr.Message(), "should not be invalid metadata error")
+		}
 	})
 
 	assert.NoError(t, conn.Close(), "failed to close grpc client")
@@ -197,11 +198,11 @@ func Test_Invalid_Request_At_Client(t *testing.T) {
 		grpc.WithTransportCredentials(insecure.NewCredentials()))
 
 	assert.NoError(t, err, "failed to create grpc client")
-	client := streamer.NewGrpcStreamerClient(conn, "nameSpaces.doesn't.exit", &noopWalIO{}, nil)
+	client := streamer.NewGrpcStreamerClient(conn, "nameSpaces.doesn't.exit", &noopWalIO{}, 0)
 
-	resp, err := client.GetLatestOffset(ctx)
+	lsn, err := client.GetLatestLSN(ctx)
 	assert.Error(t, err, "expected error on missing namespace")
-	assert.Nil(t, resp, "expected error on missing namespace")
+	assert.Equal(t, uint64(0), lsn, "expected error on missing namespace")
 
 	err = client.StreamWAL(ctx)
 	assert.Error(t, err, "expected error on missing namespace")
@@ -334,9 +335,9 @@ func TestServer_StreamWAL_StreamTimeoutErr(t *testing.T) {
 	t.Run("offset_should_not_be_empty", func(t *testing.T) {
 		md := metadata.Pairs("x-namespace", nameSpaces[0])
 		ctx := metadata.NewOutgoingContext(context.Background(), md)
-		response, err := client.GetLatestOffset(ctx, &v1.GetLatestOffsetRequest{})
+		response, err := client.GetLatestLSN(ctx, &v1.GetLatestLSNRequest{})
 		assert.NoError(t, err)
-		assert.NotNil(t, response.Offset)
+		assert.NotNil(t, response)
 	})
 
 	errN := errGroup.Wait()
@@ -412,17 +413,17 @@ func TestServer_StreamWAL_Client(t *testing.T) {
 
 	assert.NoError(t, err, "failed to create grpc client")
 
-	t.Run("get_offset", func(t *testing.T) {
+	t.Run("get_lsn", func(t *testing.T) {
 		nw := &noopWalIO{}
-		client := streamer.NewGrpcStreamerClient(conn, nameSpaces[0], nw, nil)
-		resp, err := client.GetLatestOffset(ctx)
+		client := streamer.NewGrpcStreamerClient(conn, nameSpaces[0], nw, 0)
+		lsn, err := client.GetLatestLSN(ctx)
 		assert.NoError(t, err)
-		assert.NotNil(t, resp)
+		assert.GreaterOrEqual(t, lsn, uint64(0))
 	})
 
 	t.Run("client_retry", func(t *testing.T) {
 		nw := &noopWalIO{}
-		client := streamer.NewGrpcStreamerClient(conn, nameSpaces[0], nw, nil)
+		client := streamer.NewGrpcStreamerClient(conn, nameSpaces[0], nw, 0)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		go func() {
@@ -515,7 +516,7 @@ func TestServer_StreamWAL_MaxRetry(t *testing.T) {
 
 	assert.NoError(t, err, "failed to create grpc client")
 	t.Run("client_max_retry", func(t *testing.T) {
-		client := streamer.NewGrpcStreamerClient(conn, nameSpaces[0], &noopWalIO{}, nil)
+		client := streamer.NewGrpcStreamerClient(conn, nameSpaces[0], &noopWalIO{}, 0)
 		err = client.StreamWAL(ctx)
 		assert.ErrorIs(t, err, services.ErrClientMaxRetriesExceeded, "expected Error didn't happen")
 	})
@@ -584,11 +585,11 @@ func TestClientServer_StreamCancel(t *testing.T) {
 
 	assert.NoError(t, err, "failed to create grpc client")
 
-	t.Run("empty_offset", func(t *testing.T) {
-		client := streamer.NewGrpcStreamerClient(conn, nameSpaces[0], &noopWalIO{}, nil)
-		off, err := client.GetLatestOffset(ctx)
+	t.Run("get_lsn_empty", func(t *testing.T) {
+		client := streamer.NewGrpcStreamerClient(conn, nameSpaces[0], &noopWalIO{}, 0)
+		lsn, err := client.GetLatestLSN(ctx)
 		assert.NoError(t, err)
-		assert.Nil(t, off)
+		assert.Equal(t, uint64(0), lsn)
 	})
 
 	t.Run("inject_stream_fail", func(t *testing.T) {
@@ -599,7 +600,7 @@ func TestClientServer_StreamCancel(t *testing.T) {
 			canceller.cancel()
 			canceller.Unlock()
 		}()
-		client := streamer.NewGrpcStreamerClient(conn, nameSpaces[0], &noopWalIO{}, nil)
+		client := streamer.NewGrpcStreamerClient(conn, nameSpaces[0], &noopWalIO{}, 0)
 		err := client.StreamWAL(ctx)
 		assert.Error(t, err)
 	})

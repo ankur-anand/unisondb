@@ -1089,3 +1089,257 @@ func TestEngineBackupBtree(t *testing.T) {
 	_, err = engine.BackupBtree("/tmp/not-allowed.snapshot")
 	assert.Error(t, err)
 }
+
+func TestEngine_NewReaderFromLSN(t *testing.T) {
+	t.Run("lsn_zero_no_tail_returns_reader_from_beginning", func(t *testing.T) {
+		baseDir := t.TempDir()
+
+		engine, err := dbkernel.NewStorageEngine(baseDir, "test_lsn_reader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.Close(context.Background())
+		})
+
+		for i := 0; i < 5; i++ {
+			require.NoError(t, engine.PutKV([]byte(fmt.Sprintf("key%d", i)), []byte(fmt.Sprintf("value%d", i))))
+		}
+
+		reader, err := engine.NewReaderFromLSN(0, false)
+		require.NoError(t, err)
+		require.NotNil(t, reader)
+		defer reader.Close()
+
+		walEncoded, _, err := reader.Next()
+		require.NoError(t, err)
+		fb := logrecord.GetRootAsLogRecord(walEncoded, 0)
+		assert.Equal(t, uint64(1), fb.Lsn(), "should start reading from LSN 1")
+	})
+
+	t.Run("lsn_zero_with_tail_returns_tail_reader", func(t *testing.T) {
+		baseDir := t.TempDir()
+
+		engine, err := dbkernel.NewStorageEngine(baseDir, "test_lsn_reader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.Close(context.Background())
+		})
+
+		for i := 0; i < 3; i++ {
+			require.NoError(t, engine.PutKV([]byte(fmt.Sprintf("key%d", i)), []byte(fmt.Sprintf("value%d", i))))
+		}
+
+		reader, err := engine.NewReaderFromLSN(0, true)
+		require.NoError(t, err)
+		require.NotNil(t, reader)
+		defer reader.Close()
+
+		for i := 0; i < 3; i++ {
+			_, _, err := reader.Next()
+			require.NoError(t, err)
+		}
+
+		_, _, err = reader.Next()
+		assert.ErrorIs(t, err, walfs.ErrNoNewData, "tail reader should return ErrNoNewData when no new data")
+	})
+
+	t.Run("valid_lsn_returns_reader_at_position", func(t *testing.T) {
+		baseDir := t.TempDir()
+
+		engine, err := dbkernel.NewStorageEngine(baseDir, "test_lsn_reader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.Close(context.Background())
+		})
+
+		for i := 0; i < 10; i++ {
+			require.NoError(t, engine.PutKV([]byte(fmt.Sprintf("key%d", i)), []byte(fmt.Sprintf("value%d", i))))
+		}
+
+		reader, err := engine.NewReaderFromLSN(5, false)
+		require.NoError(t, err)
+		require.NotNil(t, reader)
+		defer reader.Close()
+
+		walEncoded, _, err := reader.Next()
+		require.NoError(t, err)
+		fb := logrecord.GetRootAsLogRecord(walEncoded, 0)
+		assert.Equal(t, uint64(5), fb.Lsn(), "should start reading from LSN 5")
+
+		walEncoded, _, err = reader.Next()
+		require.NoError(t, err)
+		fb = logrecord.GetRootAsLogRecord(walEncoded, 0)
+		assert.Equal(t, uint64(6), fb.Lsn(), "next should be LSN 6")
+	})
+
+	t.Run("valid_lsn_with_tail_returns_tail_reader", func(t *testing.T) {
+		baseDir := t.TempDir()
+
+		engine, err := dbkernel.NewStorageEngine(baseDir, "test_lsn_reader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.Close(context.Background())
+		})
+
+		for i := 0; i < 5; i++ {
+			require.NoError(t, engine.PutKV([]byte(fmt.Sprintf("key%d", i)), []byte(fmt.Sprintf("value%d", i))))
+		}
+
+		reader, err := engine.NewReaderFromLSN(3, true)
+		require.NoError(t, err)
+		require.NotNil(t, reader)
+		defer reader.Close()
+
+		walEncoded, _, err := reader.Next()
+		require.NoError(t, err)
+		fb := logrecord.GetRootAsLogRecord(walEncoded, 0)
+		assert.Equal(t, uint64(3), fb.Lsn(), "should start reading from LSN 3")
+
+		for i := 0; i < 2; i++ {
+			_, _, err = reader.Next()
+			require.NoError(t, err)
+		}
+
+		_, _, err = reader.Next()
+		assert.ErrorIs(t, err, walfs.ErrNoNewData, "tail reader should return ErrNoNewData")
+	})
+
+	t.Run("invalid_lsn_returns_error", func(t *testing.T) {
+		baseDir := t.TempDir()
+
+		engine, err := dbkernel.NewStorageEngine(baseDir, "test_lsn_reader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.Close(context.Background())
+		})
+
+		for i := 0; i < 5; i++ {
+			require.NoError(t, engine.PutKV([]byte(fmt.Sprintf("key%d", i)), []byte(fmt.Sprintf("value%d", i))))
+		}
+
+		_, err = engine.NewReaderFromLSN(100, false)
+		assert.Error(t, err, "should error for non-existent LSN")
+		assert.Contains(t, err.Error(), "LSN 100 not found")
+
+		_, err = engine.NewReaderFromLSN(100, true)
+		assert.Error(t, err, "should error for non-existent LSN with tail")
+	})
+
+	t.Run("read_all_from_specific_lsn", func(t *testing.T) {
+		baseDir := t.TempDir()
+
+		engine, err := dbkernel.NewStorageEngine(baseDir, "test_lsn_reader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.Close(context.Background())
+		})
+
+		expectedKeys := make(map[string]string)
+		for i := 0; i < 20; i++ {
+			key := fmt.Sprintf("key%d", i)
+			value := fmt.Sprintf("value%d", i)
+			expectedKeys[key] = value
+			require.NoError(t, engine.PutKV([]byte(key), []byte(value)))
+		}
+
+		reader, err := engine.NewReaderFromLSN(10, false)
+		require.NoError(t, err)
+		defer reader.Close()
+
+		var readLSNs []uint64
+		for {
+			walEncoded, _, err := reader.Next()
+			if err == io.EOF {
+				break
+			}
+			require.NoError(t, err)
+			fb := logrecord.GetRootAsLogRecord(walEncoded, 0)
+			readLSNs = append(readLSNs, fb.Lsn())
+		}
+
+		assert.Len(t, readLSNs, 11, "should read 11 records from LSN 10 to 20")
+		assert.Equal(t, uint64(10), readLSNs[0], "first LSN should be 10")
+		assert.Equal(t, uint64(20), readLSNs[len(readLSNs)-1], "last LSN should be 20")
+
+		for i, lsn := range readLSNs {
+			assert.Equal(t, uint64(10+i), lsn, "LSNs should be consecutive")
+		}
+	})
+
+	t.Run("first_lsn_reads_from_beginning", func(t *testing.T) {
+		baseDir := t.TempDir()
+
+		engine, err := dbkernel.NewStorageEngine(baseDir, "test_lsn_reader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.Close(context.Background())
+		})
+
+		for i := 0; i < 5; i++ {
+			require.NoError(t, engine.PutKV([]byte(fmt.Sprintf("key%d", i)), []byte(fmt.Sprintf("value%d", i))))
+		}
+
+		reader, err := engine.NewReaderFromLSN(1, false)
+		require.NoError(t, err)
+		defer reader.Close()
+
+		walEncoded, _, err := reader.Next()
+		require.NoError(t, err)
+		fb := logrecord.GetRootAsLogRecord(walEncoded, 0)
+		assert.Equal(t, uint64(1), fb.Lsn(), "should start from LSN 1")
+	})
+
+	t.Run("last_lsn_reads_single_record", func(t *testing.T) {
+		baseDir := t.TempDir()
+
+		engine, err := dbkernel.NewStorageEngine(baseDir, "test_lsn_reader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.Close(context.Background())
+		})
+
+		for i := 0; i < 5; i++ {
+			require.NoError(t, engine.PutKV([]byte(fmt.Sprintf("key%d", i)), []byte(fmt.Sprintf("value%d", i))))
+		}
+
+		reader, err := engine.NewReaderFromLSN(5, false)
+		require.NoError(t, err)
+		defer reader.Close()
+
+		walEncoded, _, err := reader.Next()
+		require.NoError(t, err)
+		fb := logrecord.GetRootAsLogRecord(walEncoded, 0)
+		assert.Equal(t, uint64(5), fb.Lsn())
+		_, _, err = reader.Next()
+		assert.ErrorIs(t, err, io.EOF)
+	})
+
+	t.Run("empty_wal_lsn_zero", func(t *testing.T) {
+		baseDir := t.TempDir()
+
+		engine, err := dbkernel.NewStorageEngine(baseDir, "test_lsn_reader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.Close(context.Background())
+		})
+
+		reader, err := engine.NewReaderFromLSN(0, false)
+		require.NoError(t, err)
+		defer reader.Close()
+
+		_, _, err = reader.Next()
+		assert.ErrorIs(t, err, io.EOF)
+	})
+
+	t.Run("empty_wal_non_zero_lsn_errors", func(t *testing.T) {
+		baseDir := t.TempDir()
+
+		engine, err := dbkernel.NewStorageEngine(baseDir, "test_lsn_reader", dbkernel.NewDefaultEngineConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			_ = engine.Close(context.Background())
+		})
+
+		_, err = engine.NewReaderFromLSN(1, false)
+		assert.Error(t, err, "should error for non-existent LSN in empty WAL")
+	})
+}

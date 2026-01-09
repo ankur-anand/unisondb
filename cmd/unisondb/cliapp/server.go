@@ -325,6 +325,11 @@ func (ms *Server) SetupStorage(ctx context.Context) error {
 			engineConfig.ReadOnly = true
 		}
 
+		// Enable Raft mode WAL options when Raft is enabled in config
+		if ms.cfg.RaftConfig.Enabled {
+			engineConfig.WalConfig.RaftMode = true
+		}
+
 		if ms.notifiers != nil {
 			if zmqNotifier, exists := ms.notifiers[namespace]; exists {
 				engineConfig.ChangeNotifier = zmqNotifier
@@ -376,7 +381,7 @@ func buildNamespaceGrpcClients(cfg config.Config) (map[string]*grpc.ClientConn, 
 	return namespaceToConn, nil
 }
 
-func buildNamespaceSegmentLagMap(cfg *config.Config) (map[string]int, error) {
+func buildNamespaceLSNLagMap(cfg *config.Config) (map[string]int, error) {
 	nsLagMap := make(map[string]int)
 
 	for name, relay := range cfg.RelayConfigs {
@@ -384,7 +389,7 @@ func buildNamespaceSegmentLagMap(cfg *config.Config) (map[string]int, error) {
 			if _, exists := nsLagMap[ns]; exists {
 				return nil, fmt.Errorf("duplicate namespace '%s' found in relay '%s'", ns, name)
 			}
-			nsLagMap[ns] = relay.SegmentLagThreshold
+			nsLagMap[ns] = relay.LSNLagThreshold
 		}
 	}
 	return nsLagMap, nil

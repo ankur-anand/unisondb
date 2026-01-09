@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
@@ -41,16 +42,13 @@ type raftState struct {
 
 	// snapshotIndexHolder communicates flushedIndex to FSMSnapshotStore.
 	// It's Set by Snapshot(), and read by FSMSnapshotStore.Create().
-	snapshotIndexHolder *FlushedIndexHolder
+	snapshotIndexHolder     *FlushedIndexHolder
+	snapshotIndexHolderOnce sync.Once
 
 	// walCommitCallback is called when a committed entry is applied to update
 	// the WAL's commit boundary. This enables ISR-style replication where
 	// followers stream from the WAL and only see committed entries.
 	walCommitCallback WALCommitCallback
-
-	// raftWalIO wraps the Raft log store's WAL for reading.
-	// In raft mode, readers use this WalIO with RaftWALDecoder.
-	raftWalIO *wal.WalIO
 }
 
 // SetPositionLookup sets the function used to look up WAL positions from Raft log indices.
@@ -70,12 +68,6 @@ func (e *Engine) SetWALCommitCallback(callback WALCommitCallback) {
 	e.raftState.walCommitCallback = callback
 }
 
-// SetRaftWAL sets the Raft log store's underlying WAL.
-// In raft mode, engine readers will use this WAL with RaftWALDecoder.
-func (e *Engine) SetRaftWAL(w *walfs.WALog) {
-	e.raftState.raftWalIO = wal.WrapWAL(w, e.namespace)
-}
-
 // Apply implements raft.FSM interface.
 // It applies a committed Raft log entry to the Engine's state.
 // In Raft mode, this is the only way data enters the Engine.
@@ -89,7 +81,9 @@ func (e *Engine) SetRaftWAL(w *walfs.WALog) {
 //  4. Persist() writes B-tree snapshot (contains data up to 100)
 //  5. On restore, Raft replays from 81, but B-tree already has 81-100
 func (e *Engine) Apply(log *raft.Log) interface{} {
-	if log.Type != raft.LogCommand {
+	// Only process command logs (application data)
+	// Skip configuration, noop, and other internal Raft log types
+	if log.Type != raft.LogCommand || len(log.Data) == 0 {
 		return nil
 	}
 
@@ -136,6 +130,15 @@ func (e *Engine) Apply(log *raft.Log) interface{} {
 
 	e.writeSeenCounter.Add(1)
 	return nil
+}
+
+// ApplyBatch implements raft.BatchingFSM.
+func (e *Engine) ApplyBatch(logs []*raft.Log) []interface{} {
+	results := make([]interface{}, len(logs))
+	for i, log := range logs {
+		results[i] = e.Apply(log)
+	}
+	return results
 }
 
 // Snapshot implements raft.FSM interface.
@@ -244,21 +247,20 @@ func (e *Engine) SetRaftMode(enabled bool) {
 	e.raftState.raftMode = enabled
 }
 
-// SnapshotIndexHolder returns the FlushedIndexHolder used to communicate
-// the flushed index to FSMSnapshotStore. This creates the holder if it doesn't exist.
-//
-// Usage: When setting up Raft, wrap your SnapshotStore with FSMSnapshotStore:
-//
-//	holder := engine.SnapshotIndexHolder()
-//	snapshotStore := dbkernel.NewFSMSnapshotStore(fileSnapshotStore, holder)
-//	raftConfig.SnapshotStore = snapshotStore
-//
+// WAL returns the underlying walfs.WALog for this engine.
+// In Raft mode, this WAL is shared with the Raft log store.
+// The WAL must be created with RaftMode=true in the config for proper Raft operation.
+func (e *Engine) WAL() *walfs.WALog {
+	return e.walIO.WAL()
+}
+
+// SnapshotIndexHolder returns the FlushedIndexHolder used for communicating the flushed index to FSMSnapshotStore.
 // This ensures that Raft's snapshot metadata uses the flushed index (actual B-tree state)
 // instead of the applied index (which may include unflushed memtable data).
 func (e *Engine) SnapshotIndexHolder() *FlushedIndexHolder {
-	if e.raftState.snapshotIndexHolder == nil {
+	e.raftState.snapshotIndexHolderOnce.Do(func() {
 		e.raftState.snapshotIndexHolder = &FlushedIndexHolder{}
-	}
+	})
 	return e.raftState.snapshotIndexHolder
 }
 
@@ -271,9 +273,6 @@ type engineSnapshot struct {
 
 // Persist writes the snapshot to the given sink.
 func (s *engineSnapshot) Persist(sink raft.SnapshotSink) error {
-	s.engine.mu.RLock()
-	defer s.engine.mu.RUnlock()
-
 	if err := s.engine.dataStore.Snapshot(sink); err != nil {
 		_ = sink.Cancel()
 		return fmt.Errorf("snapshot btree: %w", err)

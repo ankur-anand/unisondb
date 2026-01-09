@@ -20,7 +20,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	WalStreamerService_StreamWalRecords_FullMethodName = "/unisondb.streamer.v1.WalStreamerService/StreamWalRecords"
-	WalStreamerService_GetLatestOffset_FullMethodName  = "/unisondb.streamer.v1.WalStreamerService/GetLatestOffset"
+	WalStreamerService_GetLatestLSN_FullMethodName     = "/unisondb.streamer.v1.WalStreamerService/GetLatestLSN"
 )
 
 // WalStreamerServiceClient is the client API for WalStreamerService service.
@@ -29,9 +29,8 @@ const (
 //
 // WalStreamerService streams Wal Records.
 type WalStreamerServiceClient interface {
-	// / Stream WAL Logs
 	StreamWalRecords(ctx context.Context, in *StreamWalRecordsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[StreamWalRecordsResponse], error)
-	GetLatestOffset(ctx context.Context, in *GetLatestOffsetRequest, opts ...grpc.CallOption) (*GetLatestOffsetResponse, error)
+	GetLatestLSN(ctx context.Context, in *GetLatestLSNRequest, opts ...grpc.CallOption) (*GetLatestLSNResponse, error)
 }
 
 type walStreamerServiceClient struct {
@@ -61,10 +60,10 @@ func (c *walStreamerServiceClient) StreamWalRecords(ctx context.Context, in *Str
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WalStreamerService_StreamWalRecordsClient = grpc.ServerStreamingClient[StreamWalRecordsResponse]
 
-func (c *walStreamerServiceClient) GetLatestOffset(ctx context.Context, in *GetLatestOffsetRequest, opts ...grpc.CallOption) (*GetLatestOffsetResponse, error) {
+func (c *walStreamerServiceClient) GetLatestLSN(ctx context.Context, in *GetLatestLSNRequest, opts ...grpc.CallOption) (*GetLatestLSNResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetLatestOffsetResponse)
-	err := c.cc.Invoke(ctx, WalStreamerService_GetLatestOffset_FullMethodName, in, out, cOpts...)
+	out := new(GetLatestLSNResponse)
+	err := c.cc.Invoke(ctx, WalStreamerService_GetLatestLSN_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -77,9 +76,8 @@ func (c *walStreamerServiceClient) GetLatestOffset(ctx context.Context, in *GetL
 //
 // WalStreamerService streams Wal Records.
 type WalStreamerServiceServer interface {
-	// / Stream WAL Logs
 	StreamWalRecords(*StreamWalRecordsRequest, grpc.ServerStreamingServer[StreamWalRecordsResponse]) error
-	GetLatestOffset(context.Context, *GetLatestOffsetRequest) (*GetLatestOffsetResponse, error)
+	GetLatestLSN(context.Context, *GetLatestLSNRequest) (*GetLatestLSNResponse, error)
 	mustEmbedUnimplementedWalStreamerServiceServer()
 }
 
@@ -93,8 +91,8 @@ type UnimplementedWalStreamerServiceServer struct{}
 func (UnimplementedWalStreamerServiceServer) StreamWalRecords(*StreamWalRecordsRequest, grpc.ServerStreamingServer[StreamWalRecordsResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method StreamWalRecords not implemented")
 }
-func (UnimplementedWalStreamerServiceServer) GetLatestOffset(context.Context, *GetLatestOffsetRequest) (*GetLatestOffsetResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method GetLatestOffset not implemented")
+func (UnimplementedWalStreamerServiceServer) GetLatestLSN(context.Context, *GetLatestLSNRequest) (*GetLatestLSNResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetLatestLSN not implemented")
 }
 func (UnimplementedWalStreamerServiceServer) mustEmbedUnimplementedWalStreamerServiceServer() {}
 func (UnimplementedWalStreamerServiceServer) testEmbeddedByValue()                            {}
@@ -128,20 +126,20 @@ func _WalStreamerService_StreamWalRecords_Handler(srv interface{}, stream grpc.S
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type WalStreamerService_StreamWalRecordsServer = grpc.ServerStreamingServer[StreamWalRecordsResponse]
 
-func _WalStreamerService_GetLatestOffset_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetLatestOffsetRequest)
+func _WalStreamerService_GetLatestLSN_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetLatestLSNRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(WalStreamerServiceServer).GetLatestOffset(ctx, in)
+		return srv.(WalStreamerServiceServer).GetLatestLSN(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: WalStreamerService_GetLatestOffset_FullMethodName,
+		FullMethod: WalStreamerService_GetLatestLSN_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(WalStreamerServiceServer).GetLatestOffset(ctx, req.(*GetLatestOffsetRequest))
+		return srv.(WalStreamerServiceServer).GetLatestLSN(ctx, req.(*GetLatestLSNRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -154,8 +152,8 @@ var WalStreamerService_ServiceDesc = grpc.ServiceDesc{
 	HandlerType: (*WalStreamerServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
-			MethodName: "GetLatestOffset",
-			Handler:    _WalStreamerService_GetLatestOffset_Handler,
+			MethodName: "GetLatestLSN",
+			Handler:    _WalStreamerService_GetLatestLSN_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

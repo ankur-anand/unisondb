@@ -2219,143 +2219,6 @@ func TestSegmentIndexRebuildWithoutFile(t *testing.T) {
 	assert.Greater(t, info.Size(), int64(0))
 }
 
-func TestSegmentIndexAPIExposesEntriesForAllSegments(t *testing.T) {
-	dir := t.TempDir()
-
-	wal, err := walfs.NewWALog(dir, ".wal")
-	require.NoError(t, err)
-
-	payloads := [][]byte{[]byte("first"), []byte("second")}
-	for _, data := range payloads {
-		_, err := wal.Write(data, 0)
-		require.NoError(t, err)
-	}
-
-	index, err := wal.SegmentIndex(1)
-	require.NoError(t, err)
-	require.Len(t, index, len(payloads))
-	assert.Equal(t, uint32(len(payloads[0])), index[0].Length)
-	assert.Equal(t, walfs.SegmentID(1), index[0].SegmentID)
-	assert.Greater(t, index[1].Offset, index[0].Offset)
-
-	require.NoError(t, wal.RotateSegment())
-
-	_, err = wal.Write([]byte("third"), 0)
-	require.NoError(t, err)
-
-	indexNew, err := wal.SegmentIndex(2)
-	require.NoError(t, err)
-	require.Len(t, indexNew, 1)
-	assert.Equal(t, uint32(len("third")), indexNew[0].Length)
-	assert.Equal(t, walfs.SegmentID(2), indexNew[0].SegmentID)
-
-	require.NoError(t, wal.Close())
-}
-
-func TestSegmentIndexEntriesAllowReadingFromOffsets(t *testing.T) {
-	dir := t.TempDir()
-
-	wal, err := walfs.NewWALog(dir, ".wal")
-	require.NoError(t, err)
-
-	payloads := [][]byte{[]byte("alpha"), []byte("beta")}
-	for _, data := range payloads {
-		_, err := wal.Write(data, 0)
-		require.NoError(t, err)
-	}
-
-	index, err := wal.SegmentIndex(1)
-	require.NoError(t, err)
-	require.Len(t, index, len(payloads))
-
-	seg := wal.Segments()[1]
-	for i, entry := range index {
-		buf, _, err := seg.Read(entry.Offset)
-		require.NoError(t, err)
-		assert.Equal(t, payloads[i], append([]byte(nil), buf...))
-	}
-
-	require.NoError(t, wal.RotateSegment())
-
-	_, err = wal.Write([]byte("gamma"), 0)
-	require.NoError(t, err)
-
-	index2, err := wal.SegmentIndex(2)
-	require.NoError(t, err)
-	require.Len(t, index2, 1)
-	seg2 := wal.Segments()[2]
-	buf, _, err := seg2.Read(index2[0].Offset)
-	require.NoError(t, err)
-	assert.Equal(t, []byte("gamma"), append([]byte(nil), buf...))
-
-	require.NoError(t, wal.Close())
-}
-
-func TestSegmentIndexEntriesMatchWriteOrder(t *testing.T) {
-	dir := t.TempDir()
-
-	wal, err := walfs.NewWALog(dir, ".wal")
-	require.NoError(t, err)
-
-	var positions []walfs.RecordPosition
-	for i := 0; i < 5; i++ {
-		pos, err := wal.Write([]byte(fmt.Sprintf("value-%d", i)), 0)
-		require.NoError(t, err)
-		positions = append(positions, pos)
-	}
-
-	index, err := wal.SegmentIndex(1)
-	require.NoError(t, err)
-	require.Len(t, index, len(positions))
-
-	for i, entry := range index {
-		assert.Equal(t, positions[i].SegmentID, entry.SegmentID)
-		assert.Equal(t, positions[i].Offset, entry.Offset)
-	}
-
-	require.NoError(t, wal.Close())
-}
-
-func TestSegmentIndexConcurrentAccess(t *testing.T) {
-	dir := t.TempDir()
-
-	wal, err := walfs.NewWALog(dir, ".wal")
-	require.NoError(t, err)
-
-	done := make(chan struct{})
-	var wg sync.WaitGroup
-
-	reader := func(segID walfs.SegmentID) {
-		defer wg.Done()
-		for {
-			select {
-			case <-done:
-				return
-			default:
-				idx, err := wal.SegmentIndex(segID)
-				if err == nil && len(idx) > 0 {
-					require.Equal(t, segID, idx[len(idx)-1].SegmentID)
-				}
-				time.Sleep(100 * time.Microsecond)
-			}
-		}
-	}
-
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go reader(1)
-	}
-
-	for i := 0; i < 200; i++ {
-		_, err := wal.Write([]byte(fmt.Sprintf("entry-%d", i)), 0)
-		require.NoError(t, err)
-	}
-
-	close(done)
-	wg.Wait()
-	require.NoError(t, wal.Close())
-}
-
 func TestSegmentCleanupRemovesDataAndIndex(t *testing.T) {
 	dir := t.TempDir()
 
@@ -2385,56 +2248,65 @@ func TestSegmentCleanupRemovesDataAndIndex(t *testing.T) {
 	require.NoError(t, wal.Close())
 }
 
-func TestSegmentForIndexReturnsCorrectEntry(t *testing.T) {
+func TestWALogGetLogIndexShared(t *testing.T) {
 	dir := t.TempDir()
 
 	wal, err := walfs.NewWALog(dir, ".wal")
 	require.NoError(t, err)
 	defer wal.Close()
 
-	payloads := [][]byte{[]byte("idx-1"), []byte("idx-2"), []byte("idx-3")}
-	for i, data := range payloads[:2] {
-		_, err := wal.Write(data, uint64(i+1))
-		require.NoError(t, err)
-	}
-	require.NoError(t, wal.RotateSegment())
+	idx := wal.LogIndex()
+	require.NotNil(t, idx)
+	assert.Same(t, idx, wal.LogIndex())
 
-	_, err = wal.Write(payloads[2], 3)
+	pos, err := wal.Write([]byte("pos-1"), 1)
 	require.NoError(t, err)
 
-	tests := []struct {
-		index   uint64
-		payload []byte
-	}{
-		{1, payloads[0]},
-		{2, payloads[1]},
-		{3, payloads[2]},
-	}
-
-	for _, tt := range tests {
-		segID, slot, err := wal.SegmentForIndex(tt.index)
-		require.NoError(t, err)
-		idxEntries, err := wal.SegmentIndex(segID)
-		require.NoError(t, err)
-		require.Greater(t, len(idxEntries), slot)
-
-		entry := idxEntries[slot]
-		seg := wal.Segments()[segID]
-		data, _, err := seg.Read(entry.Offset)
-		require.NoError(t, err)
-		assert.Equal(t, tt.payload, append([]byte(nil), data...))
-	}
-
-	segID, slot, err := wal.SegmentForIndex(2)
-	require.NoError(t, err)
-	idx := wal.Segments()[segID]
-	offset := idx.IndexEntries()[slot].Offset
-	record, _, err := idx.Read(offset)
-	require.NoError(t, err)
-	assert.Equal(t, payloads[1], append([]byte(nil), record...))
+	got, ok := idx.Get(1)
+	require.True(t, ok)
+	assert.Equal(t, pos, got)
 }
 
-func TestSegmentForIndexConcurrentAccess(t *testing.T) {
+func TestPositionForIndexReturnsRecordPosition(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal")
+	require.NoError(t, err)
+	defer wal.Close()
+
+	pos1, err := wal.Write([]byte("pos-1"), 1)
+	require.NoError(t, err)
+
+	require.NoError(t, wal.RotateSegment())
+
+	pos2, err := wal.Write([]byte("pos-2"), 2)
+	require.NoError(t, err)
+
+	got, err := wal.PositionForIndex(1)
+	require.NoError(t, err)
+	assert.Equal(t, pos1, got)
+
+	got, err = wal.PositionForIndex(2)
+	require.NoError(t, err)
+	assert.Equal(t, pos2, got)
+}
+
+func TestPositionForIndexNotFound(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal")
+	require.NoError(t, err)
+	defer wal.Close()
+
+	_, err = wal.Write([]byte("pos-1"), 1)
+	require.NoError(t, err)
+
+	pos, err := wal.PositionForIndex(2)
+	assert.Error(t, err)
+	assert.Equal(t, walfs.NilRecordPosition, pos)
+}
+
+func TestPositionForIndexConcurrentAccess(t *testing.T) {
 	dir := t.TempDir()
 
 	wal, err := walfs.NewWALog(dir, ".wal")
@@ -2461,7 +2333,7 @@ func TestSegmentForIndexConcurrentAccess(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		time.Sleep(20 * time.Millisecond)
-		_, _, _ = wal.SegmentForIndex(1)
+		_, _ = wal.PositionForIndex(1)
 	}
 
 	close(stop)
@@ -2503,21 +2375,18 @@ func TestWALog_Truncate(t *testing.T) {
 
 	assert.LessOrEqual(t, current.FirstLogIndex(), uint64(55))
 
-	_, _, err = wl.SegmentForIndex(56)
+	_, err = wl.PositionForIndex(56)
 	assert.Error(t, err)
 
-	_, _, err = wl.SegmentForIndex(55)
+	_, err = wl.PositionForIndex(55)
 	assert.NoError(t, err)
 
 	_, err = wl.Write([]byte("new-56"), 56)
 	require.NoError(t, err)
 
-	segID, slot, err := wl.SegmentForIndex(56)
+	pos, err := wl.PositionForIndex(56)
 	require.NoError(t, err)
-	idxEntries, err := wl.SegmentIndex(segID)
-	require.NoError(t, err)
-	entry := idxEntries[slot]
-	data, _, err := wl.Segments()[segID].Read(int64(entry.Offset))
+	data, err := wl.Read(pos)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("new-56"), data)
 }
@@ -2607,7 +2476,7 @@ func TestWALog_Truncate_BeforeEarliestIndex(t *testing.T) {
 	assert.Equal(t, uint64(11), wl.Current().FirstLogIndex())
 	assert.Equal(t, int64(1), wl.Current().GetEntryCount())
 
-	_, _, err = wl.SegmentForIndex(11)
+	_, err = wl.PositionForIndex(11)
 	assert.NoError(t, err)
 }
 
@@ -2681,14 +2550,14 @@ func TestWALog_Truncate_CurrentSegmentShrink(t *testing.T) {
 	deletions := wl.QueuedSegmentsForDeletion()
 	assert.Empty(t, deletions, "Truncating within the current segment should not queue deletions")
 
-	_, _, err = wl.SegmentForIndex(4)
+	_, err = wl.PositionForIndex(4)
 	assert.Error(t, err)
 
 	_, err = wl.Write([]byte("new-4"), 4)
 	require.NoError(t, err)
 	assert.Equal(t, currentID, wl.Current().ID(), "New writes should continue on the same segment")
 
-	_, _, err = wl.SegmentForIndex(4)
+	_, err = wl.PositionForIndex(4)
 	assert.NoError(t, err)
 }
 
@@ -2711,7 +2580,7 @@ func TestWALog_Truncate_SameIndex(t *testing.T) {
 	lastIndex := wl.Current().FirstLogIndex() + uint64(wl.Current().GetEntryCount()) - 1
 	assert.Equal(t, uint64(10), lastIndex)
 
-	_, _, err = wl.SegmentForIndex(10)
+	_, err = wl.PositionForIndex(10)
 	assert.NoError(t, err)
 }
 
@@ -2733,10 +2602,10 @@ func TestWALog_Truncate_ToFirstIndex(t *testing.T) {
 
 	assert.Equal(t, int64(1), wl.Current().GetEntryCount())
 
-	_, _, err = wl.SegmentForIndex(1)
+	_, err = wl.PositionForIndex(1)
 	assert.NoError(t, err)
 
-	_, _, err = wl.SegmentForIndex(2)
+	_, err = wl.PositionForIndex(2)
 	assert.Error(t, err)
 }
 
@@ -2790,10 +2659,10 @@ func TestWALog_Truncate_HeaderIntegrity(t *testing.T) {
 	assert.Equal(t, walfs.SegmentID(1), wl2.Current().ID())
 	assert.Equal(t, int64(5), wl2.Current().GetEntryCount())
 
-	_, _, err = wl2.SegmentForIndex(5)
+	_, err = wl2.PositionForIndex(5)
 	assert.NoError(t, err)
 
-	_, _, err = wl2.SegmentForIndex(6)
+	_, err = wl2.PositionForIndex(6)
 	assert.Error(t, err)
 
 	_, err = wl2.Write([]byte("new-6"), 6)
@@ -2853,7 +2722,7 @@ func TestWALog_Truncate_ReaderBoundary(t *testing.T) {
 	err = wl.Truncate(5)
 	require.NoError(t, err)
 
-	_, _, err = wl.SegmentForIndex(6)
+	_, err = wl.PositionForIndex(6)
 	assert.Error(t, err)
 
 	reader := wl.NewReader()

@@ -66,7 +66,7 @@ func (g *GRPCService) Setup(ctx context.Context, deps *Dependencies) error {
 	for method := range grpcMethods {
 		enabledMethodsLogs[method] = true
 	}
-	enabledMethodsLogs["/unisondb.streamer.v1.WalStreamerService/GetLatestOffset"] = false
+	enabledMethodsLogs["/unisondb.streamer.v1.WalStreamerService/GetLatestLSN"] = false
 
 	g.statsHandler = grpcutils.NewGRPCStatsHandler(grpcMethods)
 	// StreamAgeService need this for stats collection

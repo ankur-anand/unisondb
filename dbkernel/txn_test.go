@@ -515,16 +515,10 @@ func TestTxnAbortReleasesBegin(t *testing.T) {
 func readTxnWalRecordLSN(t *testing.T, walog *walfs.WALog, idx uint64) uint64 {
 	t.Helper()
 
-	segID, slot, err := walog.SegmentForIndex(idx)
+	pos, err := walog.PositionForIndex(idx)
 	require.NoError(t, err)
 
-	indexEntries, err := walog.SegmentIndex(segID)
-	require.NoError(t, err)
-	require.Less(t, slot, len(indexEntries))
-
-	entry := indexEntries[slot]
-	segment := walog.Segments()[segID]
-	data, _, err := segment.Read(entry.Offset)
+	data, err := walog.Read(pos)
 	require.NoError(t, err)
 
 	copyData := append([]byte(nil), data...)

@@ -9,8 +9,8 @@ import (
 	"math/rand/v2"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/services"
+	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"github.com/prometheus/common/helpers/templates"
 	"google.golang.org/grpc"
@@ -35,33 +35,29 @@ type GrpcStreamerClient struct {
 	gcc       *grpc.ClientConn
 	namespace string
 	wIO       WalIO
-	// offset of the record that was last received.
-	offset *dbkernel.Offset
+	// lsn of the record that was last received.
+	lsn uint64
 }
 
-func NewGrpcStreamerClient(gcc *grpc.ClientConn, namespace string, wIO WalIO, offset []byte) *GrpcStreamerClient {
+func NewGrpcStreamerClient(gcc *grpc.ClientConn, namespace string, wIO WalIO, startLSN uint64) *GrpcStreamerClient {
 	return &GrpcStreamerClient{
 		gcc:       gcc,
 		namespace: namespace,
 		wIO:       wIO,
-		offset:    dbkernel.DecodeOffset(offset),
+		lsn:       startLSN,
 	}
 }
 
-// GetLatestOffset returns the latest offset for the provided namespace that upstream has seen.
-func (c *GrpcStreamerClient) GetLatestOffset(ctx context.Context) (*dbkernel.Offset, error) {
+func (c *GrpcStreamerClient) GetLatestLSN(ctx context.Context) (uint64, error) {
 	md := metadata.Pairs("x-namespace", c.namespace)
 	ctx = metadata.NewOutgoingContext(ctx, md)
 
-	resp, err := v1.NewWalStreamerServiceClient(c.gcc).GetLatestOffset(ctx, &v1.GetLatestOffsetRequest{})
+	resp, err := v1.NewWalStreamerServiceClient(c.gcc).GetLatestLSN(ctx, &v1.GetLatestLSNRequest{})
 	if err != nil {
-		return nil, err
+		return 0, err
 	}
 
-	if len(resp.GetOffset()) == 0 {
-		return nil, nil
-	}
-	return dbkernel.DecodeOffset(resp.GetOffset()), nil
+	return resp.GetLsn(), nil
 }
 
 // StreamWAL start the wal Streaming for the namespace from the upstream.
@@ -86,13 +82,10 @@ func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 			return fmt.Errorf("%w [%d]", services.ErrClientMaxRetriesExceeded, maxRetries)
 		}
 
-		var offsetBytes []byte
-		if c.offset != nil {
-			offsetBytes = c.offset.Encode()
+		req := &v1.StreamWalRecordsRequest{
+			StartLsn: &c.lsn,
 		}
-		client, err := v1.NewWalStreamerServiceClient(c.gcc).StreamWalRecords(ctx, &v1.StreamWalRecordsRequest{
-			Offset: offsetBytes,
-		})
+		client, err := v1.NewWalStreamerServiceClient(c.gcc).StreamWalRecords(ctx, req)
 
 		if err != nil {
 			if shouldRetry(err) {
@@ -133,7 +126,7 @@ func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 
 type batchJob struct {
 	records []*v1.WALRecord
-	offset  *dbkernel.Offset
+	lsn     uint64
 }
 
 func (c *GrpcStreamerClient) receiveWALRecords(client v1.WalStreamerService_StreamWalRecordsClient, startTime time.Time) error {
@@ -146,7 +139,7 @@ func (c *GrpcStreamerClient) receiveWALRecords(client v1.WalStreamerService_Stre
 				errChan <- err
 				return
 			}
-			c.offset = job.offset
+			c.lsn = job.lsn
 		}
 		errChan <- nil
 	}()
@@ -184,13 +177,15 @@ func (c *GrpcStreamerClient) receiveWALRecords(client v1.WalStreamerService_Stre
 
 		if len(res.Records) > 0 {
 			lastRecord := res.Records[len(res.Records)-1]
-			offset := &dbkernel.Offset{
-				SegmentID: lastRecord.SegmentId,
-				Offset:    int64(lastRecord.Offset),
+			// Extract LSN from the record bytes
+			decoded := logrecord.GetRootAsLogRecord(lastRecord.Record, 0)
+			job := batchJob{
+				records: res.Records,
+				lsn:     decoded.Lsn(),
 			}
 
 			select {
-			case batchChan <- batchJob{records: res.Records, offset: offset}:
+			case batchChan <- job:
 			case err := <-errChan:
 				close(batchChan)
 				return err

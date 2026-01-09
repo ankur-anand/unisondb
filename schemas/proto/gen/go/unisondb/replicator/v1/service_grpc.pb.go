@@ -19,11 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	KVStoreWriteService_Put_FullMethodName                   = "/kvalchemy.replicator.v1.KVStoreWriteService/Put"
-	KVStoreWriteService_PutStream_FullMethodName             = "/kvalchemy.replicator.v1.KVStoreWriteService/PutStream"
-	KVStoreWriteService_PutStreamChunksForKey_FullMethodName = "/kvalchemy.replicator.v1.KVStoreWriteService/PutStreamChunksForKey"
-	KVStoreWriteService_Delete_FullMethodName                = "/kvalchemy.replicator.v1.KVStoreWriteService/Delete"
-	KVStoreWriteService_DeleteStream_FullMethodName          = "/kvalchemy.replicator.v1.KVStoreWriteService/DeleteStream"
+	KVStoreWriteService_Put_FullMethodName                   = "/unisondb.replicator.v1.KVStoreWriteService/Put"
+	KVStoreWriteService_PutStream_FullMethodName             = "/unisondb.replicator.v1.KVStoreWriteService/PutStream"
+	KVStoreWriteService_PutStreamChunksForKey_FullMethodName = "/unisondb.replicator.v1.KVStoreWriteService/PutStreamChunksForKey"
+	KVStoreWriteService_Delete_FullMethodName                = "/unisondb.replicator.v1.KVStoreWriteService/Delete"
+	KVStoreWriteService_DeleteStream_FullMethodName          = "/unisondb.replicator.v1.KVStoreWriteService/DeleteStream"
 )
 
 // KVStoreWriteServiceClient is the client API for KVStoreWriteService service.
@@ -236,7 +236,7 @@ type KVStoreWriteService_DeleteStreamServer = grpc.ClientStreamingServer[DeleteS
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var KVStoreWriteService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "kvalchemy.replicator.v1.KVStoreWriteService",
+	ServiceName: "unisondb.replicator.v1.KVStoreWriteService",
 	HandlerType: (*KVStoreWriteServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
 		{
@@ -269,7 +269,7 @@ var KVStoreWriteService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	KVStoreReadService_Get_FullMethodName = "/kvalchemy.replicator.v1.KVStoreReadService/Get"
+	KVStoreReadService_Get_FullMethodName = "/unisondb.replicator.v1.KVStoreReadService/Get"
 )
 
 // KVStoreReadServiceClient is the client API for KVStoreReadService service.
@@ -360,7 +360,7 @@ type KVStoreReadService_GetServer = grpc.ServerStreamingServer[GetResponse]
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var KVStoreReadService_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "kvalchemy.replicator.v1.KVStoreReadService",
+	ServiceName: "unisondb.replicator.v1.KVStoreReadService",
 	HandlerType: (*KVStoreReadServiceServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{

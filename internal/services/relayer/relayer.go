@@ -18,24 +18,24 @@ import (
 )
 
 var (
-	ErrSegmentLagThresholdExceeded = errors.New("segment lag threshold exceeded")
+	ErrLSNLagThresholdExceeded = errors.New("LSN lag threshold exceeded")
 	// TODO: Refactor this to return the name should be coming from the Streamer Interface itself.
 	defaultStreamerLabel = "grpc"
 )
 
 var (
-	segmentLagGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	lsnLagGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: promNamespace,
 		Subsystem: promSubsystem,
-		Name:      "wal_segment_lag",
-		Help:      "Difference in segment IDs between upstream and local WAL replica",
+		Name:      "wal_lsn_lag",
+		Help:      "Difference in LSN between upstream and local WAL replica",
 	}, []string{"namespace"})
 
-	segmentLagThresholdGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
+	lsnLagThresholdGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: promNamespace,
 		Subsystem: promSubsystem,
-		Name:      "wal_segment_lag_threshold",
-		Help:      "Configured segment lag threshold for the WAL relayer per namespace",
+		Name:      "wal_lsn_lag_threshold",
+		Help:      "Configured LSN lag threshold for the WAL relayer per namespace",
 	}, []string{"namespace"})
 
 	rateLimiterWaitDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
@@ -62,7 +62,7 @@ var (
 )
 
 type Streamer interface {
-	GetLatestOffset(ctx context.Context) (*dbkernel.Offset, error)
+	GetLatestLSN(ctx context.Context) (uint64, error)
 	StreamWAL(ctx context.Context) error
 }
 
@@ -77,10 +77,7 @@ type walIOHandler struct {
 }
 
 func (w walIOHandler) Write(data *v1.WALRecord) error {
-	return w.replica.ApplyRecord(data.Record, dbkernel.Offset{
-		SegmentID: data.SegmentId,
-		Offset:    int64(data.Offset),
-	})
+	return w.replica.ApplyRecordsLSNOnly([][]byte{data.Record})
 }
 
 func (w walIOHandler) WriteBatch(records []*v1.WALRecord) error {
@@ -89,17 +86,11 @@ func (w walIOHandler) WriteBatch(records []*v1.WALRecord) error {
 	}
 
 	encodedWals := make([][]byte, len(records))
-	offsets := make([]dbkernel.Offset, len(records))
-
 	for i, record := range records {
 		encodedWals[i] = record.Record
-		offsets[i] = dbkernel.Offset{
-			SegmentID: record.SegmentId,
-			Offset:    int64(record.Offset),
-		}
 	}
 
-	return w.replica.ApplyRecords(encodedWals, offsets)
+	return w.replica.ApplyRecordsLSNOnly(encodedWals)
 }
 
 // RateLimitedWalIO wraps WalIO with a token bucket rate limiter.
@@ -159,9 +150,9 @@ type Relayer struct {
 	namespace string
 	engine    *dbkernel.Engine
 	// TODO: refactor, relayer should be independent of this?
-	grpcConn            *grpc.ClientConn
-	client              Streamer
-	segmentLagThreshold int
+	grpcConn        *grpc.ClientConn
+	client          Streamer
+	lsnLagThreshold int
 
 	// protect duplicate start.
 	started        atomic.Bool
@@ -177,7 +168,7 @@ type Relayer struct {
 func NewRelayer(engine *dbkernel.Engine,
 	namespace string,
 	grpcConn *grpc.ClientConn,
-	segmentLagThreshold int,
+	lsnLagThreshold int,
 	log *slog.Logger) *Relayer {
 	handler := dbkernel.NewReplicaWALHandler(engine)
 
@@ -187,26 +178,31 @@ func NewRelayer(engine *dbkernel.Engine,
 		segmentID = int(currentOffset.SegmentID)
 	}
 
-	var currOffset []byte
-	if currentOffset != nil {
-		currOffset = currentOffset.Encode()
-	}
+	currentLSN := engine.OpsReceivedCount()
+
 	walHandler := walIOHandler{replica: handler}
 	client := streamer.NewGrpcStreamerClient(grpcConn, namespace,
 		walHandler,
-		currOffset)
+		currentLSN)
 
-	segmentLagThresholdGauge.WithLabelValues(namespace).Set(float64(segmentLagThreshold))
+	lsnLagThresholdGauge.WithLabelValues(namespace).Set(float64(lsnLagThreshold))
+
+	log.Info("[unisondb.relayer]",
+		slog.String("event_type", "relayer.initialized"),
+		slog.String("namespace", namespace),
+		slog.Uint64("start_lsn", currentLSN),
+	)
+
 	return &Relayer{
-		engine:              engine,
-		namespace:           namespace,
-		grpcConn:            grpcConn,
-		segmentLagThreshold: segmentLagThreshold,
-		logger:              log,
-		startSegmentID:      segmentID,
-		client:              client,
-		startOffset:         currentOffset,
-		walIOHandler:        walHandler,
+		engine:          engine,
+		namespace:       namespace,
+		grpcConn:        grpcConn,
+		lsnLagThreshold: lsnLagThreshold,
+		logger:          log,
+		startSegmentID:  segmentID,
+		client:          client,
+		startOffset:     currentOffset,
+		walIOHandler:    walHandler,
 	}
 }
 
@@ -232,19 +228,14 @@ func (r *Relayer) EnableRateLimitedWalIO(walIO *RateLimitedWalIO) {
 	}
 
 	r.walIOHandler = walIO
-	var currOffset []byte
-	if r.startOffset != nil {
-		currOffset = r.startOffset.Encode()
-	}
-	r.client = streamer.NewGrpcStreamerClient(r.grpcConn, r.namespace, walIO, currOffset)
+	currentLSN := r.engine.OpsReceivedCount()
+	r.client = streamer.NewGrpcStreamerClient(r.grpcConn, r.namespace, walIO, currentLSN)
 	r.logger.Info("[unisondb.relayer]",
 		slog.String("event_type", "relayer.rate_limiter.enabled"),
 		slog.String("namespace", r.namespace),
 	)
 }
 
-// StartRelay starts the WAL replication Sync with the upstream over the provided grpc-connection,
-// for the given namespace.
 func (r *Relayer) StartRelay(ctx context.Context) error {
 	if !r.started.CompareAndSwap(false, true) {
 		return fmt.Errorf("StartRelay already running for namespace %s", r.namespace)
@@ -254,33 +245,19 @@ func (r *Relayer) StartRelay(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	remoteOffset, err := r.client.GetLatestOffset(ctx)
+	remoteLSN, err := r.client.GetLatestLSN(ctx)
 	if err != nil {
 		return err
 	}
 
-	if remoteOffset != nil && int(remoteOffset.SegmentID)-r.startSegmentID > r.segmentLagThreshold {
-		r.logLag(remoteOffset, r.startOffset)
-		return fmt.Errorf("%w %d", ErrSegmentLagThresholdExceeded, r.segmentLagThreshold)
-	}
-	remoteOffset = reAssignIfNil(remoteOffset)
-	localOffset := reAssignIfNil(r.startOffset)
+	localLSN := r.engine.OpsReceivedCount()
 
 	go r.backgroundMonitorOffset(ctx)
-	// start streaming
 	r.logger.Info("[unisondb.relayer]",
 		slog.String("event_type", "relayer.relay.started"),
 		slog.String("namespace", r.namespace),
-		slog.Group("offset",
-			slog.Group("remote",
-				slog.Int("segment_id", int(remoteOffset.SegmentID)),
-				slog.Int("offset", int(remoteOffset.Offset)),
-			),
-			slog.Group("local",
-				slog.Int("segment_id", int(localOffset.SegmentID)),
-				slog.Int("offset", int(localOffset.Offset)),
-			),
-		),
+		slog.Uint64("remote_lsn", remoteLSN),
+		slog.Uint64("local_lsn", localLSN),
 	)
 	return r.client.StreamWAL(ctx)
 }
@@ -302,58 +279,29 @@ func (r *Relayer) backgroundMonitorOffset(ctx context.Context) {
 }
 
 func (r *Relayer) monitor(ctx context.Context) {
-	currentOffset := r.engine.CurrentOffset()
-	remoteOffset, err := r.client.GetLatestOffset(ctx)
+	localLSN := r.engine.OpsReceivedCount()
+	remoteLSN, err := r.client.GetLatestLSN(ctx)
 	if err != nil {
-		r.logger.Error("[unisondb.relayer] error getting latest offset",
+		r.logger.Error("[unisondb.relayer] error getting latest LSN",
 			"event_type", "error",
 			"error", err,
 			"namespace", r.namespace)
 		return
 	}
 
-	segmentID := 0
-	if currentOffset != nil {
-		segmentID = int(currentOffset.SegmentID)
+	lsnLag := int64(remoteLSN) - int64(localLSN)
+	if lsnLag < 0 {
+		lsnLag = 0
 	}
+	lsnLagGauge.WithLabelValues(r.namespace).Set(float64(lsnLag))
 
-	if remoteOffset != nil {
-		segmentLag := int(remoteOffset.SegmentID) - segmentID
-		segmentLagGauge.WithLabelValues(r.namespace).Set(float64(segmentLag))
-
-		if segmentLag > r.segmentLagThreshold {
-			r.logLag(remoteOffset, currentOffset)
-		}
+	if lsnLag > int64(r.lsnLagThreshold) {
+		r.logger.Warn("[unisondb.relayer]",
+			slog.String("event_type", "lsn.lag.threshold.exceeded"),
+			slog.String("namespace", r.namespace),
+			slog.Uint64("remote_lsn", remoteLSN),
+			slog.Uint64("local_lsn", localLSN),
+			slog.Int64("lsn_lag", lsnLag),
+		)
 	}
-}
-
-func (r *Relayer) logLag(remote, local *dbkernel.Offset) {
-	if remote == nil && local == nil {
-		return
-	}
-
-	remote = reAssignIfNil(remote)
-	local = reAssignIfNil(local)
-
-	r.logger.Warn("[unisondb.relayer]",
-		slog.String("event_type", "segment.lag.threshold.exceeded"),
-		slog.String("namespace", r.namespace),
-		slog.Group("offset",
-			slog.Group("remote",
-				slog.Int("segment_id", int(remote.SegmentID)),
-				slog.Int("offset", int(remote.Offset)),
-			),
-			slog.Group("local",
-				slog.Int("segment_id", int(local.SegmentID)),
-				slog.Int("offset", int(local.Offset)),
-			),
-		),
-	)
-}
-
-func reAssignIfNil(offset *dbkernel.Offset) *dbkernel.Offset {
-	if offset == nil {
-		return &dbkernel.Offset{}
-	}
-	return offset
 }

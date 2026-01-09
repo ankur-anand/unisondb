@@ -44,10 +44,9 @@ func (r *RelayerService) Setup(ctx context.Context, deps *Dependencies) error {
 	}
 	r.connections = conns
 
-	// namespace segment lag configuration
-	lagConf, err := buildNamespaceSegmentLagMap(&deps.Config)
+	lagConf, err := buildNamespaceLSNLagMap(&deps.Config)
 	if err != nil {
-		return fmt.Errorf("failed to build segment lag map: %w", err)
+		return fmt.Errorf("failed to build LSN lag map: %w", err)
 	}
 
 	// rate limiter if configured

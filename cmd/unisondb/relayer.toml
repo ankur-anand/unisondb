@@ -34,7 +34,7 @@ cert_path = "../../certs/client.crt"
 key_path = "../../certs/client.key"
 ca_path = "../../certs/ca.crt"
 upstream_address = "localhost:4001"
-segment_lag_threshold = 100
+lsn_lag_threshold = 100
 
 [log_config]
 log_level = "info"

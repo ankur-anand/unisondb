@@ -45,6 +45,14 @@ func (h *FlushedIndexHolder) Get() (index, term uint64) {
 	return h.index.Load(), h.term.Load()
 }
 
+// SafeGCIndex implements SafeGCIndexProvider.
+// The flushed index is the safe-to-GC index because logs can only be deleted
+// after their data has been flushed to the B-tree.
+func (h *FlushedIndexHolder) SafeGCIndex() (index uint64, ok bool) {
+	v := h.index.Load()
+	return v, v > 0
+}
+
 // FSMSnapshotStore wraps a standard raft.SnapshotStore and overrides the index/term
 // used in snapshot metadata to match the actual flushed state of the FSM.
 //
