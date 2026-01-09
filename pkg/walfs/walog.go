@@ -576,20 +576,6 @@ func (wl *WALog) LogIndex() *ShardedIndex {
 	return wl.logIndex
 }
 
-// SegmentIndex returns the physical index entries for a segment. For sealed segments the
-// returned slice is complete. For the active segment, the slice reflects the entries written so far.
-// Warning: when ClearIndexOnFlush is enabled, sealed segments may return an empty slice.
-func (wl *WALog) SegmentIndex(id SegmentID) ([]SegmentIndexEntry, error) {
-	wl.writeMu.Lock()
-	defer wl.writeMu.Unlock()
-
-	seg, ok := wl.segments[id]
-	if !ok {
-		return nil, fmt.Errorf("%w: segment %d", ErrSegmentNotFound, id)
-	}
-	return seg.IndexEntries(), nil
-}
-
 // PositionForIndex returns the RecordPosition for the given log index.
 func (wl *WALog) PositionForIndex(idx uint64) (RecordPosition, error) {
 	if wl.logIndex == nil {
