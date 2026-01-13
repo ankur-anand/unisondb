@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/logutils"
@@ -78,17 +79,29 @@ func defaultConfig() *serf.Config {
 }
 
 // Membership provides the gossip Membership inside the cluster.
-// It help's discover the nodes and it's metadata dynamically and quickly inside the cluster.
 type Membership struct {
 	*serf.Serf
 	eventsCh chan serf.Event
 	en       EventNotifier
+
+	clustersMu sync.RWMutex
+	clusters   []ClusterDiscover
 }
 
-// SendEvent generates the provided named event inside the cluster with the provided payload.
-// IMP: Payload size is limited: inMemoryStore gossips via UDP, so the payload must fit within a single UDP packet.
-func (m *Membership) sendEvent(name string, payload []byte) error {
-	return m.Serf.UserEvent(name, payload, false)
+// Join attempts to join an existing membership cluster using the provided addresses.
+func (m *Membership) Join(addrs []string) (int, error) {
+	if len(addrs) == 0 {
+		return 0, nil
+	}
+
+	slog.Info("[raftcluster]",
+		slog.String("message", "joining membership"), slog.Any("addresses", addrs))
+	n, err := m.Serf.Join(addrs, true)
+	if err != nil {
+		slog.Error("[raftcluster]",
+			slog.String("message", "error joining membership"), slog.Any("err", err))
+	}
+	return n, err
 }
 
 // Close first leave the Membership gracefully and then call shutdown.
@@ -100,44 +113,72 @@ func (m *Membership) Close() error {
 	return m.Shutdown()
 }
 
+// RegisterCluster adds a ClusterDiscover listener that will receive membership events.
+// This allows multiple Raft clusters (one per namespace) to react to Serf membership changes.
+func (m *Membership) RegisterCluster(c ClusterDiscover) {
+	m.clustersMu.Lock()
+	defer m.clustersMu.Unlock()
+	m.clusters = append(m.clusters, c)
+}
+
+// notifyClusters sends membership events to all registered cluster listeners.
+func (m *Membership) notifyClusters(event MemberEvent, info MemberInformation) {
+	m.clustersMu.RLock()
+	defer m.clustersMu.RUnlock()
+	for _, c := range m.clusters {
+		c.OnChangeEvent(event, info)
+	}
+}
+
 // EventHandler handles events operation for Membership cluster.
 func (m *Membership) EventHandler(shutdownCh <-chan struct{}) error {
 	for {
 		select {
 		case <-shutdownCh:
 			return nil
-		case event := <-m.eventsCh:
-			switch event.EventType() {
-			case serf.EventMemberJoin:
-				for _, member := range event.(serf.MemberEvent).Members {
-					if m.isLocal(member) {
-						continue
-					}
-					mi := MemberInformation{
-						NodeName: member.Name,
-						Tags:     member.Tags,
-					}
-					m.en.OnChangeEvent(MemberEventJoin, mi)
-				}
-			case serf.EventMemberLeave, serf.EventMemberFailed, serf.EventMemberReap:
-				for _, member := range event.(serf.MemberEvent).Members {
-					if m.isLocal(member) {
-						continue
-					}
-					mi := MemberInformation{
-						NodeName: member.Name,
-						Tags:     member.Tags,
-					}
-					m.en.OnChangeEvent(MemberEventLeave, mi)
-				}
-			case serf.EventUser:
-				ue := event.(serf.UserEvent)
-				m.en.OnEvent(ue.Name, ue.Payload)
-			default:
-				panic("unhandled default case")
-
+		case event, ok := <-m.eventsCh:
+			if !ok {
+				// Channel closed during shutdown
+				return nil
 			}
+			m.handleEvent(event)
 		}
+	}
+}
+
+func (m *Membership) handleEvent(event serf.Event) {
+	switch event.EventType() {
+	case serf.EventMemberJoin:
+		m.handleMemberEvent(event.(serf.MemberEvent), MemberEventJoin)
+	case serf.EventMemberLeave, serf.EventMemberFailed, serf.EventMemberReap:
+		m.handleMemberEvent(event.(serf.MemberEvent), MemberEventLeave)
+	case serf.EventUser:
+		m.handleUserEvent(event.(serf.UserEvent))
+	default:
+		slog.Warn("[raftcluster]", slog.String("message", "unhandled serf event type"),
+			slog.String("type", event.EventType().String()))
+	}
+}
+
+func (m *Membership) handleMemberEvent(me serf.MemberEvent, eventType MemberEvent) {
+	for _, member := range me.Members {
+		if m.isLocal(member) {
+			continue
+		}
+		mi := MemberInformation{
+			NodeName: member.Name,
+			Tags:     member.Tags,
+		}
+		if m.en != nil {
+			m.en.OnChangeEvent(eventType, mi)
+		}
+		m.notifyClusters(eventType, mi)
+	}
+}
+
+func (m *Membership) handleUserEvent(ue serf.UserEvent) {
+	if m.en != nil {
+		m.en.OnEvent(ue.Name, ue.Payload)
 	}
 }
 
@@ -159,7 +200,7 @@ type MembershipConfiguration struct {
 	VerifyOutgoing  bool
 }
 
-// NewMembership is used to setup and initialize a gossip Membership
+// NewMembership is used to setup and initialize a gossip Membership.
 func NewMembership(c MembershipConfiguration, logger *slog.Logger, en EventNotifier) (Membership, error) {
 	// serfEventChSize is the size of the buffered channel to get Serf
 	// events. If this is exhausted we will block Serf and Memberlist.

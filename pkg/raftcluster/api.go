@@ -1,20 +1,10 @@
 package raftcluster
 
-import (
-	"sync"
-)
-
 // EventNotifier is an interface that groups ClusterDiscover Interface and OnEvent Method.
-// EventNotifier is used by the default ClusterDiscoverService implementation to send notification about cluster change.
+// EventNotifier is used by the Membership to send notification about cluster changes and user events.
 type EventNotifier interface {
 	ClusterDiscover
 	OnEvent(eventName string, payload []byte)
-}
-
-// UserEvent is an interface that wraps the basic SendEvent and OnEvent Method.
-// SendEvent is used for generating a custom user type event inside the cluster.
-type UserEvent interface {
-	SendEvent(name string, payload []byte) error
 }
 
 // ClusterDiscover is an interface that wraps the basic OnChangeEvent Method.
@@ -29,62 +19,15 @@ type MemberInformation struct {
 	Tags     map[string]string
 }
 
-// Clone Deep clone's the MemberInfo Object.
+// Clone returns a deep copy of the MemberInformation.
 func (mi MemberInformation) Clone() MemberInformation {
-	m := make(map[string]string)
+	tags := make(map[string]string, len(mi.Tags))
 	for k, v := range mi.Tags {
-		m[k] = v
+		tags[k] = v
 	}
 
 	return MemberInformation{
 		NodeName: mi.NodeName,
-		Tags:     mi.Tags,
+		Tags:     tags,
 	}
-}
-
-// inMemoryStore provides in memory storage for clustering .
-type inMemoryStore struct {
-	isLeader int32
-	// Notifies about the Event to UserSpace.
-	en EventNotifier
-
-	l       sync.RWMutex
-	members map[string]MemberInformation
-}
-
-func newInMemoryStore(en EventNotifier) *inMemoryStore {
-	return &inMemoryStore{
-		l:       sync.RWMutex{},
-		members: make(map[string]MemberInformation),
-		en:      en,
-	}
-}
-
-// OnEvent callback's the provider with the named event and it's payload.
-func (m *inMemoryStore) OnEvent(eventName string, payload []byte) {
-	m.en.OnEvent(eventName, payload)
-}
-
-func (m *inMemoryStore) OnChangeEvent(event MemberEvent, info MemberInformation) {
-	switch event {
-	case MemberEventJoin:
-		m.join(info)
-	case MemberEventLeave:
-		m.leave(info)
-	}
-
-	m.en.OnChangeEvent(event, info)
-}
-
-func (m *inMemoryStore) join(mi MemberInformation) {
-	m.l.Lock()
-	defer m.l.Unlock()
-	// clone the tags map for concurrent safe ops in other part.
-	m.members[mi.NodeName] = mi.Clone()
-}
-
-func (m *inMemoryStore) leave(mi MemberInformation) {
-	m.l.Lock()
-	defer m.l.Unlock()
-	delete(m.members, mi.NodeName)
 }

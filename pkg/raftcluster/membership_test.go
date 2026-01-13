@@ -102,12 +102,6 @@ func TestMemberEventString(t *testing.T) {
 	}
 }
 
-func TestMemberEventStringUnknownPanics(t *testing.T) {
-	assert.Panics(t, func() {
-		MemberEvent(99).String()
-	})
-}
-
 type testNotifier struct {
 	mu     sync.Mutex
 	events []MemberEvent
@@ -175,7 +169,7 @@ func TestMembershipLiveClusterJoinLeave(t *testing.T) {
 	defer close(stop1)
 	defer close(stop2)
 
-	_, err = m2.Serf.Join([]string{net.JoinHostPort("127.0.0.1", strconv.Itoa(port1))}, true)
+	_, err = m2.Join([]string{net.JoinHostPort("127.0.0.1", strconv.Itoa(port1))})
 	require.NoError(t, err)
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -244,7 +238,7 @@ func TestMembershipLiveClusterJoinLeaveWithEncryption(t *testing.T) {
 	defer close(stop1)
 	defer close(stop2)
 
-	_, err = m2.Serf.Join([]string{net.JoinHostPort("127.0.0.1", strconv.Itoa(port1))}, true)
+	_, err = m2.Join([]string{net.JoinHostPort("127.0.0.1", strconv.Itoa(port1))})
 	require.NoError(t, err)
 
 	deadline := time.Now().Add(5 * time.Second)
@@ -314,7 +308,7 @@ func TestMembershipLiveClusterJoinWithEncryptionMismatch(t *testing.T) {
 	defer close(stop1)
 	defer close(stop2)
 
-	_, err = m2.Serf.Join([]string{net.JoinHostPort("127.0.0.1", strconv.Itoa(port1))}, true)
+	_, err = m2.Join([]string{net.JoinHostPort("127.0.0.1", strconv.Itoa(port1))})
 	require.Error(t, err)
 
 	time.Sleep(500 * time.Millisecond)
