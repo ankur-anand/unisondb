@@ -3,9 +3,17 @@ package raftcluster
 import (
 	"bytes"
 	"context"
+	"io"
 	"log/slog"
 	"strings"
 )
+
+// NewHashicorpLogWriter returns an io.Writer that parses hashicorp-style log
+// output and forwards it to the given slog.Logger at the appropriate level.
+// The source identifies the log origin (e.g., "raft", "serf", "raft-transport").
+func NewHashicorpLogWriter(logger *slog.Logger, source string) io.Writer {
+	return &lwr{logger: logger.With(slog.String("source", source))}
+}
 
 type lwr struct {
 	logger *slog.Logger
