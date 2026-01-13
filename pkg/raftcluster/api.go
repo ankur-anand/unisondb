@@ -1,12 +1,5 @@
 package raftcluster
 
-// EventNotifier is an interface that groups ClusterDiscover Interface and OnEvent Method.
-// EventNotifier is used by the Membership to send notification about cluster changes and user events.
-type EventNotifier interface {
-	ClusterDiscover
-	OnEvent(eventName string, payload []byte)
-}
-
 // ClusterDiscover is an interface that wraps the basic OnChangeEvent Method.
 // OnChangeEvent notifies the provider when there is a change in the cluster dynamics.
 type ClusterDiscover interface {

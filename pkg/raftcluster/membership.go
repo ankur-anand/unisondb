@@ -39,6 +39,10 @@ func (m MemberEvent) String() string {
 	}
 }
 
+// ClusterEventFilter decides whether to notify cluster listeners about a membership event.
+// Returning false skips ClusterDiscover notifications for the event.
+type ClusterEventFilter func(event MemberEvent, info MemberInformation) bool
+
 // LogLevel defines log level for clustering.
 type LogLevel int
 
@@ -82,10 +86,11 @@ func defaultConfig() *serf.Config {
 type Membership struct {
 	*serf.Serf
 	eventsCh chan serf.Event
-	en       EventNotifier
 
 	clustersMu sync.RWMutex
 	clusters   []ClusterDiscover
+
+	clusterFilter ClusterEventFilter
 }
 
 // Join attempts to join an existing membership cluster using the provided addresses.
@@ -153,7 +158,11 @@ func (m *Membership) handleEvent(event serf.Event) {
 	case serf.EventMemberLeave, serf.EventMemberFailed, serf.EventMemberReap:
 		m.handleMemberEvent(event.(serf.MemberEvent), MemberEventLeave)
 	case serf.EventUser:
-		m.handleUserEvent(event.(serf.UserEvent))
+		ue := event.(serf.UserEvent)
+		slog.Debug("[raftcluster]",
+			slog.String("message", "ignored serf user event"),
+			slog.String("name", ue.Name),
+		)
 	default:
 		slog.Warn("[raftcluster]", slog.String("message", "unhandled serf event type"),
 			slog.String("type", event.EventType().String()))
@@ -169,16 +178,9 @@ func (m *Membership) handleMemberEvent(me serf.MemberEvent, eventType MemberEven
 			NodeName: member.Name,
 			Tags:     member.Tags,
 		}
-		if m.en != nil {
-			m.en.OnChangeEvent(eventType, mi)
+		if m.clusterFilter == nil || m.clusterFilter(eventType, mi) {
+			m.notifyClusters(eventType, mi)
 		}
-		m.notifyClusters(eventType, mi)
-	}
-}
-
-func (m *Membership) handleUserEvent(ue serf.UserEvent) {
-	if m.en != nil {
-		m.en.OnEvent(ue.Name, ue.Payload)
 	}
 }
 
@@ -198,10 +200,11 @@ type MembershipConfiguration struct {
 	KeyringBase64   []string
 	VerifyIncoming  bool
 	VerifyOutgoing  bool
+	ClusterFilter   ClusterEventFilter
 }
 
 // NewMembership is used to setup and initialize a gossip Membership.
-func NewMembership(c MembershipConfiguration, logger *slog.Logger, en EventNotifier) (Membership, error) {
+func NewMembership(c MembershipConfiguration, logger *slog.Logger) (Membership, error) {
 	// serfEventChSize is the size of the buffered channel to get Serf
 	// events. If this is exhausted we will block Serf and Memberlist.
 	serfEventChSize := 2048
@@ -217,15 +220,20 @@ func NewMembership(c MembershipConfiguration, logger *slog.Logger, en EventNotif
 		return Membership{}, err
 	}
 
+	clusterFilter := c.ClusterFilter
+	if clusterFilter == nil {
+		clusterFilter = func(_ MemberEvent, _ MemberInformation) bool { return true }
+	}
+
 	// This is the best effort to convert the standard log
 	// from the serf and gossip library into slog output.
-	filter := &logutils.LevelFilter{
+	logFilter := &logutils.LevelFilter{
 		Levels:   []logutils.LogLevel{"DEBUG", "INFO", "WARN", "ERROR"},
 		MinLevel: logutils.LogLevel(c.MinLogLevel.ToString(c.MinLogLevel)),
 		Writer:   &lwr{logger: logger},
 	}
 
-	stdLog := log.New(filter, "", 0)
+	stdLog := log.New(logFilter, "", 0)
 
 	conf.MemberlistConfig.Logger = stdLog
 	conf.MemberlistConfig.AdvertiseAddr = c.AdvertiseAddr
@@ -233,7 +241,7 @@ func NewMembership(c MembershipConfiguration, logger *slog.Logger, en EventNotif
 	conf.MemberlistConfig.BindPort = c.AdvertisePort
 	conf.Logger = stdLog
 	s, err := serf.Create(conf)
-	return Membership{Serf: s, eventsCh: serfEventsCh, en: en}, err
+	return Membership{Serf: s, eventsCh: serfEventsCh, clusterFilter: clusterFilter}, err
 }
 
 func configureSerfEncryption(conf *memberlist.Config, cfg MembershipConfiguration) error {
