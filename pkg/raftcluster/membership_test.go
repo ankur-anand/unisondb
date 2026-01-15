@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/memberlist"
+	"github.com/hashicorp/serf/serf"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -92,7 +93,10 @@ func TestMemberEventString(t *testing.T) {
 	}{
 		{MemberEventJoin, "member-join"},
 		{MemberEventLeave, "member-leave"},
+		{MemberEventFailed, "member-failed"},
+		{MemberEventReap, "member-reap"},
 		{MemberEventLeaderChange, "member-leader-change"},
+		{MemberEventUpdate, "member-update"},
 	}
 
 	for _, tt := range tests {
@@ -115,6 +119,8 @@ func (t *testClusterListener) OnChangeEvent(event MemberEvent, info MemberInform
 	t.mu.Unlock()
 }
 
+func (t *testClusterListener) ReconcileMembers([]MemberInformation) {}
+
 func (t *testClusterListener) hasEvent(event MemberEvent, node string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -134,19 +140,49 @@ func freePort(t *testing.T) int {
 	return listener.Addr().(*net.TCPAddr).Port
 }
 
+func findMember(members []serf.Member, name string) (serf.Member, bool) {
+	for _, member := range members {
+		if member.Name == name {
+			return member, true
+		}
+	}
+	return serf.Member{}, false
+}
+
+func newSerfTestConfig(t *testing.T, nodeName string, port int, events chan serf.Event, reconnectTimeout time.Duration, reapInterval time.Duration, tombstoneTimeout time.Duration) *serf.Config {
+	t.Helper()
+	conf := defaultConfig()
+	conf.Init()
+	conf.NodeName = nodeName
+	conf.EventCh = events
+	conf.ReconnectTimeout = reconnectTimeout
+	conf.ReapInterval = reapInterval
+	conf.TombstoneTimeout = tombstoneTimeout
+	conf.MemberlistConfig.BindAddr = "127.0.0.1"
+	conf.MemberlistConfig.BindPort = port
+	conf.MemberlistConfig.AdvertiseAddr = "127.0.0.1"
+	conf.MemberlistConfig.AdvertisePort = port
+	conf.MemberlistConfig.GossipInterval = 10 * time.Millisecond
+	conf.MemberlistConfig.ProbeInterval = 50 * time.Millisecond
+	conf.MemberlistConfig.ProbeTimeout = 25 * time.Millisecond
+	conf.MemberlistConfig.SuspicionMult = 1
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	conf.Logger = slog.NewLogLogger(logger.Handler(), slog.LevelInfo)
+	conf.MemberlistConfig.Logger = slog.NewLogLogger(logger.Handler(), slog.LevelInfo)
+	return conf
+}
+
 func TestMembershipLiveClusterJoinLeave(t *testing.T) {
 	port1 := freePort(t)
 	port2 := freePort(t)
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	listener := &testClusterListener{}
 
 	m1, err := NewMembership(MembershipConfiguration{
 		NodeName:      "node1",
 		AdvertiseAddr: "127.0.0.1",
 		AdvertisePort: port1,
-		MinLogLevel:   LoglevelInfo,
-	}, logger)
+	}, slog.Default())
 	require.NoError(t, err)
 	defer m1.Serf.Shutdown()
 	m1.RegisterCluster(listener)
@@ -155,8 +191,7 @@ func TestMembershipLiveClusterJoinLeave(t *testing.T) {
 		NodeName:      "node2",
 		AdvertiseAddr: "127.0.0.1",
 		AdvertisePort: port2,
-		MinLogLevel:   LoglevelInfo,
-	}, logger)
+	}, slog.Default())
 	require.NoError(t, err)
 	defer m2.Serf.Shutdown()
 
@@ -195,6 +230,69 @@ func TestMembershipLiveClusterJoinLeave(t *testing.T) {
 	}
 }
 
+func TestMembershipLiveClusterUpdateTags(t *testing.T) {
+	port1 := freePort(t)
+	port2 := freePort(t)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	listener := &testClusterListener{}
+
+	m1, err := NewMembership(MembershipConfiguration{
+		NodeName:      "node1",
+		AdvertiseAddr: "127.0.0.1",
+		AdvertisePort: port1,
+	}, logger)
+	require.NoError(t, err)
+	defer m1.Serf.Shutdown()
+	m1.RegisterCluster(listener)
+
+	m2, err := NewMembership(MembershipConfiguration{
+		NodeName:      "node2",
+		AdvertiseAddr: "127.0.0.1",
+		AdvertisePort: port2,
+	}, logger)
+	require.NoError(t, err)
+	defer m2.Serf.Shutdown()
+
+	stop1 := make(chan struct{})
+	stop2 := make(chan struct{})
+	go func() { _ = m1.EventHandler(stop1) }()
+	go func() { _ = m2.EventHandler(stop2) }()
+	defer close(stop1)
+	defer close(stop2)
+
+	_, err = m2.Join([]string{net.JoinHostPort("127.0.0.1", strconv.Itoa(port1))})
+	require.NoError(t, err)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if listener.hasEvent(MemberEventJoin, "node2") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("expected join event for node2")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	err = m2.SetTags(map[string]string{
+		"raft-addr":  "127.0.0.1:29001",
+		"namespaces": "test",
+	})
+	require.NoError(t, err)
+
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		if listener.hasEvent(MemberEventUpdate, "node2") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("expected update event for node2")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 func TestMembershipClusterFilterBlocksClusterNotifications(t *testing.T) {
 	port1 := freePort(t)
 	port2 := freePort(t)
@@ -210,7 +308,6 @@ func TestMembershipClusterFilterBlocksClusterNotifications(t *testing.T) {
 		NodeName:      "node1",
 		AdvertiseAddr: "127.0.0.1",
 		AdvertisePort: port1,
-		MinLogLevel:   LoglevelInfo,
 		ClusterFilter: blockAll,
 	}, logger)
 	require.NoError(t, err)
@@ -222,7 +319,6 @@ func TestMembershipClusterFilterBlocksClusterNotifications(t *testing.T) {
 		NodeName:      "node2",
 		AdvertiseAddr: "127.0.0.1",
 		AdvertisePort: port2,
-		MinLogLevel:   LoglevelInfo,
 	}, logger)
 	require.NoError(t, err)
 	defer m2.Serf.Shutdown()
@@ -263,6 +359,50 @@ func TestMembershipClusterFilterBlocksClusterNotifications(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+func TestMembershipMemberStatesMarksMissingAsReaped(t *testing.T) {
+	port := freePort(t)
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	membership, err := NewMembership(MembershipConfiguration{
+		NodeName:      "node1",
+		AdvertiseAddr: "127.0.0.1",
+		AdvertisePort: port,
+	}, logger)
+	require.NoError(t, err)
+	defer membership.Serf.Shutdown()
+
+	ghost := serf.Member{
+		Name: "ghost",
+		Tags: map[string]string{"raft-addr": "127.0.0.1:29000", "namespaces": "test"},
+	}
+	before := time.Now().Add(-1 * time.Minute)
+
+	membership.statusMu.Lock()
+	membership.memberStates["ghost"] = MemberInformation{
+		NodeName:   ghost.Name,
+		Tags:       ghost.Tags,
+		Status:     MemberStatusFailed,
+		UpdatedAt:  before,
+		LastSeenAt: before,
+	}
+	membership.statusMu.Unlock()
+
+	states := membership.MemberStates()
+
+	var found MemberInformation
+	var ok bool
+	for _, state := range states {
+		if state.NodeName == "ghost" {
+			found = state
+			ok = true
+			break
+		}
+	}
+	require.True(t, ok)
+	require.Equal(t, MemberStatusReaped, found.Status)
+	require.True(t, found.UpdatedAt.After(before))
+}
 func TestMembershipLiveClusterJoinLeaveWithEncryption(t *testing.T) {
 	port1 := freePort(t)
 	port2 := freePort(t)
@@ -276,7 +416,6 @@ func TestMembershipLiveClusterJoinLeaveWithEncryption(t *testing.T) {
 		NodeName:        "node1",
 		AdvertiseAddr:   "127.0.0.1",
 		AdvertisePort:   port1,
-		MinLogLevel:     LoglevelInfo,
 		SecretKeyBase64: secret,
 		VerifyIncoming:  true,
 		VerifyOutgoing:  true,
@@ -289,7 +428,6 @@ func TestMembershipLiveClusterJoinLeaveWithEncryption(t *testing.T) {
 		NodeName:        "node2",
 		AdvertiseAddr:   "127.0.0.1",
 		AdvertisePort:   port2,
-		MinLogLevel:     LoglevelInfo,
 		SecretKeyBase64: secret,
 		VerifyIncoming:  true,
 		VerifyOutgoing:  true,
@@ -346,7 +484,6 @@ func TestMembershipLiveClusterJoinWithEncryptionMismatch(t *testing.T) {
 		NodeName:        "node1",
 		AdvertiseAddr:   "127.0.0.1",
 		AdvertisePort:   port1,
-		MinLogLevel:     LoglevelInfo,
 		SecretKeyBase64: secret1,
 		VerifyIncoming:  true,
 		VerifyOutgoing:  true,
@@ -359,7 +496,6 @@ func TestMembershipLiveClusterJoinWithEncryptionMismatch(t *testing.T) {
 		NodeName:        "node2",
 		AdvertiseAddr:   "127.0.0.1",
 		AdvertisePort:   port2,
-		MinLogLevel:     LoglevelInfo,
 		SecretKeyBase64: secret2,
 		VerifyIncoming:  true,
 		VerifyOutgoing:  true,
@@ -380,5 +516,66 @@ func TestMembershipLiveClusterJoinWithEncryptionMismatch(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if listener.hasEvent(MemberEventJoin, "node2") {
 		t.Fatal("unexpected join event for node2")
+	}
+}
+
+func TestSerfReconnectTimeoutReapsFailedMember(t *testing.T) {
+	port1 := freePort(t)
+	port2 := freePort(t)
+
+	events1 := make(chan serf.Event, 256)
+	events2 := make(chan serf.Event, 256)
+
+	reconnectTimeout := 1 * time.Second
+	reapInterval := 50 * time.Millisecond
+	tombstoneTimeout := 1 * time.Second
+
+	conf1 := newSerfTestConfig(t, "node1", port1, events1, reconnectTimeout, reapInterval, tombstoneTimeout)
+	conf2 := newSerfTestConfig(t, "node2", port2, events2, reconnectTimeout, reapInterval, tombstoneTimeout)
+
+	s1, err := serf.Create(conf1)
+	require.NoError(t, err)
+	defer s1.Shutdown()
+
+	s2, err := serf.Create(conf2)
+	require.NoError(t, err)
+
+	_, err = s2.Join([]string{net.JoinHostPort("127.0.0.1", strconv.Itoa(port1))}, true)
+	require.NoError(t, err)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, ok := findMember(s1.Members(), "node2"); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("expected node2 to join")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	require.NoError(t, s2.Shutdown())
+
+	deadline = time.Now().Add(reconnectTimeout / 2)
+	for {
+		member, ok := findMember(s1.Members(), "node2")
+		if ok && member.Status == serf.StatusFailed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("expected node2 to be failed before reconnect timeout")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		if _, ok := findMember(s1.Members(), "node2"); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("expected node2 to be reaped")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

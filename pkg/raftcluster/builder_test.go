@@ -3,6 +3,7 @@ package raftcluster
 import (
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -14,21 +15,19 @@ import (
 	"github.com/hashicorp/raft"
 )
 
-// NodeConfig represents a node in the Raft cluster.
-type NodeConfig struct {
+type nodeConfig struct {
 	ID      string
 	Address string
 }
 
-// ClusterBuilder builds a Raft cluster.
-type ClusterBuilder struct {
-	nodeID  string
-	dataDir string
-	nodes   []NodeConfig
+type clusterBuilder struct {
+	nodeID    string
+	namespace string
+	dataDir   string
+	nodes     []nodeConfig
 
 	raftConfig         *raft.Config
-	walSegmentSize     int64
-	msyncEveryWrite    bool
+	wal                *walfs.WALog
 	codec              raftwalfs.Codec
 	transportTimeout   time.Duration
 	snapshotRetain     int
@@ -37,68 +36,28 @@ type ClusterBuilder struct {
 	stableStoreFactory func() (raft.StableStore, error)
 }
 
-// NewClusterBuilder creates a new builder.
-func NewClusterBuilder(nodeID, dataDir string, nodes []NodeConfig) *ClusterBuilder {
-	return &ClusterBuilder{
+func newClusterBuilder(nodeID, namespace, dataDir string, nodes []nodeConfig) *clusterBuilder {
+	return &clusterBuilder{
 		nodeID:           nodeID,
+		namespace:        namespace,
 		dataDir:          dataDir,
 		nodes:            nodes,
-		walSegmentSize:   64 * 1024 * 1024,
 		transportTimeout: 10 * time.Second,
 		snapshotRetain:   2,
 	}
 }
 
-// WithRaftConfig sets custom Raft configuration.
-func (b *ClusterBuilder) WithRaftConfig(cfg *raft.Config) *ClusterBuilder {
-	b.raftConfig = cfg
+func (b *clusterBuilder) WithWAL(wal *walfs.WALog) *clusterBuilder {
+	b.wal = wal
 	return b
 }
 
-// WithWALSegmentSize sets the WAL segment size.
-func (b *ClusterBuilder) WithWALSegmentSize(size int64) *ClusterBuilder {
-	b.walSegmentSize = size
-	return b
-}
-
-// WithMSyncEveryWrite enables msync on every write for durability.
-func (b *ClusterBuilder) WithMSyncEveryWrite(msync bool) *ClusterBuilder {
-	b.msyncEveryWrite = msync
-	return b
-}
-
-// WithCodec sets the WAL codec.
-func (b *ClusterBuilder) WithCodec(codec raftwalfs.Codec) *ClusterBuilder {
-	b.codec = codec
-	return b
-}
-
-// WithTransportTimeout sets the transport timeout.
-func (b *ClusterBuilder) WithTransportTimeout(timeout time.Duration) *ClusterBuilder {
-	b.transportTimeout = timeout
-	return b
-}
-
-// WithFSMFactory sets the FSM factory function.
-func (b *ClusterBuilder) WithFSMFactory(factory func() raft.FSM) *ClusterBuilder {
+func (b *clusterBuilder) WithFSMFactory(factory func() raft.FSM) *clusterBuilder {
 	b.fsmFactory = factory
 	return b
 }
 
-// WithSnapshotStore sets a custom snapshot store factory.
-func (b *ClusterBuilder) WithSnapshotStore(factory func() (raft.SnapshotStore, error)) *ClusterBuilder {
-	b.snapshotStoreFunc = factory
-	return b
-}
-
-// WithStableStore sets a custom stable store factory.
-func (b *ClusterBuilder) WithStableStore(factory func() (raft.StableStore, error)) *ClusterBuilder {
-	b.stableStoreFactory = factory
-	return b
-}
-
-// BuiltCluster contains all resources created during cluster building.
-type BuiltCluster struct {
+type builtCluster struct {
 	Cluster   *Cluster
 	LogStore  *raftwalfs.LogStore
 	WAL       *walfs.WALog
@@ -107,8 +66,7 @@ type BuiltCluster struct {
 	cleanupOnce sync.Once
 }
 
-// Close cleans up all cluster resources.
-func (bc *BuiltCluster) Close() error {
+func (bc *builtCluster) Close() error {
 	var errs []error
 
 	bc.cleanupOnce.Do(func() {
@@ -118,23 +76,14 @@ func (bc *BuiltCluster) Close() error {
 			}
 		}
 
-		// Close transport
 		if bc.Transport != nil {
 			if err := bc.Transport.Close(); err != nil {
 				errs = append(errs, err)
 			}
 		}
 
-		// Close log store
 		if bc.LogStore != nil {
 			if err := bc.LogStore.Close(); err != nil {
-				errs = append(errs, err)
-			}
-		}
-
-		// Close WAL
-		if bc.WAL != nil {
-			if err := bc.WAL.Close(); err != nil {
 				errs = append(errs, err)
 			}
 		}
@@ -146,11 +95,10 @@ func (bc *BuiltCluster) Close() error {
 	return nil
 }
 
-// Build creates the cluster. Returns BuiltCluster with all resources.
-func (b *ClusterBuilder) Build() (*BuiltCluster, error) {
-	result := &BuiltCluster{}
+func (b *clusterBuilder) build() (*builtCluster, error) {
+	result := &builtCluster{}
 
-	var ourNode NodeConfig
+	var ourNode nodeConfig
 	for _, n := range b.nodes {
 		if n.ID == b.nodeID {
 			ourNode = n
@@ -161,7 +109,7 @@ func (b *ClusterBuilder) Build() (*BuiltCluster, error) {
 		return nil, fmt.Errorf("node %s not found in nodes list", b.nodeID)
 	}
 
-	// Build the Raft instance
+	// build the Raft instance
 	logStore, wal, transport, r, err := b.buildRaft(ourNode.Address)
 	if err != nil {
 		return nil, fmt.Errorf("build raft: %w", err)
@@ -170,12 +118,12 @@ func (b *ClusterBuilder) Build() (*BuiltCluster, error) {
 	result.LogStore = logStore
 	result.WAL = wal
 	result.Transport = transport
-	result.Cluster = NewCluster(r)
+	result.Cluster = NewCluster(r, raft.ServerID(b.nodeID), b.namespace)
 
 	return result, nil
 }
 
-func (b *ClusterBuilder) buildRaft(bindAddr string) (*raftwalfs.LogStore, *walfs.WALog, *raft.NetworkTransport, *raft.Raft, error) {
+func (b *clusterBuilder) buildRaft(bindAddr string) (*raftwalfs.LogStore, *walfs.WALog, *raft.NetworkTransport, *raft.Raft, error) {
 	wal, logStore, err := b.createLogStore()
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -184,7 +132,6 @@ func (b *ClusterBuilder) buildRaft(bindAddr string) (*raftwalfs.LogStore, *walfs
 	transport, err := b.createTransport(bindAddr)
 	if err != nil {
 		logStore.Close()
-		wal.Close()
 		return nil, nil, nil, nil, err
 	}
 
@@ -192,7 +139,6 @@ func (b *ClusterBuilder) buildRaft(bindAddr string) (*raftwalfs.LogStore, *walfs
 	if err != nil {
 		transport.Close()
 		logStore.Close()
-		wal.Close()
 		return nil, nil, nil, nil, err
 	}
 
@@ -200,26 +146,15 @@ func (b *ClusterBuilder) buildRaft(bindAddr string) (*raftwalfs.LogStore, *walfs
 	if err != nil {
 		transport.Close()
 		logStore.Close()
-		wal.Close()
 		return nil, nil, nil, nil, fmt.Errorf("create raft: %w", err)
 	}
 
 	return logStore, wal, transport, r, nil
 }
 
-func (b *ClusterBuilder) createLogStore() (*walfs.WALog, *raftwalfs.LogStore, error) {
-	walDir := filepath.Join(b.dataDir, "wal")
-	if err := os.MkdirAll(walDir, 0755); err != nil {
-		return nil, nil, fmt.Errorf("create wal dir: %w", err)
-	}
-
-	wal, err := walfs.NewWALog(walDir, ".wal",
-		walfs.WithMaxSegmentSize(b.walSegmentSize),
-		walfs.WithMSyncEveryWrite(b.msyncEveryWrite),
-		walfs.WithReaderCommitCheck(),
-	)
-	if err != nil {
-		return nil, nil, fmt.Errorf("create wal: %w", err)
+func (b *clusterBuilder) createLogStore() (*walfs.WALog, *raftwalfs.LogStore, error) {
+	if b.wal == nil {
+		return nil, nil, fmt.Errorf("WAL is required - use WithWAL() to provide engine-initialized WAL")
 	}
 
 	codec := b.codec
@@ -227,22 +162,21 @@ func (b *ClusterBuilder) createLogStore() (*walfs.WALog, *raftwalfs.LogStore, er
 		codec = raftwalfs.BinaryCodecV1{DataMutator: raftwalfs.LogRecordMutator{}}
 	}
 
-	logStore, err := raftwalfs.NewLogStore(wal, 0, raftwalfs.WithCodec(codec))
+	logStore, err := raftwalfs.NewLogStore(b.wal, 0, raftwalfs.WithCodec(codec))
 	if err != nil {
-		wal.Close()
 		return nil, nil, fmt.Errorf("create log store: %w", err)
 	}
 
-	return wal, logStore, nil
+	return b.wal, logStore, nil
 }
 
-func (b *ClusterBuilder) createTransport(bindAddr string) (*raft.NetworkTransport, error) {
+func (b *clusterBuilder) createTransport(bindAddr string) (*raft.NetworkTransport, error) {
 	addr, err := net.ResolveTCPAddr("tcp", bindAddr)
 	if err != nil {
 		return nil, fmt.Errorf("resolve bind address: %w", err)
 	}
 
-	transport, err := raft.NewTCPTransport(bindAddr, addr, 3, b.transportTimeout, io.Discard)
+	transport, err := raft.NewTCPTransport(bindAddr, addr, 3, b.transportTimeout, &lwr{logger: slog.Default().With(slog.String("source", "raft-transport"))})
 	if err != nil {
 		return nil, fmt.Errorf("create transport: %w", err)
 	}
@@ -250,7 +184,7 @@ func (b *ClusterBuilder) createTransport(bindAddr string) (*raft.NetworkTranspor
 	return transport, nil
 }
 
-func (b *ClusterBuilder) createStores() (raft.StableStore, raft.SnapshotStore, error) {
+func (b *clusterBuilder) createStores() (raft.StableStore, raft.SnapshotStore, error) {
 	var stableStore raft.StableStore
 	if b.stableStoreFactory != nil {
 		var err error
@@ -270,7 +204,7 @@ func (b *ClusterBuilder) createStores() (raft.StableStore, raft.SnapshotStore, e
 	return stableStore, snapshotStore, nil
 }
 
-func (b *ClusterBuilder) createSnapshotStore() (raft.SnapshotStore, error) {
+func (b *clusterBuilder) createSnapshotStore() (raft.SnapshotStore, error) {
 	if b.snapshotStoreFunc != nil {
 		store, err := b.snapshotStoreFunc()
 		if err != nil {
@@ -284,7 +218,7 @@ func (b *ClusterBuilder) createSnapshotStore() (raft.SnapshotStore, error) {
 		return nil, fmt.Errorf("create snapshot dir: %w", err)
 	}
 
-	store, err := raft.NewFileSnapshotStore(snapshotDir, b.snapshotRetain, io.Discard)
+	store, err := raft.NewFileSnapshotStore(snapshotDir, b.snapshotRetain, &lwr{logger: slog.Default().With(slog.String("source", "raft-snapshot"))})
 	if err != nil {
 		return nil, fmt.Errorf("create snapshot store: %w", err)
 	}
@@ -292,21 +226,17 @@ func (b *ClusterBuilder) createSnapshotStore() (raft.SnapshotStore, error) {
 	return store, nil
 }
 
-func (b *ClusterBuilder) getRaftConfig() *raft.Config {
+func (b *clusterBuilder) getRaftConfig() *raft.Config {
 	cfg := b.raftConfig
 	if cfg == nil {
 		cfg = raft.DefaultConfig()
-		cfg.HeartbeatTimeout = 150 * time.Millisecond
-		cfg.ElectionTimeout = 150 * time.Millisecond
-		cfg.LeaderLeaseTimeout = 100 * time.Millisecond
-		cfg.CommitTimeout = 10 * time.Millisecond
-		cfg.LogOutput = io.Discard
+		cfg.LogOutput = &lwr{logger: slog.Default().With(slog.String("source", "raft"))}
 	}
 	cfg.LocalID = raft.ServerID(b.nodeID)
 	return cfg
 }
 
-func (b *ClusterBuilder) getFSM() raft.FSM {
+func (b *clusterBuilder) getFSM() raft.FSM {
 	if b.fsmFactory != nil {
 		return b.fsmFactory()
 	}
@@ -314,7 +244,7 @@ func (b *ClusterBuilder) getFSM() raft.FSM {
 }
 
 // Bootstrap bootstraps the cluster. Should only be called on one node.
-func (bc *BuiltCluster) Bootstrap(nodes []NodeConfig) error {
+func (bc *builtCluster) Bootstrap(nodes []nodeConfig) error {
 	servers := make([]raft.Server, len(nodes))
 	for i, n := range nodes {
 		servers[i] = raft.Server{
@@ -328,11 +258,12 @@ func (bc *BuiltCluster) Bootstrap(nodes []NodeConfig) error {
 }
 
 // WaitForLeader waits until the cluster has a leader.
-func (bc *BuiltCluster) WaitForLeader(timeout time.Duration) error {
+func (bc *builtCluster) WaitForLeader(timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		if bc.Cluster.raft.Leader() != "" {
+		leaderAddr, _ := bc.Cluster.raft.LeaderWithID()
+		if leaderAddr != "" {
 			return nil
 		}
 		time.Sleep(50 * time.Millisecond)
