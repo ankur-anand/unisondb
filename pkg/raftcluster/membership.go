@@ -383,9 +383,6 @@ func (m *Membership) reconcileClusters() {
 }
 
 func nextReconcileInterval(rng *rand.Rand) time.Duration {
-	if reconcileJitter <= 0 {
-		return reconcileInterval
-	}
 	return reconcileInterval + time.Duration(rng.Int63n(int64(reconcileJitter)))
 }
 
