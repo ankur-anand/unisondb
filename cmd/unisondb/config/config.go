@@ -38,7 +38,6 @@ type RaftConfig struct {
 	Enabled   bool       `toml:"enabled"`
 	NodeID    string     `toml:"node_id"`
 	BindAddr  string     `toml:"bind_addr"`
-	DataDir   string     `toml:"data_dir"`
 	Bootstrap bool       `toml:"bootstrap"`
 	Peers     []RaftPeer `toml:"peers"`
 
@@ -76,14 +75,21 @@ type GrpcConfig struct {
 }
 
 type StorageConfig struct {
-	BaseDir               string           `toml:"base_dir"`
-	Namespaces            []string         `toml:"namespaces"`
-	BytesPerSync          string           `toml:"bytes_per_sync"`
-	SegmentSize           string           `toml:"segment_size"`
-	ArenaSize             string           `toml:"arena_size"`
-	WalFsyncInterval      string           `toml:"wal_fsync_interval"`
-	WALCleanupConfig      WALCleanupConfig `toml:"wal_cleanup_config"`
-	DisableEntryTypeCheck bool             `toml:"disable_entry_type_check"`
+	BaseDir            string           `toml:"base_dir"`
+	Namespaces         []string         `toml:"namespaces"`
+	BytesPerSync       string           `toml:"bytes_per_sync"`
+	SegmentSize        string           `toml:"segment_size"`
+	ArenaSize          string           `toml:"arena_size"`
+	DBEngine           string           `toml:"db_engine"`
+	BtreeFlushInterval string           `toml:"btree_flush_interval"`
+	BtreeConfig        BtreeConfig      `toml:"btree_config"`
+	WalFsyncInterval   string           `toml:"wal_fsync_interval"`
+	WALCleanupConfig   WALCleanupConfig `toml:"wal_cleanup_config"`
+}
+
+type BtreeConfig struct {
+	NoSync   *bool  `toml:"no_sync"`
+	MmapSize string `toml:"mmap_size"`
 }
 
 type WALCleanupConfig struct {

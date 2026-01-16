@@ -132,18 +132,17 @@ type Engine struct {
 	walSyncer         walSyncer
 	config            *EngineConfig
 
-	fileLock              *flock.Flock
-	wg                    *sync.WaitGroup
-	activeMemTable        *memtable.MemTable
-	sealedMemTables       []*memtable.MemTable
-	flushReqSignal        chan struct{}
-	pendingMetadata       *pendingMetadata
-	fsyncReqSignal        chan struct{}
-	disableEntryTypeCheck bool
-	readOnly              bool
-	dataDir               string
-	backupRoot            string
-	backupNamespaceRoot   string
+	fileLock            *flock.Flock
+	wg                  *sync.WaitGroup
+	activeMemTable      *memtable.MemTable
+	sealedMemTables     []*memtable.MemTable
+	flushReqSignal      chan struct{}
+	pendingMetadata     *pendingMetadata
+	fsyncReqSignal      chan struct{}
+	readOnly            bool
+	dataDir             string
+	backupRoot          string
+	backupNamespaceRoot string
 
 	recoveredEntriesCount int
 	startMetadata         internal.Metadata
@@ -203,7 +202,6 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		fsyncReqSignal:            make(chan struct{}, 1),
 		btreeFlushInterval:        btreeFlushInterval,
 		btreeFlushIntervalEnabled: btreeFlushIntervalEnabled,
-		disableEntryTypeCheck:     conf.DisableEntryTypeCheck,
 		readOnly:                  conf.ReadOnly,
 		taggedScope:               taggedScope,
 		changeNotifier:            chNotifier,

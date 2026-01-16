@@ -18,12 +18,16 @@ bytes_per_sync = "1MB"
 ## else the entire sync will fail.
 segment_size = "16MB"
 arena_size = "4MB"
-# event_log_mode: when true, only events are accepted (no KV/Row writes or transactions)
-event_log_mode = false
+db_engine = "LMDB"               # LMDB or BOLT
+btree_flush_interval = "0s"      # >= 1s enables periodic B-tree flush
 
 [fuzz_config]
 ops_per_namespace = 10
 workers_per_namespace = 2
+
+[storage_config.btree_config]
+no_sync = true
+mmap_size = "4GB"
 
 # Relayer Configuration
 [relayer_config]
