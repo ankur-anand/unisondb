@@ -155,7 +155,7 @@ func fetchAvailableNamespaces(ctx context.Context, baseURL string) ([]string, er
 	if err != nil {
 		return nil, err
 	}
-	u.Path = "/health"
+	u.Path = "/healthz"
 	u.RawQuery = ""
 	u.Fragment = ""
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
