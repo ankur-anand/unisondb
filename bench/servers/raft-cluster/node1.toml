@@ -1,0 +1,20 @@
+listen_ip = "127.0.0.1"
+http_port = 4001
+
+[grpc_config]
+listen_ip = "127.0.0.1"
+port = 5001
+allow_insecure = true
+
+[storage_config]
+base_dir = "bench/servers/raft-cluster/raftdata/node1"
+namespaces = ["default"]
+db_engine = "bolt"
+
+[raft_config]
+enabled = true
+node_id = "node0"
+bind_addr = "127.0.0.1:6001"
+bootstrap = true
+serf_bind_addr = "127.0.0.1"
+serf_bind_port = 17001
