@@ -439,8 +439,22 @@ func (c *Cluster) monitorLeadership() {
 	leaderCh := c.raft.LeaderCh()
 	for {
 		select {
-		case <-leaderCh:
+		case isLeader := <-leaderCh:
 			c.leaderReady.Store(false)
+			leaderAddr, leaderID := c.raft.LeaderWithID()
+			if isLeader {
+				slog.Info("[raftcluster]",
+					slog.String("message", "cluster leadership acquired"),
+					slog.String("namespace", c.namespace),
+					slog.String("leader_addr", string(leaderAddr)),
+					slog.String("leader_id", string(leaderID)))
+			} else {
+				slog.Info("[raftcluster]",
+					slog.String("message", "cluster leadership lost"),
+					slog.String("namespace", c.namespace),
+					slog.String("leader_addr", string(leaderAddr)),
+					slog.String("leader_id", string(leaderID)))
+			}
 		case <-c.leaderStopCh:
 			return
 		}
