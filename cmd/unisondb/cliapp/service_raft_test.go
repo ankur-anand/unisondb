@@ -275,3 +275,21 @@ func TestRaftService_CloseAllEmpty(t *testing.T) {
 
 	svc.closeAll()
 }
+
+func TestRaftService_SetupRejectsReadOnlyModes(t *testing.T) {
+	svc := &RaftService{}
+	deps := &Dependencies{
+		Mode: modeReplica,
+		Config: config.Config{
+			RaftConfig: config.RaftConfig{
+				Enabled:  true,
+				NodeID:   "node1",
+				BindAddr: "127.0.0.1:0",
+			},
+		},
+	}
+
+	err := svc.Setup(context.Background(), deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot enable raft")
+}

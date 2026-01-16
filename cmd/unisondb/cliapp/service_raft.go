@@ -96,6 +96,9 @@ func (r *RaftService) Setup(ctx context.Context, deps *Dependencies) error {
 		r.enabled = false
 		return nil
 	}
+	if deps.Mode == modeReplica || deps.Mode == modeRelay {
+		return fmt.Errorf("raft: cannot enable raft in %s mode", deps.Mode)
+	}
 
 	if cfg.NodeID == "" {
 		return errors.New("raft: node_id is required")

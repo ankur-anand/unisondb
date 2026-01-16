@@ -208,6 +208,25 @@ func TestSetupStorageConfigClampsAndOptions(t *testing.T) {
 	}
 }
 
+func TestSetupStorageConfigRejectsRaftInReadOnlyMode(t *testing.T) {
+	s := &Server{
+		mode: modeReplica,
+		cfg: config.Config{
+			RaftConfig: config.RaftConfig{
+				Enabled: true,
+			},
+		},
+	}
+
+	err := s.SetupStorageConfig(context.Background())
+	if err == nil {
+		t.Fatal("expected error when raft enabled in read-only mode")
+	}
+	if !strings.Contains(err.Error(), "cannot enable raft") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSetupStorageConfigWriteNotifyInvalid(t *testing.T) {
 	s := &Server{
 		cfg: config.Config{
