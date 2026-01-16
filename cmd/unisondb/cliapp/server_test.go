@@ -174,10 +174,9 @@ func TestSetupStorageConfigClampsAndOptions(t *testing.T) {
 	s := &Server{
 		cfg: config.Config{
 			Storage: config.StorageConfig{
-				SegmentSize:           "1MB",
-				BytesPerSync:          "128",
-				ArenaSize:             "512KB",
-				DisableEntryTypeCheck: true,
+				SegmentSize:  "1MB",
+				BytesPerSync: "128",
+				ArenaSize:    "512KB",
 			},
 		},
 	}
@@ -203,9 +202,6 @@ func TestSetupStorageConfigClampsAndOptions(t *testing.T) {
 		t.Fatalf("ArenaSize = %d, want %d", s.storageConfig.ArenaSize, 1<<20)
 	}
 
-	if !s.storageConfig.DisableEntryTypeCheck {
-		t.Fatalf("DisableEntryTypeCheck expected true")
-	}
 }
 
 func TestSetupStorageConfigRejectsRaftInReadOnlyMode(t *testing.T) {

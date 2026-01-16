@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -190,49 +191,97 @@ func (ms *Server) SetupStorageConfig(ctx context.Context) error {
 
 	storeConfig := dbkernel.NewDefaultEngineConfig()
 
-	if ms.cfg.Storage.WalFsyncInterval != "" {
-		duration, err := time.ParseDuration(ms.cfg.Storage.WalFsyncInterval)
+	if err := applyWalConfig(storeConfig, ms.cfg.Storage); err != nil {
+		return err
+	}
+	if err := applyEngineConfig(storeConfig, ms.cfg.Storage); err != nil {
+		return err
+	}
+	if err := applyWriteNotifyConfig(storeConfig, ms.cfg.WriteNotifyConfig); err != nil {
+		return err
+	}
+	ms.storageConfig = storeConfig
+	return ms.setupWalCleanup(ctx)
+}
+
+func applyWalConfig(storeConfig *dbkernel.EngineConfig, cfg config.StorageConfig) error {
+	if cfg.WalFsyncInterval != "" {
+		duration, err := time.ParseDuration(cfg.WalFsyncInterval)
 		if err != nil {
 			return err
 		}
 		storeConfig.WalConfig.SyncInterval = duration
 	}
 
-	if ms.cfg.Storage.SegmentSize != "" {
-		original := etc.ParseSize(ms.cfg.Storage.SegmentSize)
+	if cfg.SegmentSize != "" {
+		original := etc.ParseSize(cfg.SegmentSize)
 		value := clampInt64(original, 4<<20, math.MaxInt64)
 		logClamped("SegmentSize", original, value)
 		storeConfig.WalConfig.SegmentSize = value
 	}
 
-	if ms.cfg.Storage.BytesPerSync != "" {
-		original := etc.ParseSize(ms.cfg.Storage.BytesPerSync)
+	if cfg.BytesPerSync != "" {
+		original := etc.ParseSize(cfg.BytesPerSync)
 		value := clampToUint32(original, 512)
 		logClamped("BytesPerSync", original, int64(value))
 		storeConfig.WalConfig.BytesPerSync = value
 	}
+	return nil
+}
 
-	if ms.cfg.Storage.ArenaSize != "" {
-		original := etc.ParseSize(ms.cfg.Storage.ArenaSize)
+func applyEngineConfig(storeConfig *dbkernel.EngineConfig, cfg config.StorageConfig) error {
+	if cfg.ArenaSize != "" {
+		original := etc.ParseSize(cfg.ArenaSize)
 		value := clampInt64(original, 1<<20, math.MaxInt64)
 		logClamped("ArenaSize", original, value)
 		storeConfig.ArenaSize = value
 	}
 
-	if ms.cfg.WriteNotifyConfig.Enabled {
-		dur, err := time.ParseDuration(ms.cfg.WriteNotifyConfig.MaxDelay)
+	if cfg.DBEngine != "" {
+		engine := strings.ToUpper(strings.TrimSpace(cfg.DBEngine))
+		switch engine {
+		case string(dbkernel.BoltDBEngine), string(dbkernel.LMDBEngine):
+			storeConfig.DBEngine = dbkernel.DBEngine(engine)
+		default:
+			return fmt.Errorf("invalid storage db_engine: %q", cfg.DBEngine)
+		}
+	}
+
+	if cfg.BtreeFlushInterval != "" {
+		dur, err := time.ParseDuration(cfg.BtreeFlushInterval)
 		if err != nil {
 			return err
 		}
-		if dur <= 1 {
-			return errors.New("invalid value for write notify config: max delay must be greater than 1")
-		}
-		storeConfig.WriteNotifyCoalescing.Enabled = true
-		storeConfig.WriteNotifyCoalescing.Duration = dur
+		storeConfig.BTreeFlushInterval = dur
 	}
-	storeConfig.DisableEntryTypeCheck = ms.cfg.Storage.DisableEntryTypeCheck
-	ms.storageConfig = storeConfig
-	return ms.setupWalCleanup(ctx)
+
+	if cfg.BtreeConfig.MmapSize != "" {
+		original := etc.ParseSize(cfg.BtreeConfig.MmapSize)
+		value := clampInt64(original, 1<<30, math.MaxInt64)
+		logClamped("BtreeMmapSize", original, value)
+		storeConfig.BtreeConfig.MmapSize = value
+	}
+
+	if cfg.BtreeConfig.NoSync != nil {
+		storeConfig.BtreeConfig.NoSync = *cfg.BtreeConfig.NoSync
+	}
+	return nil
+}
+
+func applyWriteNotifyConfig(storeConfig *dbkernel.EngineConfig, cfg config.WriteNotifyConfig) error {
+	if !cfg.Enabled {
+		return nil
+	}
+	dur, err := time.ParseDuration(cfg.MaxDelay)
+	if err != nil {
+		return err
+	}
+	if dur <= 1 {
+		return errors.New("invalid value for write notify config: max delay must be greater than 1")
+	}
+	storeConfig.WriteNotifyCoalescing.Enabled = true
+	storeConfig.WriteNotifyCoalescing.Duration = dur
+	return nil
 }
 
 func (ms *Server) setupWalCleanup(_ context.Context) error {

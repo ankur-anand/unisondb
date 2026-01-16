@@ -16,12 +16,16 @@ namespaces = ["default", "tenant_1", "tenant_2", "tenant_3", "tenant_4"]
 bytes_per_sync = "1MB"
 segment_size = "16MB"
 arena_size = "4MB"
-# event_log_mode: when true, only events are accepted (no KV/Row writes or transactions)
-event_log_mode = false
+db_engine = "LMDB"               # LMDB or BOLT
+btree_flush_interval = "0s"      # >= 1s enables periodic B-tree flush
 
 [write_notify_config]
 enabled = false
 max_delay = "20ms"
+
+[storage_config.btree_config]
+no_sync = true
+mmap_size = "4GB"
 
 [storage_config.wal_cleanup_config]
 interval = "5m"
