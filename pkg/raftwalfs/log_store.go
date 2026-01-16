@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,8 +44,10 @@ type LogStore struct {
 
 	index *walfs.ShardedIndex
 
-	closed   atomic.Bool
-	closedCh chan struct{}
+	// ref counting
+	closing       atomic.Bool
+	activeReaders atomic.Int64
+	closedCh      chan struct{}
 }
 
 // NewLogStore creates a new LogStore backed by the provided WAL.
@@ -97,7 +100,7 @@ func (l *LogStore) recoverIndex() error {
 
 // FirstIndex returns the first index written.
 func (l *LogStore) FirstIndex() (uint64, error) {
-	if l.closed.Load() {
+	if l.closing.Load() {
 		return 0, ErrClosed
 	}
 	return l.firstIndex.Load(), nil
@@ -105,7 +108,7 @@ func (l *LogStore) FirstIndex() (uint64, error) {
 
 // LastIndex returns the last index written.
 func (l *LogStore) LastIndex() (uint64, error) {
-	if l.closed.Load() {
+	if l.closing.Load() {
 		return 0, ErrClosed
 	}
 	return l.lastIndex.Load(), nil
@@ -113,7 +116,15 @@ func (l *LogStore) LastIndex() (uint64, error) {
 
 // GetLog returns the *raft.Log at the given Index.
 func (l *LogStore) GetLog(index uint64, out *raft.Log) error {
-	if l.closed.Load() {
+	if l.closing.Load() {
+		return ErrClosed
+	}
+
+	// ref counting
+	l.activeReaders.Add(1)
+	defer l.activeReaders.Add(-1)
+
+	if l.closing.Load() {
 		return ErrClosed
 	}
 
@@ -139,6 +150,17 @@ func (l *LogStore) GetLog(index uint64, out *raft.Log) error {
 		return fmt.Errorf("decode log at index %d: %w", index, err)
 	}
 
+	if len(decoded.Data) > 0 {
+		dat := make([]byte, len(decoded.Data))
+		copy(dat, decoded.Data)
+		decoded.Data = dat
+	}
+	if len(decoded.Extensions) > 0 {
+		ext := make([]byte, len(decoded.Extensions))
+		copy(ext, decoded.Extensions)
+		decoded.Extensions = ext
+	}
+
 	*out = decoded
 	return nil
 }
@@ -156,7 +178,7 @@ func (l *LogStore) StoreLogs(logs []*raft.Log) error {
 		return nil
 	}
 
-	if l.closed.Load() {
+	if l.closing.Load() {
 		return ErrClosed
 	}
 
@@ -242,7 +264,7 @@ func (l *LogStore) DeleteRange(min, max uint64) error {
 		return nil
 	}
 
-	if l.closed.Load() {
+	if l.closing.Load() {
 		return ErrClosed
 	}
 
@@ -301,17 +323,24 @@ func (l *LogStore) CommitPosition(pos walfs.RecordPosition) {
 }
 
 // Close closes the log store.
+// wal uses mmap so we use ref counting as safe coordinator.
 func (l *LogStore) Close() error {
-	if l.closed.Swap(true) {
+	if l.closing.Swap(true) {
 		return nil
 	}
+
+	// we are spin waiting here which should be acceptable here as Close() is rare and readers are fast.
+	for l.activeReaders.Load() > 0 {
+		runtime.Gosched()
+	}
+
 	close(l.closedCh)
 	return nil
 }
 
 // Sync syncs the underlying WAL to disk.
 func (l *LogStore) Sync() error {
-	if l.closed.Load() {
+	if l.closing.Load() {
 		return ErrClosed
 	}
 	return l.wal.Sync()
@@ -329,7 +358,7 @@ func (l *LogStore) IsMonotonic() bool {
 
 // GetPosition returns the WAL position for a given log index.
 func (l *LogStore) GetPosition(index uint64) (walfs.RecordPosition, bool) {
-	if l.closed.Load() {
+	if l.closing.Load() {
 		return walfs.RecordPosition{}, false
 	}
 	return l.index.Get(index)

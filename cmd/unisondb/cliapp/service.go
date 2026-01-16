@@ -28,6 +28,12 @@ type PortReporter interface {
 // Services are setup in registration order and closed in reverse order.
 func (ms *Server) Register(svc Service) {
 	ms.services = append(ms.services, svc)
+	if ms.deps == nil {
+		return
+	}
+	if raftSvc, ok := svc.(*RaftService); ok {
+		ms.deps.RaftService = raftSvc
+	}
 }
 
 func (ms *Server) SetupServices(ctx context.Context) error {

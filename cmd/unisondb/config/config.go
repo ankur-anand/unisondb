@@ -52,6 +52,12 @@ type RaftConfig struct {
 	SnapshotInterval  string `toml:"snapshot_interval"`
 	SnapshotThreshold uint64 `toml:"snapshot_threshold"`
 	SnapshotRetain    int    `toml:"snapshot_retain"`
+
+	// Serf membership settings
+	SerfBindAddr  string   `toml:"serf_bind_addr"`
+	SerfBindPort  int      `toml:"serf_bind_port"`
+	SerfPeers     []string `toml:"serf_peers"`
+	SerfSecretKey string   `toml:"serf_secret_key"`
 }
 
 // RaftPeer represents a peer node in the Raft cluster.

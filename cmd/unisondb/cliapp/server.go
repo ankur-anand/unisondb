@@ -184,6 +184,10 @@ func (ms *Server) InitTelemetry(ctx context.Context) error {
 }
 
 func (ms *Server) SetupStorageConfig(ctx context.Context) error {
+	if ms.cfg.RaftConfig.Enabled && (ms.mode == modeReplica || ms.mode == modeRelay) {
+		return fmt.Errorf("raft: cannot enable raft in %s mode", ms.mode)
+	}
+
 	storeConfig := dbkernel.NewDefaultEngineConfig()
 
 	if ms.cfg.Storage.WalFsyncInterval != "" {

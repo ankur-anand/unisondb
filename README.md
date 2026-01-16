@@ -17,8 +17,9 @@ UnisonDB is an open-source database designed specifically for [**Edge AI**](http
 It is a **reactive**, [**log-native**](https://www.unisondb.io/docs/architecture/) and [**multi-model database**](https://en.wikipedia.org/wiki/Multi-model_database) built for real-time and edge-scale applications.  UnisonDB combines a [**B+Tree storage engine**](https://en.wikipedia.org/wiki/B%2B_tree) with WAL-based ([**Write-Ahead Logging**](https://en.wikipedia.org/wiki/Write-ahead_logging)) streaming replication, enabling near-instant fan-out replication across hundreds of nodes — all while preserving strong consistency and durability.
 
 ## Key Features
+- **High Availability Writes**: Raft consensus on write servers (quorum acks); relayer/replica use in-sync replica (ISR) replication
+- **Streaming Replication**: In-sync replica (ISR)-based WAL streaming with sub-second fan-out to 1000+ edge replicas
 - **Multi-Modal Storage**: Key-Value, Wide-Column, and Large Objects (LOB)
-- **Streaming Replication**: WAL-based replication with sub-second fan-out to 100+ edge replicas
 - **Real-Time Notifications**: ZeroMQ-based(Side-car) change notifications with sub-millisecond latency
 - **Durable**: B+Tree storage with Write-Ahead Logging
 - **Edge-First Design**: Optimized for edge computing and local-first architectures
@@ -507,4 +508,3 @@ mkcert -key-file grpc.key -cert-file grpc.crt localhost 127.0.0.1 ::1
 ## Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=ankur-anand/unisondb&type=date&legend=top-left)](https://www.star-history.com/#ankur-anand/unisondb&type=date&legend=top-left)
-
