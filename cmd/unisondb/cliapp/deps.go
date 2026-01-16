@@ -24,4 +24,7 @@ type Dependencies struct {
 	Logger       *slog.Logger
 	FuzzStats    *fuzzer.FuzzStats
 	StatsHandler *grpcutils.GRPCStatsHandler
+
+	// Raft
+	RaftService *RaftService
 }

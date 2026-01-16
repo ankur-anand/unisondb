@@ -1,11 +1,15 @@
 package cliapp
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/ankur-anand/unisondb/cmd/unisondb/config"
+	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/pkg/raftwalfs"
 	"github.com/hashicorp/raft"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -63,6 +67,81 @@ func TestRaftService_SetupMissingBindAddr(t *testing.T) {
 	err := svc.Setup(context.Background(), deps)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bind_addr is required")
+}
+
+func TestRaftService_SetupRejectsPeersWithSerf(t *testing.T) {
+	svc := &RaftService{}
+	deps := &Dependencies{
+		Config: config.Config{
+			RaftConfig: config.RaftConfig{
+				Enabled:      true,
+				NodeID:       "node1",
+				BindAddr:     "127.0.0.1:0",
+				SerfBindAddr: "127.0.0.1",
+				SerfBindPort: 7946,
+				Peers: []config.RaftPeer{
+					{ID: "node2", Address: "127.0.0.1:5001"},
+				},
+			},
+		},
+	}
+
+	err := svc.Setup(context.Background(), deps)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "peers cannot be set when serf membership is enabled")
+}
+
+func TestRaftService_SetupSkipsBootstrapWhenExistingState(t *testing.T) {
+	baseDir := t.TempDir()
+	namespace := "test"
+
+	engineCfg := dbkernel.NewDefaultEngineConfig()
+	engineCfg.WalConfig.RaftMode = true
+
+	engine, err := dbkernel.NewStorageEngine(baseDir, namespace, engineCfg)
+	require.NoError(t, err)
+	defer engine.Close(context.Background())
+
+	codec := raftwalfs.BinaryCodecV1{DataMutator: raftwalfs.LogRecordMutator{}}
+	logStore, err := raftwalfs.NewLogStore(engine.WAL(), 0, raftwalfs.WithCodec(codec))
+	require.NoError(t, err)
+	require.NoError(t, logStore.StoreLog(&raft.Log{
+		Index: 1,
+		Term:  1,
+		Type:  raft.LogNoop,
+	}))
+	require.NoError(t, logStore.Close())
+
+	var buf bytes.Buffer
+	prevLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})))
+	defer slog.SetDefault(prevLogger)
+
+	svc := &RaftService{}
+	deps := &Dependencies{
+		Config: config.Config{
+			Storage: config.StorageConfig{
+				BaseDir: baseDir,
+			},
+			RaftConfig: config.RaftConfig{
+				Enabled:   true,
+				NodeID:    "node1",
+				BindAddr:  "127.0.0.1:0",
+				Bootstrap: true,
+			},
+		},
+		Engines: map[string]*dbkernel.Engine{
+			namespace: engine,
+		},
+	}
+
+	err = svc.Setup(context.Background(), deps)
+	require.NoError(t, err)
+	defer svc.Close(context.Background())
+
+	assert.NotContains(t, buf.String(), "Bootstrap failed (may already be bootstrapped)")
 }
 
 func TestRaftService_GetClusterUnknown(t *testing.T) {
