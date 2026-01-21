@@ -7,7 +7,6 @@ import (
 	"hash/crc32"
 	"log"
 	"log/slog"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,8 +30,7 @@ import (
 )
 
 const (
-	minArenaSize            = 1024 * 200
-	keyVersionEvictInterval = time.Minute
+	minArenaSize = 1024 * 200
 )
 
 var (
@@ -125,8 +123,6 @@ type Engine struct {
 	opsFlushedCounter atomic.Uint64
 	currentOffset     atomic.Pointer[wal.Offset]
 	namespace         string
-	keyVersions       map[string]uint64
-	activeTxnBegins   map[uint64]int
 	dataStore         internal.BTreeStore
 	walIO             *wal.WalIO
 	walSyncer         walSyncer
@@ -206,8 +202,6 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		taggedScope:               taggedScope,
 		changeNotifier:            chNotifier,
 		coalesceDuration:          conf.WriteNotifyCoalescing.Duration,
-		keyVersions:               make(map[string]uint64),
-		activeTxnBegins:           make(map[uint64]int),
 	}
 	engine.backupRoot = filepath.Join(dataDir, BackupRootDirName)
 	engine.backupNamespaceRoot = filepath.Join(engine.backupRoot, namespace)
@@ -223,7 +217,6 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 	engine.asyncMemTableFlusher(ctx)
 	engine.syncWalAtInterval(ctx)
 	engine.fsyncBtreeAtInterval(ctx)
-	engine.startKeyVersionEvicter(ctx)
 
 	if err := engine.loadMetaValues(); err != nil {
 		return nil, err
@@ -558,7 +551,6 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 		}
 	}
 
-	e.recordKeyVersions(keys, index)
 	e.writeOffset(offset)
 	return nil
 }
@@ -636,7 +628,6 @@ func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [
 		}
 	}
 
-	e.recordKeyVersions(rowKeys, index)
 	e.writeOffset(offset)
 	return nil
 }
@@ -721,98 +712,6 @@ func decodeOperation(v y.ValueStruct) logrecord.LogOperationType {
 
 func decodeEntryType(v y.ValueStruct) logrecord.LogEntryType {
 	return logrecord.LogEntryType(v.UserMeta)
-}
-
-// recordKeyVersions updates the latest committed LSN for the provided keys.
-func (e *Engine) recordKeyVersions(keys [][]byte, lsn uint64) {
-	if e.keyVersions == nil {
-		e.keyVersions = make(map[string]uint64)
-	}
-	for _, key := range keys {
-		e.keyVersions[string(key)] = lsn
-	}
-}
-
-// checkKeyConflicts returns an error if any of the provided keys have a committed
-// LSN greater than the provided startLSN.
-func (e *Engine) checkKeyConflicts(keys [][]byte, startLSN uint64) error {
-	for _, key := range keys {
-		if lsn, ok := e.keyVersions[string(key)]; ok && lsn > startLSN {
-			return ErrTxnConflict
-		}
-	}
-	return nil
-}
-
-// registerTxnBegin tracks the begin LSN for an active transaction.
-func (e *Engine) registerTxnBegin(lsn uint64) {
-	e.activeTxnBegins[lsn]++
-}
-
-// unregisterTxnBegin removes the begin LSN for an active transaction.
-func (e *Engine) unregisterTxnBegin(lsn uint64) {
-	if count, ok := e.activeTxnBegins[lsn]; ok {
-		if count <= 1 {
-			delete(e.activeTxnBegins, lsn)
-			return
-		}
-		e.activeTxnBegins[lsn] = count - 1
-	}
-}
-
-// minActiveTxnBegin returns the smallest begin LSN across active txns.
-// If there are no active txns, MaxUint64 is returned.
-func (e *Engine) minActiveTxnBegin() uint64 {
-	if len(e.activeTxnBegins) == 0 {
-		return math.MaxUint64
-	}
-	min := uint64(math.MaxUint64)
-	for lsn := range e.activeTxnBegins {
-		if lsn < min {
-			min = lsn
-		}
-	}
-	return min
-}
-
-// evictKeyVersions removes version entries that are older than the oldest active txn.
-func (e *Engine) evictKeyVersions() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	if len(e.keyVersions) == 0 {
-		return
-	}
-
-	minBegin := e.minActiveTxnBegin()
-	if minBegin == math.MaxUint64 {
-		// no active txns, clear all to keep the map bounded.
-		e.keyVersions = make(map[string]uint64)
-		return
-	}
-
-	for key, version := range e.keyVersions {
-		if version <= minBegin {
-			delete(e.keyVersions, key)
-		}
-	}
-}
-
-func (e *Engine) startKeyVersionEvicter(ctx context.Context) {
-	e.wg.Add(1)
-	go func() {
-		defer e.wg.Done()
-		ticker := time.NewTicker(keyVersionEvictInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				e.evictKeyVersions()
-			}
-		}
-	}()
 }
 
 // used for testing purposes.
