@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ankur-anand/unisondb/pkg/raftwalfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/hashicorp/raft"
 	"github.com/stretchr/testify/assert"
@@ -45,6 +46,40 @@ func setupRaftTxnTestEngine(t *testing.T) (*Engine, *raft.Raft, func()) {
 	}
 
 	return engine, r, cleanup
+}
+
+func setupRaftTxnTestEngineWithCodec(t *testing.T, codec raftwalfs.Codec) (*Engine, *raft.Raft, *raftwalfs.LogStore, func()) {
+	t.Helper()
+
+	dir := t.TempDir()
+	namespace := "test_raft_txn_codec"
+
+	conf := NewDefaultEngineConfig()
+	conf.DBEngine = LMDBEngine
+	conf.BtreeConfig.Namespace = namespace
+	conf.WalConfig.RaftMode = true
+	conf.WalConfig.AutoCleanup = false
+
+	engine, err := NewStorageEngine(dir, namespace, conf)
+	require.NoError(t, err)
+
+	r, logStore, raftCleanup := setupSingleNodeRaftWithEngineWALCodec(t, engine, codec)
+
+	engine.SetPositionLookup(logStore.GetPosition)
+	engine.SetRaftApplier(&raftApplierWrapper{
+		raft:    r,
+		timeout: 5 * time.Second,
+	})
+	engine.SetRaftMode(true)
+
+	cleanup := func() {
+		raftCleanup()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = engine.Close(ctx)
+	}
+
+	return engine, r, logStore, cleanup
 }
 
 func requireKVValue(t *testing.T, engine *Engine, key, expected []byte) {
@@ -373,4 +408,45 @@ func TestRaftTxn_ConcurrentTransactions(t *testing.T) {
 			requireKVValue(t, engine, key, expectedValue)
 		}
 	}
+}
+
+func TestRaftTxn_LSNMutatedByRaft(t *testing.T) {
+	codec := raftwalfs.BinaryCodecV1{DataMutator: raftwalfs.LogRecordMutator{}}
+	engine, _, logStore, cleanup := setupRaftTxnTestEngineWithCodec(t, codec)
+	defer cleanup()
+
+	txn, err := engine.NewRaftTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
+	require.NoError(t, err)
+
+	err = txn.AppendKV([]byte("key1"), []byte("value1"))
+	require.NoError(t, err)
+
+	err = txn.Commit()
+	require.NoError(t, err)
+
+	lastIndex, err := logStore.LastIndex()
+	require.NoError(t, err)
+
+	foundTxn := false
+	foundCommit := false
+	for index := txn.BeginRaftIndex(); index <= lastIndex; index++ {
+		var raftLog raft.Log
+		require.NoError(t, logStore.GetLog(index, &raftLog))
+		if raftLog.Type != raft.LogCommand || len(raftLog.Data) == 0 {
+			continue
+		}
+
+		record := logrecord.GetRootAsLogRecord(raftLog.Data, 0)
+		if !bytes.Equal(record.TxnIdBytes(), txn.TxnID()) {
+			continue
+		}
+		foundTxn = true
+		assert.Equal(t, index, record.Lsn())
+		if record.TxnState() == logrecord.TransactionStateCommit {
+			foundCommit = true
+		}
+	}
+
+	assert.True(t, foundTxn, "expected to find txn records in raft log")
+	assert.True(t, foundCommit, "expected to find commit record in raft log")
 }
