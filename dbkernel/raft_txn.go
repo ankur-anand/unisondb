@@ -38,6 +38,8 @@ type RaftTxn struct {
 	startTime       time.Time
 }
 
+var _ Transaction = (*RaftTxn)(nil)
+
 // NewRaftTxn creates a new transaction in Raft mode.
 func (e *Engine) NewRaftTxn(op logrecord.LogOperationType, entryType logrecord.LogEntryType) (*RaftTxn, error) {
 	if !e.raftState.raftMode {
@@ -97,8 +99,8 @@ func (e *Engine) NewRaftTxn(op logrecord.LogOperationType, entryType logrecord.L
 	}, nil
 }
 
-// AppendKV appends a key-value pair to the transaction.
-func (t *RaftTxn) AppendKV(key, value []byte) error {
+// AppendKVTxn appends a key-value pair to the transaction.
+func (t *RaftTxn) AppendKVTxn(key, value []byte) error {
 	if err := t.checkState(); err != nil {
 		return err
 	}
@@ -123,8 +125,8 @@ func (t *RaftTxn) AppendKV(key, value []byte) error {
 	return t.appendEntry(key, value)
 }
 
-// AppendRowColumn appends a row with columns to the transaction.
-func (t *RaftTxn) AppendRowColumn(rowKey []byte, columns map[string][]byte) error {
+// AppendColumnTxn appends a row with columns to the transaction.
+func (t *RaftTxn) AppendColumnTxn(rowKey []byte, columns map[string][]byte) error {
 	if err := t.checkState(); err != nil {
 		return err
 	}
@@ -146,7 +148,7 @@ func (t *RaftTxn) AppendChunk(key, chunkData []byte) error {
 	if t.entryType != logrecord.LogEntryTypeChunked {
 		return ErrUnsupportedTxnType
 	}
-	return t.AppendKV(key, chunkData)
+	return t.AppendKVTxn(key, chunkData)
 }
 
 // appendEntry is the internal method that creates and proposes a Prepare record.

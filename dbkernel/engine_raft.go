@@ -185,7 +185,6 @@ func (e *Engine) getRaftTransactionRecords(startOffset *wal.Offset) ([][]byte, e
 
 	var records [][]byte
 	nextOffset := startOffset
-	decoder := wal.NewRaftWALDecoder(nil)
 
 	for {
 		walEntry, err := e.walIO.Read(nextOffset)
@@ -193,7 +192,7 @@ func (e *Engine) getRaftTransactionRecords(startOffset *wal.Offset) ([][]byte, e
 			return nil, fmt.Errorf("failed to read WAL at offset %+v: %w", nextOffset, err)
 		}
 
-		logData, err := decoder.Decode(walEntry)
+		logData, err := e.walIO.DecodeRecord(walEntry)
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode Raft WAL entry: %w", err)
 		}

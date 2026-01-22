@@ -1755,3 +1755,87 @@ func TestEngine_ApplyRaftTxnStateUnknown_DoesNotApplyRecord(t *testing.T) {
 	_, err := engine.GetKV([]byte("key1"))
 	assert.ErrorIs(t, err, ErrKeyNotFound)
 }
+
+func setupRaftTxnReaderEngine(t *testing.T) (*Engine, func()) {
+	t.Helper()
+
+	dir := t.TempDir()
+	namespace := "txn_reader_raft"
+
+	conf := NewDefaultEngineConfig()
+	conf.DBEngine = LMDBEngine
+	conf.BtreeConfig.Namespace = namespace
+	conf.WalConfig.RaftMode = true
+	conf.WalConfig.AutoCleanup = false
+
+	engine, err := NewStorageEngine(dir, namespace, conf)
+	require.NoError(t, err)
+
+	r, logStore, raftCleanup := setupSingleNodeRaftWithEngineWAL(t, engine)
+	engine.SetPositionLookup(logStore.GetPosition)
+	engine.SetRaftApplier(&raftApplierWrapper{
+		raft:    r,
+		timeout: 5 * time.Second,
+	})
+	engine.SetWALCommitCallback(logStore.CommitPosition)
+	engine.SetRaftMode(true)
+
+	cleanup := func() {
+		raftCleanup()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = engine.Close(ctx)
+	}
+
+	return engine, cleanup
+}
+
+func TestRaftTxnReaderReturnsDecodedChunkedCommit(t *testing.T) {
+	engine, cleanup := setupRaftTxnReaderEngine(t)
+	defer cleanup()
+
+	txn, err := engine.NewTransaction(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
+	require.NoError(t, err)
+
+	err = txn.AppendKVTxn([]byte("lob-key"), []byte("chunk1-"))
+	require.NoError(t, err)
+	err = txn.AppendKVTxn([]byte("lob-key"), []byte("chunk2"))
+	require.NoError(t, err)
+
+	err = txn.Commit()
+	require.NoError(t, err)
+
+	reader, err := engine.NewReader()
+	require.NoError(t, err)
+	defer reader.Close()
+
+	expectedKey := keycodec.KeyBlobChunk([]byte("lob-key"), 0)
+	found := false
+
+	for {
+		data, _, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+
+		record := logrecord.GetRootAsLogRecord(data, 0)
+		if record.OperationType() == logrecord.LogOperationTypeRaftInternal {
+			continue
+		}
+		if !bytes.Equal(record.TxnIdBytes(), txn.TxnID()) {
+			continue
+		}
+
+		if record.TxnState() == logrecord.TransactionStateCommit && record.EntryType() == logrecord.LogEntryTypeChunked {
+			logEntry := logcodec.DeserializeFBRootLogRecord(record)
+			require.Len(t, logEntry.Entries, 1)
+			kv := logcodec.DeserializeKVEntry(logEntry.Entries[0])
+			require.Equal(t, expectedKey, kv.Key)
+			found = true
+			break
+		}
+	}
+
+	require.True(t, found, "expected decoded chunked commit record from reader")
+}

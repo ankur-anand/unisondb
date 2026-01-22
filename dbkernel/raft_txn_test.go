@@ -111,10 +111,10 @@ func TestRaftTxn_BasicKVTransaction(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, txn)
 
-	err = txn.AppendKV([]byte("key1"), []byte("value1"))
+	err = txn.AppendKVTxn([]byte("key1"), []byte("value1"))
 	require.NoError(t, err)
 
-	err = txn.AppendKV([]byte("key2"), []byte("value2"))
+	err = txn.AppendKVTxn([]byte("key2"), []byte("value2"))
 	require.NoError(t, err)
 	assert.Equal(t, 2, txn.ValuesCount())
 
@@ -134,7 +134,7 @@ func TestRaftTxn_NonTxnWriteOrdering(t *testing.T) {
 	txn, err := engine.NewRaftTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
 	require.NoError(t, err)
 
-	err = txn.AppendKV([]byte("conflictKey"), []byte("txnValue"))
+	err = txn.AppendKVTxn([]byte("conflictKey"), []byte("txnValue"))
 	require.NoError(t, err)
 	err = engine.PutKV([]byte("conflictKey"), []byte("nonTxnValue"))
 	require.NoError(t, err)
@@ -155,9 +155,9 @@ func TestRaftTxn_OverlappingTransactionsOrdering(t *testing.T) {
 	txn2, err := engine.NewRaftTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
 	require.NoError(t, err)
 
-	err = txn1.AppendKV([]byte("sharedKey"), []byte("value1"))
+	err = txn1.AppendKVTxn([]byte("sharedKey"), []byte("value1"))
 	require.NoError(t, err)
-	err = txn2.AppendKV([]byte("sharedKey"), []byte("value2"))
+	err = txn2.AppendKVTxn([]byte("sharedKey"), []byte("value2"))
 	require.NoError(t, err)
 
 	err = txn2.Commit()
@@ -176,7 +176,7 @@ func TestRaftTxn_Abort(t *testing.T) {
 	txn, err := engine.NewRaftTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
 	require.NoError(t, err)
 
-	err = txn.AppendKV([]byte("abortedKey"), []byte("abortedValue"))
+	err = txn.AppendKVTxn([]byte("abortedKey"), []byte("abortedValue"))
 	require.NoError(t, err)
 	txn.Abort()
 
@@ -197,7 +197,7 @@ func TestRaftTxn_RowTransaction(t *testing.T) {
 		"col1": []byte("val1"),
 		"col2": []byte("val2"),
 	}
-	err = txn.AppendRowColumn([]byte("row1"), columns)
+	err = txn.AppendColumnTxn([]byte("row1"), columns)
 	require.NoError(t, err)
 
 	err = txn.Commit()
@@ -215,7 +215,7 @@ func TestRaftTxn_MultipleKeys(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		key := []byte(string(rune('a' + i)))
 		value := []byte(string(rune('A' + i)))
-		err = txn.AppendKV(key, value)
+		err = txn.AppendKVTxn(key, value)
 		require.NoError(t, err)
 	}
 
@@ -271,14 +271,14 @@ func TestRaftTxn_WrongMethodForEntryType(t *testing.T) {
 	kvTxn, err := engine.NewRaftTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
 	require.NoError(t, err)
 
-	err = kvTxn.AppendRowColumn([]byte("row"), map[string][]byte{"col": []byte("val")})
+	err = kvTxn.AppendColumnTxn([]byte("row"), map[string][]byte{"col": []byte("val")})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnsupportedTxnType)
 	kvTxn.Abort()
 	rowTxn, err := engine.NewRaftTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeRow)
 	require.NoError(t, err)
 
-	err = rowTxn.AppendKV([]byte("key"), []byte("val"))
+	err = rowTxn.AppendKVTxn([]byte("key"), []byte("val"))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnsupportedTxnType)
 	rowTxn.Abort()
@@ -320,7 +320,7 @@ func TestRaftTxn_EmptyColumns(t *testing.T) {
 	txn, err := engine.NewRaftTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeRow)
 	require.NoError(t, err)
 
-	err = txn.AppendRowColumn([]byte("row"), map[string][]byte{})
+	err = txn.AppendColumnTxn([]byte("row"), map[string][]byte{})
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrEmptyColumns)
 	txn.Abort()
@@ -333,7 +333,7 @@ func TestRaftTxn_DoubleCommit(t *testing.T) {
 	txn, err := engine.NewRaftTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
 	require.NoError(t, err)
 
-	err = txn.AppendKV([]byte("key"), []byte("value"))
+	err = txn.AppendKVTxn([]byte("key"), []byte("value"))
 	require.NoError(t, err)
 	err = txn.Commit()
 	require.NoError(t, err)
@@ -351,7 +351,7 @@ func TestRaftTxn_OperationAfterAbort(t *testing.T) {
 	require.NoError(t, err)
 
 	txn.Abort()
-	err = txn.AppendKV([]byte("key"), []byte("value"))
+	err = txn.AppendKVTxn([]byte("key"), []byte("value"))
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrTxnAborted)
 }
@@ -380,7 +380,7 @@ func TestRaftTxn_ConcurrentTransactions(t *testing.T) {
 			for j := 0; j < keysPerTxn; j++ {
 				key := []byte(string(rune('a'+txnNum)) + string(rune('0'+j)))
 				value := []byte(string(rune('A'+txnNum)) + string(rune('0'+j)))
-				if err := txn.AppendKV(key, value); err != nil {
+				if err := txn.AppendKVTxn(key, value); err != nil {
 					txn.Abort()
 					errors <- err
 					return
@@ -418,7 +418,7 @@ func TestRaftTxn_LSNMutatedByRaft(t *testing.T) {
 	txn, err := engine.NewRaftTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
 	require.NoError(t, err)
 
-	err = txn.AppendKV([]byte("key1"), []byte("value1"))
+	err = txn.AppendKVTxn([]byte("key1"), []byte("value1"))
 	require.NoError(t, err)
 
 	err = txn.Commit()

@@ -45,7 +45,7 @@ type Service struct {
 
 // transactionState holds the state of an active transaction.
 type transactionState struct {
-	txn       *dbkernel.Txn
+	txn       dbkernel.Transaction
 	namespace string
 	createdAt time.Time
 	lastWrite time.Time

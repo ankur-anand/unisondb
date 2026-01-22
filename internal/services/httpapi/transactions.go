@@ -81,7 +81,7 @@ func (s *Service) handleBeginTransaction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	txn, err := engine.NewTxn(opType, entryType)
+	txn, err := engine.NewTransaction(opType, entryType)
 	if err != nil {
 		respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to create transaction: %v", err))
 		return

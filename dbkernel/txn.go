@@ -52,6 +52,27 @@ type Txn struct {
 	txnEntryType         logrecord.LogEntryType
 }
 
+// Transaction exposes the common operations supported by both local and Raft-backed transactions.
+type Transaction interface {
+	TxnID() []byte
+	AppendKVTxn(key []byte, value []byte) error
+	AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) error
+	Commit() error
+	Abort()
+	ChunkedValueChecksum() uint32
+}
+
+// NewTransaction returns a transaction implementation based on the current engine mode.
+// In Raft mode, it returns a Raft-backed transaction; otherwise it returns a local transaction.
+func (e *Engine) NewTransaction(txnType logrecord.LogOperationType, valueType logrecord.LogEntryType) (Transaction, error) {
+	if e.IsRaftMode() {
+		return e.NewRaftTxn(txnType, valueType)
+	}
+	return e.NewTxn(txnType, valueType)
+}
+
+var _ Transaction = (*Txn)(nil)
+
 // validateTxnStart checks if a transaction can be started.
 func (e *Engine) validateTxnStart(txnType logrecord.LogOperationType, valueType logrecord.LogEntryType) error {
 	switch {
