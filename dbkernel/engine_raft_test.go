@@ -1839,3 +1839,171 @@ func TestRaftTxnReaderReturnsDecodedChunkedCommit(t *testing.T) {
 
 	require.True(t, found, "expected decoded chunked commit record from reader")
 }
+
+type nopCloser struct {
+	io.Reader
+}
+
+func (nopCloser) Close() error { return nil }
+
+func waitForCallbacks(t *testing.T, ch <-chan struct{}, count int) {
+	t.Helper()
+	for i := 0; i < count; i++ {
+		select {
+		case <-ch:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for callback %d", i+1)
+		}
+	}
+}
+
+func TestRestoreModeMismatch_RaftSnapshotToStandalone(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "restore_mode_test"
+	configRaft := NewDefaultEngineConfig()
+	configRaft.ArenaSize = 1 << 20
+	configRaft.WalConfig.RaftMode = true
+	configRaft.DBEngine = BoltDBEngine
+
+	engine, err := NewStorageEngine(dir, namespace, configRaft)
+	require.NoError(t, err)
+
+	var snapshotBuf bytes.Buffer
+	_, err = engine.BtreeSnapshot(&snapshotBuf)
+	require.NoError(t, err)
+
+	err = engine.close(context.Background())
+	require.NoError(t, err)
+
+	standaloneDir := t.TempDir()
+	configStandalone := NewDefaultEngineConfig()
+	configStandalone.ArenaSize = 1 << 20
+	configStandalone.WalConfig.RaftMode = false
+	configStandalone.DBEngine = BoltDBEngine
+
+	standaloneEngine, err := NewStorageEngine(standaloneDir, namespace, configStandalone)
+	require.NoError(t, err)
+	defer standaloneEngine.close(context.Background())
+
+	err = standaloneEngine.Restore(nopCloser{&snapshotBuf})
+	require.Error(t, err, "restoring Raft snapshot into standalone engine should fail")
+	require.ErrorIs(t, err, ErrEngineModeMismatch, "error should be ErrEngineModeMismatch")
+}
+
+func TestRestoreModeMismatch_StandaloneSnapshotToRaft(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "restore_mode_test"
+
+	configStandalone := NewDefaultEngineConfig()
+	configStandalone.ArenaSize = 1 << 20
+	configStandalone.WalConfig.RaftMode = false
+	configStandalone.DBEngine = BoltDBEngine
+
+	engine, err := NewStorageEngine(dir, namespace, configStandalone)
+	require.NoError(t, err)
+	var snapshotBuf bytes.Buffer
+	_, err = engine.BtreeSnapshot(&snapshotBuf)
+	require.NoError(t, err)
+
+	err = engine.close(context.Background())
+	require.NoError(t, err)
+	raftDir := t.TempDir()
+	configRaft := NewDefaultEngineConfig()
+	configRaft.ArenaSize = 1 << 20
+	configRaft.WalConfig.RaftMode = true
+	configRaft.DBEngine = BoltDBEngine
+
+	raftEngine, err := NewStorageEngine(raftDir, namespace, configRaft)
+	require.NoError(t, err)
+	defer raftEngine.close(context.Background())
+
+	err = raftEngine.Restore(nopCloser{&snapshotBuf})
+	require.Error(t, err, "restoring standalone snapshot into Raft engine should fail")
+	require.ErrorIs(t, err, ErrEngineModeMismatch, "error should be ErrEngineModeMismatch")
+}
+
+func TestRestoreSameMode_Success(t *testing.T) {
+	t.Run("raft_to_raft", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "restore_same_mode"
+
+		config := NewDefaultEngineConfig()
+		config.ArenaSize = 1 << 20
+		config.WalConfig.RaftMode = true
+		config.DBEngine = BoltDBEngine
+
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err)
+		callbackSignal := make(chan struct{}, 2)
+		callback := func() {
+			select {
+			case callbackSignal <- struct{}{}:
+			default:
+			}
+		}
+		engine.memtableRotateCallback = callback
+		engine.setFsyncCallback(callback)
+
+		err = engine.PutKV([]byte("key1"), []byte("value1"))
+		require.NoError(t, err)
+		engine.rotateMemTable()
+		waitForCallbacks(t, callbackSignal, 2)
+
+		var snapshotBuf bytes.Buffer
+		_, err = engine.BtreeSnapshot(&snapshotBuf)
+		require.NoError(t, err)
+
+		err = engine.close(context.Background())
+		require.NoError(t, err)
+
+		raftDir2 := t.TempDir()
+		engine2, err := NewStorageEngine(raftDir2, namespace, config)
+		require.NoError(t, err)
+		defer engine2.close(context.Background())
+
+		err = engine2.Restore(nopCloser{&snapshotBuf})
+		require.NoError(t, err, "restoring Raft snapshot into Raft engine should succeed")
+	})
+
+	t.Run("standalone_to_standalone", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "restore_same_mode"
+
+		config := NewDefaultEngineConfig()
+		config.ArenaSize = 1 << 20
+		config.WalConfig.RaftMode = false
+		config.DBEngine = BoltDBEngine
+
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err)
+		callbackSignal := make(chan struct{}, 2)
+		callback := func() {
+			select {
+			case callbackSignal <- struct{}{}:
+			default:
+			}
+		}
+		engine.memtableRotateCallback = callback
+		engine.setFsyncCallback(callback)
+
+		err = engine.PutKV([]byte("key1"), []byte("value1"))
+		require.NoError(t, err)
+		engine.rotateMemTable()
+		waitForCallbacks(t, callbackSignal, 2)
+
+		var snapshotBuf bytes.Buffer
+		_, err = engine.BtreeSnapshot(&snapshotBuf)
+		require.NoError(t, err)
+
+		err = engine.close(context.Background())
+		require.NoError(t, err)
+
+		standaloneDir2 := t.TempDir()
+		engine2, err := NewStorageEngine(standaloneDir2, namespace, config)
+		require.NoError(t, err)
+		defer engine2.close(context.Background())
+
+		err = engine2.Restore(nopCloser{&snapshotBuf})
+		require.NoError(t, err, "restoring standalone snapshot into standalone engine should succeed")
+	})
+}

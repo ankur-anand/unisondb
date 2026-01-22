@@ -9,6 +9,14 @@ import (
 var (
 	SysKeyWalCheckPoint = []byte("sys.kv.unisondb.key.wal.checkpoint")
 	SysKeyBloomFilter   = []byte("sys.kv.unisondb.key.bloom-filter")
+	SysKeyEngineMode    = []byte("sys.kv.unisondb.key.engine.mode")
+)
+
+const (
+	// EngineModeStandalone indicates the engine is running in standalone (non-Raft) mode.
+	EngineModeStandalone byte = 0x01
+	// EngineModeRaft indicates the engine is running in Raft mode.
+	EngineModeRaft byte = 0x02
 )
 
 // Metadata represents a checkpoint in the Write-Ahead Log (WAL).

@@ -3153,3 +3153,51 @@ func TestWALog_ReaderCommitCheck_CommitEqualsWrite_AcrossSegments(t *testing.T) 
 	assert.Equal(t, numRecords, count, "should read all %d records", numRecords)
 	assert.ErrorIs(t, finalErr, walfs.ErrNoNewData, "should return ErrNoNewData at end (not EOF)")
 }
+
+func TestWALog_CustomMarkerWritten(t *testing.T) {
+	dir := t.TempDir()
+	marker := uint32(0xA1B2C3D4)
+
+	wal, err := walfs.NewWALog(dir, ".wal", walfs.WithCustomMarker(marker))
+	require.NoError(t, err)
+	require.NoError(t, wal.Close())
+
+	header := make([]byte, 64)
+	segPath := walfs.SegmentFileName(dir, ".wal", 1)
+	fd, err := os.Open(segPath)
+	require.NoError(t, err)
+	_, err = io.ReadFull(fd, header)
+	require.NoError(t, err)
+	require.NoError(t, fd.Close())
+
+	stored := binary.LittleEndian.Uint32(header[52:56])
+	assert.Equal(t, marker, stored, "marker should be stored in segment header")
+}
+
+func TestWALog_CustomMarkerValidatorOnRecover(t *testing.T) {
+	dir := t.TempDir()
+	marker := uint32(0x42)
+
+	wal, err := walfs.NewWALog(dir, ".wal", walfs.WithCustomMarker(marker))
+	require.NoError(t, err)
+	require.NoError(t, wal.Close())
+
+	called := false
+	validator := func(stored uint32) error {
+		called = true
+		if stored != marker {
+			return errors.New("marker mismatch")
+		}
+		return nil
+	}
+
+	walRecovered, err := walfs.NewWALog(dir, ".wal", walfs.WithCustomMarkerValidator(validator))
+	require.NoError(t, err)
+	assert.True(t, called, "validator should be called for recovered segments")
+	require.NoError(t, walRecovered.Close())
+
+	_, err = walfs.NewWALog(dir, ".wal", walfs.WithCustomMarkerValidator(func(uint32) error {
+		return errors.New("marker mismatch")
+	}))
+	require.Error(t, err)
+}
