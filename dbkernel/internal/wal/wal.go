@@ -2,6 +2,8 @@ package wal
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"log/slog"
@@ -13,7 +15,6 @@ import (
 	"github.com/ankur-anand/unisondb/pkg/umetrics"
 	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
-	"github.com/pkg/errors"
 	"github.com/uber-go/tally/v4"
 )
 
@@ -32,6 +33,13 @@ var (
 	metricsFSyncDurations      = "fsync_durations_seconds"
 	metricWalBytesWrittenTotal = "bytes_written_total"
 	metricWalEntriesPerSegment = "entries_per_segment"
+)
+
+var ErrSegmentModeMismatch = errors.New("wal segment mode mismatch")
+
+const (
+	segmentModeStandalone uint32 = 0x01
+	segmentModeRaft       uint32 = 0x02
 )
 
 // Offset is a type alias to underlying wal implementation.
@@ -95,6 +103,19 @@ func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
 		walfs.WithOnSegmentRotated(callbackOnRotate),
 		walfs.WithAutoCleanupPolicy(config.MaxAge, config.MinSegment, config.MaxSegment, config.AutoCleanup),
 	}
+
+	// Set mode marker based on Raft configuration.
+	modeMarker := segmentModeStandalone
+	if config.RaftMode {
+		modeMarker = segmentModeRaft
+	}
+	validator := func(storedMode uint32) error {
+		if storedMode != 0 && storedMode != modeMarker {
+			return fmt.Errorf("%w: segment=%d, config=%d", ErrSegmentModeMismatch, storedMode, modeMarker)
+		}
+		return nil
+	}
+	walOpts = append(walOpts, walfs.WithCustomMarker(modeMarker), walfs.WithCustomMarkerValidator(validator))
 
 	// Raft mode
 	if config.RaftMode {
@@ -421,12 +442,12 @@ func (w *WalIO) GetTransactionRecords(startOffset *Offset) ([]*logrecord.LogReco
 		walEntry, err := w.Read(nextOffset)
 
 		if err != nil {
-			return nil, errors.Wrapf(ErrWalNextOffset, "failed to read WAL at offset %+v: %s", nextOffset, err)
+			return nil, fmt.Errorf("%w: failed to read WAL at offset %+v: %v", ErrWalNextOffset, nextOffset, err)
 		}
 
 		payload, err := w.DecodeRecord(walEntry)
 		if err != nil {
-			return nil, errors.Wrapf(err, "failed to decode WAL record at offset %+v", nextOffset)
+			return nil, fmt.Errorf("failed to decode WAL record at offset %+v: %w", nextOffset, err)
 		}
 		if len(payload) == 0 {
 			break

@@ -1492,3 +1492,132 @@ func TestNewRaftWalCleanupPredicate(t *testing.T) {
 		}
 	})
 }
+
+func TestEngineModeMismatch_StandaloneToRaft(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "testnamespace"
+
+	configStandalone := NewDefaultEngineConfig()
+	configStandalone.ArenaSize = 1 << 20
+	configStandalone.WalConfig.RaftMode = false
+
+	engine, err := NewStorageEngine(dir, namespace, configStandalone)
+	require.NoError(t, err, "NewStorageEngine should not error")
+
+	err = engine.PutKV([]byte("key1"), []byte("value1"))
+	require.NoError(t, err)
+
+	err = engine.close(context.Background())
+	require.NoError(t, err, "close should not error")
+
+	configRaft := NewDefaultEngineConfig()
+	configRaft.ArenaSize = 1 << 20
+	configRaft.WalConfig.RaftMode = true
+
+	_, err = NewStorageEngine(dir, namespace, configRaft)
+	require.Error(t, err, "opening in Raft mode should fail")
+	require.ErrorIs(t, err, wal.ErrSegmentModeMismatch, "error should be ErrSegmentModeMismatch")
+}
+
+func TestEngineModeMismatch_RaftToStandalone(t *testing.T) {
+	dir := t.TempDir()
+	namespace := "testnamespace"
+
+	configRaft := NewDefaultEngineConfig()
+	configRaft.ArenaSize = 1 << 20
+	configRaft.WalConfig.RaftMode = true
+
+	engine, err := NewStorageEngine(dir, namespace, configRaft)
+	require.NoError(t, err, "NewStorageEngine should not error")
+
+	err = engine.close(context.Background())
+	require.NoError(t, err, "close should not error")
+
+	configStandalone := NewDefaultEngineConfig()
+	configStandalone.ArenaSize = 1 << 20
+	configStandalone.WalConfig.RaftMode = false
+
+	_, err = NewStorageEngine(dir, namespace, configStandalone)
+	require.Error(t, err, "opening in standalone mode should fail")
+	require.ErrorIs(t, err, wal.ErrSegmentModeMismatch, "error should be ErrSegmentModeMismatch")
+}
+
+func TestEngineModeAcceptsFreshDB(t *testing.T) {
+	t.Run("fresh_db_accepts_standalone_mode", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "testnamespace"
+
+		config := NewDefaultEngineConfig()
+		config.ArenaSize = 1 << 20
+		config.WalConfig.RaftMode = false
+
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err, "NewStorageEngine should not error for fresh DB")
+
+		storedMode, err := engine.dataStore.RetrieveMetadata(internal.SysKeyEngineMode)
+		require.NoError(t, err, "RetrieveMetadata should not error")
+		require.Equal(t, internal.EngineModeStandalone, storedMode[0], "mode should be standalone")
+
+		err = engine.close(context.Background())
+		require.NoError(t, err)
+	})
+
+	t.Run("fresh_db_accepts_raft_mode", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "testnamespace"
+
+		config := NewDefaultEngineConfig()
+		config.ArenaSize = 1 << 20
+		config.WalConfig.RaftMode = true
+
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err, "NewStorageEngine should not error for fresh DB")
+
+		storedMode, err := engine.dataStore.RetrieveMetadata(internal.SysKeyEngineMode)
+		require.NoError(t, err, "RetrieveMetadata should not error")
+		require.Equal(t, internal.EngineModeRaft, storedMode[0], "mode should be raft")
+
+		err = engine.close(context.Background())
+		require.NoError(t, err)
+	})
+}
+
+func TestEngineModeReopensWithSameMode(t *testing.T) {
+	t.Run("standalone_reopens_standalone", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "testnamespace"
+
+		config := NewDefaultEngineConfig()
+		config.ArenaSize = 1 << 20
+		config.WalConfig.RaftMode = false
+
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err)
+		err = engine.close(context.Background())
+		require.NoError(t, err)
+
+		engine, err = NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err, "reopening with same mode should succeed")
+		err = engine.close(context.Background())
+		require.NoError(t, err)
+	})
+
+	t.Run("raft_reopens_raft", func(t *testing.T) {
+		dir := t.TempDir()
+		namespace := "testnamespace"
+
+		config := NewDefaultEngineConfig()
+		config.ArenaSize = 1 << 20
+		config.WalConfig.RaftMode = true
+
+		engine, err := NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err)
+		err = engine.close(context.Background())
+		require.NoError(t, err)
+
+		engine, err = NewStorageEngine(dir, namespace, config)
+		require.NoError(t, err, "reopening with same mode should succeed")
+		err = engine.close(context.Background())
+		require.NoError(t, err)
+	})
+}

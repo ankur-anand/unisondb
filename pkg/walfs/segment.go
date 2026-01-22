@@ -30,6 +30,8 @@ var (
 	ErrSegmentFull         = errors.New("segment is full, cannot write more records")
 )
 
+type MarkerValidator func(storedMarker uint32) error
+
 var (
 	// NilRecordPosition is a sentinel value representing an nil RecordPosition.
 	NilRecordPosition = RecordPosition{}
@@ -247,6 +249,9 @@ type Segment struct {
 	firstLogIndex     uint64
 	clearIndexOnFlush bool
 	logIndex          *ShardedIndex
+
+	customMarker    uint32
+	markerValidator MarkerValidator
 }
 
 // WithSyncOption sets the sync option for the Segment.
@@ -285,6 +290,21 @@ func WithSegmentSize(size int64) func(*Segment) {
 func withLogIndex(logIndex *ShardedIndex) func(*Segment) {
 	return func(s *Segment) {
 		s.logIndex = logIndex
+	}
+}
+
+// WithSegmentCustomMarker sets the 4-byte marker written for new segments.
+// Use WithSegmentCustomMarkerValidator to validate stored markers on open.
+func WithSegmentCustomMarker(marker uint32) func(*Segment) {
+	return func(s *Segment) {
+		s.customMarker = marker
+	}
+}
+
+// WithSegmentCustomMarkerValidator sets a validator for stored markers when opening segments.
+func WithSegmentCustomMarkerValidator(validator MarkerValidator) func(*Segment) {
+	return func(s *Segment) {
+		s.markerValidator = validator
 	}
 }
 
@@ -327,12 +347,19 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 	offset := int64(segmentHeaderSize)
 	if isNew {
 		// for a new Segment file we initialize it with default metadata.
-		writeInitialMetadata(mmapData)
+		writeInitialMetadata(mmapData, s.customMarker)
 	} else {
 		// decode the Segment metadata header
 		meta, err := decodeSegmentHeader(mmapData[:segmentHeaderSize])
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode metadata: %w", err)
+		}
+
+		storedMarker := binary.LittleEndian.Uint32(mmapData[52:56])
+		if s.markerValidator != nil {
+			if err := s.markerValidator(storedMarker); err != nil {
+				return nil, err
+			}
 		}
 
 		if IsSealed(meta.Flags) {
@@ -642,7 +669,7 @@ func (seg *Segment) prepareSegmentFile(path string) (*os.File, mmap.MMap, error)
 	return fd, mmapData, nil
 }
 
-func writeInitialMetadata(mmapData mmap.MMap) {
+func writeInitialMetadata(mmapData mmap.MMap, marker uint32) {
 	binary.LittleEndian.PutUint32(mmapData[0:4], segmentMagicNumber)
 	binary.LittleEndian.PutUint32(mmapData[4:8], segmentHeaderVersion)
 	now := uint64(time.Now().UnixNano())
@@ -651,6 +678,7 @@ func writeInitialMetadata(mmapData mmap.MMap) {
 	binary.LittleEndian.PutUint64(mmapData[24:32], segmentHeaderSize)
 	binary.LittleEndian.PutUint64(mmapData[32:40], 0)
 	binary.LittleEndian.PutUint32(mmapData[40:44], FlagActive)
+	binary.LittleEndian.PutUint32(mmapData[52:56], marker)
 	crc := crc32.Checksum(mmapData[0:56], crcTable)
 	binary.LittleEndian.PutUint32(mmapData[56:60], crc)
 }

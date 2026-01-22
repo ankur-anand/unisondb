@@ -103,6 +103,8 @@ var (
 var (
 	// ErrWaitTimeoutExceeded is a sentinel error to denotes sync.cond expired due to timeout.
 	ErrWaitTimeoutExceeded = errors.New("wait timeout exceeded")
+	// ErrEngineModeMismatch indicates the database was created in a different mode (Raft vs non-Raft).
+	ErrEngineModeMismatch = errors.New("engine mode mismatch: database was created in different mode")
 )
 
 // ChangeNotifier is called on successful local writes.
@@ -210,6 +212,9 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 	}
 
 	if err := engine.initStorage(dataDir, namespace, conf); err != nil {
+		return nil, err
+	}
+	if err := engine.validateAndPersistEngineMode(); err != nil {
 		return nil, err
 	}
 
@@ -367,6 +372,25 @@ func tryFileLock(fileLock *flock.Flock) error {
 	// unable to get the exclusive lock4
 	if !locked {
 		return ErrDatabaseDirInUse
+	}
+	return nil
+}
+
+// validateAndPersistEngineMode ensures the database is opened with the same mode (Raft vs non-Raft)
+// it was created with.
+func (e *Engine) validateAndPersistEngineMode() error {
+	expectedMode := internal.EngineModeStandalone
+	if e.config.WalConfig.RaftMode {
+		expectedMode = internal.EngineModeRaft
+	}
+
+	storedMode, err := e.dataStore.RetrieveMetadata(internal.SysKeyEngineMode)
+	if err != nil || len(storedMode) == 0 {
+		return e.dataStore.StoreMetadata(internal.SysKeyEngineMode, []byte{expectedMode})
+	}
+
+	if storedMode[0] != expectedMode {
+		return fmt.Errorf("%w: stored=%d, configured=%d", ErrEngineModeMismatch, storedMode[0], expectedMode)
 	}
 	return nil
 }

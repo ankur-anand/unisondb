@@ -344,9 +344,11 @@ func (e *Engine) Restore(rc io.ReadCloser) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	// Restore the B-Tree from snapshot
 	if err := e.dataStore.Restore(rc); err != nil {
 		return fmt.Errorf("restore btree: %w", err)
+	}
+	if err := e.validateAndPersistEngineMode(); err != nil {
+		return fmt.Errorf("restored snapshot incompatible: %w", err)
 	}
 
 	// Read raft index/term from the checkpoint metadata stored in B-tree

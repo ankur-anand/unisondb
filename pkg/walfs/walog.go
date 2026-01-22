@@ -128,6 +128,20 @@ func WithReaderCommitCheck() WALogOptions {
 	}
 }
 
+// WithCustomMarker sets the 4-byte marker written to new segments.
+func WithCustomMarker(marker uint32) WALogOptions {
+	return func(sm *WALog) {
+		sm.customMarker = marker
+	}
+}
+
+// WithCustomMarkerValidator sets a validator for stored markers on open.
+func WithCustomMarkerValidator(validator MarkerValidator) WALogOptions {
+	return func(sm *WALog) {
+		sm.markerValidator = validator
+	}
+}
+
 // WALog manages the lifecycle of each individual segments, including creation, rotation,
 // recovery, and read/write operations.
 type WALog struct {
@@ -171,6 +185,9 @@ type WALog struct {
 	dirSyncer           DirectorySyncer
 	clearIndexOnFlush   bool
 	logIndex            *ShardedIndex
+
+	customMarker    uint32
+	markerValidator MarkerValidator
 }
 
 // NewWALog returns an initialized WALog that manages the segments in the provided dir with the given ext.
@@ -228,6 +245,13 @@ func (wl *WALog) openSegment(id uint32) (*Segment, error) {
 
 	if wl.logIndex != nil {
 		opts = append(opts, withLogIndex(wl.logIndex))
+	}
+
+	if wl.customMarker != 0 {
+		opts = append(opts, WithSegmentCustomMarker(wl.customMarker))
+	}
+	if wl.markerValidator != nil {
+		opts = append(opts, WithSegmentCustomMarkerValidator(wl.markerValidator))
 	}
 
 	seg, err := OpenSegmentFile(wl.dir, wl.ext, id, opts...)
