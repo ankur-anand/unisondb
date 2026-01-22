@@ -346,7 +346,7 @@ func Test_RowColumn_Txn(t *testing.T) {
 	assert.Equal(t, txn3.CommitOffset(), engine.CurrentOffset(), "Commit operation should succeed")
 }
 
-func TestTxn_CommitConflictDoesNotOverride(t *testing.T) {
+func TestTxn_CommitOrderingOverwrites(t *testing.T) {
 	newEngine := func(t *testing.T) *dbkernel.Engine {
 		t.Helper()
 		baseDir := t.TempDir()
@@ -367,7 +367,7 @@ func TestTxn_CommitConflictDoesNotOverride(t *testing.T) {
 		return engine
 	}
 
-	t.Run("older_txn_conflicts_with_newer_txn", func(t *testing.T) {
+	t.Run("later_txn_commit_overwrites_earlier_txn", func(t *testing.T) {
 		engine := newEngine(t)
 		key := []byte("conflict-key")
 
@@ -381,14 +381,14 @@ func TestTxn_CommitConflictDoesNotOverride(t *testing.T) {
 		require.NoError(t, newerTxn.Commit())
 
 		err = olderTxn.Commit()
-		require.ErrorIs(t, err, dbkernel.ErrTxnConflict)
+		require.NoError(t, err)
 
 		got, err := engine.GetKV(key)
 		require.NoError(t, err)
-		assert.Equal(t, []byte("new-value"), got)
+		assert.Equal(t, []byte("old-value"), got)
 	})
 
-	t.Run("older_txn_conflicts_with_non_txn_write", func(t *testing.T) {
+	t.Run("txn_commit_overwrites_non_txn_write", func(t *testing.T) {
 		engine := newEngine(t)
 		key := []byte("conflict-key-non-txn")
 
@@ -399,14 +399,14 @@ func TestTxn_CommitConflictDoesNotOverride(t *testing.T) {
 		require.NoError(t, engine.PutKV(key, []byte("newer-non-txn-value")))
 
 		err = olderTxn.Commit()
-		require.ErrorIs(t, err, dbkernel.ErrTxnConflict)
+		require.NoError(t, err)
 
 		got, err := engine.GetKV(key)
 		require.NoError(t, err)
-		assert.Equal(t, []byte("newer-non-txn-value"), got)
+		assert.Equal(t, []byte("old-value"), got)
 	})
 
-	t.Run("older_chunked_txn_conflicts_with_newer_chunked_txn", func(t *testing.T) {
+	t.Run("later_chunked_txn_commit_overwrites_earlier_txn", func(t *testing.T) {
 		engine := newEngine(t)
 		key := []byte("conflict-chunked-key")
 
@@ -420,14 +420,14 @@ func TestTxn_CommitConflictDoesNotOverride(t *testing.T) {
 		require.NoError(t, newerTxn.Commit())
 
 		err = olderTxn.Commit()
-		require.ErrorIs(t, err, dbkernel.ErrTxnConflict)
+		require.NoError(t, err)
 
 		got, err := engine.GetLOB(key)
 		require.NoError(t, err)
-		assert.Equal(t, []byte("new-chunk"), got)
+		assert.Equal(t, []byte("old-chunk"), got)
 	})
 
-	t.Run("older_row_txn_conflicts_with_newer_row_txn", func(t *testing.T) {
+	t.Run("later_row_txn_commit_overwrites_earlier_txn", func(t *testing.T) {
 		engine := newEngine(t)
 		key := []byte("conflict-row-key")
 
@@ -441,14 +441,14 @@ func TestTxn_CommitConflictDoesNotOverride(t *testing.T) {
 		require.NoError(t, newerTxn.Commit())
 
 		err = olderTxn.Commit()
-		require.ErrorIs(t, err, dbkernel.ErrTxnConflict)
+		require.NoError(t, err)
 
 		cols, err := engine.GetRowColumns(string(key), nil)
 		require.NoError(t, err)
-		assert.Equal(t, []byte("new"), cols["c1"])
+		assert.Equal(t, []byte("old"), cols["c1"])
 	})
 
-	t.Run("older_row_txn_conflicts_with_non_txn_row_put", func(t *testing.T) {
+	t.Run("row_txn_commit_overwrites_non_txn_row_put", func(t *testing.T) {
 		engine := newEngine(t)
 		key := []byte("conflict-row-key-non-txn")
 
@@ -459,11 +459,11 @@ func TestTxn_CommitConflictDoesNotOverride(t *testing.T) {
 		require.NoError(t, engine.PutColumnsForRow(key, map[string][]byte{"c1": []byte("newer")}))
 
 		err = olderTxn.Commit()
-		require.ErrorIs(t, err, dbkernel.ErrTxnConflict)
+		require.NoError(t, err)
 
 		cols, err := engine.GetRowColumns(string(key), nil)
 		require.NoError(t, err)
-		assert.Equal(t, []byte("newer"), cols["c1"])
+		assert.Equal(t, []byte("old"), cols["c1"])
 	})
 
 }

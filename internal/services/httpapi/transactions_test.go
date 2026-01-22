@@ -133,7 +133,7 @@ func TestTransactionLifecycle_Row(t *testing.T) {
 	assert.Equal(t, []byte("valB"), row2Cols["colB"])
 }
 
-func TestTransactionCommitConflictWithNonTxnKV(t *testing.T) {
+func TestTransactionCommitOverwritesNonTxnKV(t *testing.T) {
 	ts, cleanup := setupTestServer(t)
 	defer cleanup()
 
@@ -155,17 +155,14 @@ func TestTransactionCommitConflictWithNonTxnKV(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 
 	rr = makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+txnID+"/commit", nil)
-	assert.Equal(t, http.StatusConflict, rr.Code)
-	var errResp map[string]string
-	require.NoError(t, json.NewDecoder(rr.Body).Decode(&errResp))
-	assert.Contains(t, errResp["error"], "txn conflict")
+	assert.Equal(t, http.StatusOK, rr.Code)
 
 	val, err := ts.engine.GetKV([]byte("kv-conflict"))
 	require.NoError(t, err)
-	assert.Equal(t, []byte("newer"), val)
+	assert.Equal(t, []byte("old"), val)
 }
 
-func TestTransactionCommitConflictWithNonTxnRow(t *testing.T) {
+func TestTransactionCommitOverwritesNonTxnRow(t *testing.T) {
 	ts, cleanup := setupTestServer(t)
 	defer cleanup()
 
@@ -196,14 +193,11 @@ func TestTransactionCommitConflictWithNonTxnRow(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rr.Code)
 
 	rr = makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+txnID+"/commit", nil)
-	assert.Equal(t, http.StatusConflict, rr.Code)
-	var errResp map[string]string
-	require.NoError(t, json.NewDecoder(rr.Body).Decode(&errResp))
-	assert.Contains(t, errResp["error"], "txn conflict")
+	assert.Equal(t, http.StatusOK, rr.Code)
 
 	rowCols, err := ts.engine.GetRowColumns("row-conflict", nil)
 	require.NoError(t, err)
-	assert.Equal(t, []byte("newer"), rowCols["c1"])
+	assert.Equal(t, []byte("old"), rowCols["c1"])
 }
 
 func TestTransactionLifecycle_LOB(t *testing.T) {
@@ -255,7 +249,7 @@ func TestTransactionLifecycle_LOB(t *testing.T) {
 	assert.Equal(t, largeData, value)
 }
 
-func TestParallelTransactionsConflictOnlyOneSucceeds(t *testing.T) {
+func TestParallelTransactionsLastCommitWins(t *testing.T) {
 	ts, cleanup := setupTestServer(t)
 	defer cleanup()
 
@@ -282,11 +276,11 @@ func TestParallelTransactionsConflictOnlyOneSucceeds(t *testing.T) {
 	require.Equal(t, http.StatusOK, rr2.Code)
 
 	rr1 := makeRequest(t, ts.router, http.MethodPost, "/api/v1/test/tx/"+beginResp1.TxnID+"/commit", nil)
-	require.Equal(t, http.StatusConflict, rr1.Code)
+	require.Equal(t, http.StatusOK, rr1.Code)
 
 	val, err := ts.engine.GetKV([]byte("race-key"))
 	require.NoError(t, err)
-	assert.Equal(t, []byte("txn2"), val)
+	assert.Equal(t, []byte("txn1"), val)
 }
 
 func TestTransactionAbort(t *testing.T) {

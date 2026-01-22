@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ankur-anand/unisondb/internal/keycodec"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/pkg/raftwalfs"
 	"github.com/ankur-anand/unisondb/pkg/walfs"
@@ -154,6 +155,120 @@ func setupSingleNodeRaftWithEngineWAL(t *testing.T, engine *Engine) (*raft.Raft,
 	}
 
 	return r, logStore, cleanup
+}
+
+func setupSingleNodeRaftWithEngineWALCodec(t *testing.T, engine *Engine, codec raftwalfs.Codec) (*raft.Raft, *raftwalfs.LogStore, func()) {
+	t.Helper()
+
+	engineWAL := engine.WAL()
+	require.NotNil(t, engineWAL, "engine WAL should not be nil")
+
+	var (
+		logStore *raftwalfs.LogStore
+		err      error
+	)
+	if codec == nil {
+		logStore, err = raftwalfs.NewLogStore(engineWAL, 0)
+	} else {
+		logStore, err = raftwalfs.NewLogStore(engineWAL, 0, raftwalfs.WithCodec(codec))
+	}
+	require.NoError(t, err)
+
+	stableStore := raft.NewInmemStore()
+	snapshotStore := raft.NewInmemSnapshotStore()
+
+	addr := raft.ServerAddress("127.0.0.1:0")
+	_, transport := raft.NewInmemTransport(addr)
+
+	config := raft.DefaultConfig()
+	config.LocalID = "node1"
+	config.HeartbeatTimeout = 50 * time.Millisecond
+	config.ElectionTimeout = 50 * time.Millisecond
+	config.LeaderLeaseTimeout = 50 * time.Millisecond
+	config.CommitTimeout = 5 * time.Millisecond
+	config.LogOutput = io.Discard
+
+	r, err := raft.NewRaft(config, engine, logStore, stableStore, snapshotStore, transport)
+	require.NoError(t, err)
+
+	configuration := raft.Configuration{
+		Servers: []raft.Server{
+			{
+				ID:      config.LocalID,
+				Address: transport.LocalAddr(),
+			},
+		},
+	}
+	err = r.BootstrapCluster(configuration).Error()
+	require.NoError(t, err)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if r.State() == raft.Leader {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	require.Equal(t, raft.Leader, r.State(), "node should be leader")
+
+	cleanup := func() {
+		future := r.Shutdown()
+		_ = future.Error()
+		_ = transport.Close()
+		_ = logStore.Close()
+	}
+
+	return r, logStore, cleanup
+}
+
+func setupRaftApplyTestEngine(t *testing.T) *Engine {
+	t.Helper()
+
+	dir := t.TempDir()
+	namespace := "raft_apply_test"
+
+	config := NewDefaultEngineConfig()
+	config.WalConfig.RaftMode = true
+
+	engine, err := NewStorageEngine(dir, namespace, config)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		err := engine.close(context.Background())
+		assert.NoError(t, err)
+	})
+
+	engine.SetRaftMode(true)
+	return engine
+}
+
+func encodeLogRecord(record logcodec.LogRecord) []byte {
+	hintSize := 128
+	for _, entry := range record.Entries {
+		hintSize += len(entry)
+	}
+	return record.FBEncode(hintSize)
+}
+
+func makeRaftLog(index uint64, record logcodec.LogRecord) *raft.Log {
+	return &raft.Log{
+		Index: index,
+		Term:  1,
+		Type:  raft.LogCommand,
+		Data:  encodeLogRecord(record),
+	}
+}
+
+func appendRaftLogRecord(t *testing.T, engine *Engine, index uint64, record logcodec.LogRecord) walfs.RecordPosition {
+	t.Helper()
+
+	log := makeRaftLog(index, record)
+	encoded, err := raftwalfs.BinaryCodecV1{}.Encode(log)
+	require.NoError(t, err)
+
+	offset, err := engine.walIO.Append(encoded, index)
+	require.NoError(t, err)
+
+	return *offset
 }
 
 func TestEngine_RaftMode_KVOperations(t *testing.T) {
@@ -1447,4 +1562,280 @@ func TestEngine_RaftMode_SkipsWALRecovery(t *testing.T) {
 	gotValue, err := engine.GetKV([]byte("test-key"))
 	require.NoError(t, err)
 	assert.Equal(t, []byte("test-value"), gotValue)
+}
+
+func TestEngine_ApplyRaftTxnStateBeginPrepare_NoMemtableApply(t *testing.T) {
+	engine := setupRaftApplyTestEngine(t)
+
+	txnID := []byte("txn-begin-prepare")
+	begin := logcodec.LogRecord{
+		HLC:       HLCNow(),
+		TxnID:     txnID,
+		TxnState:  logrecord.TransactionStateBegin,
+		EntryType: logrecord.LogEntryTypeKV,
+	}
+	result := engine.Apply(makeRaftLog(1, begin))
+	require.Nil(t, result)
+	assert.Equal(t, uint64(1), engine.AppliedIndex())
+
+	prepareEntry := logcodec.SerializeKVEntry(keycodec.KeyKV([]byte("key1")), []byte("value1"))
+	prepare := logcodec.LogRecord{
+		HLC:           HLCNow(),
+		TxnID:         txnID,
+		OperationType: logrecord.LogOperationTypeInsert,
+		TxnState:      logrecord.TransactionStatePrepare,
+		EntryType:     logrecord.LogEntryTypeKV,
+		Entries:       [][]byte{prepareEntry},
+	}
+	result = engine.Apply(makeRaftLog(2, prepare))
+	require.Nil(t, result)
+	assert.Equal(t, uint64(2), engine.AppliedIndex())
+
+	_, err := engine.GetKV([]byte("key1"))
+	assert.ErrorIs(t, err, ErrKeyNotFound)
+}
+
+func TestEngine_ApplyRaftTxnStateCommitKV_ReplaysChain(t *testing.T) {
+	engine := setupRaftApplyTestEngine(t)
+
+	txnID := []byte("txn-commit-kv")
+	begin := logcodec.LogRecord{
+		HLC:       HLCNow(),
+		TxnID:     txnID,
+		TxnState:  logrecord.TransactionStateBegin,
+		EntryType: logrecord.LogEntryTypeKV,
+	}
+	beginOffset := appendRaftLogRecord(t, engine, 1, begin)
+
+	prepareEntry := logcodec.SerializeKVEntry(keycodec.KeyKV([]byte("key1")), []byte("value1"))
+	prepare := logcodec.LogRecord{
+		HLC:             HLCNow(),
+		TxnID:           txnID,
+		OperationType:   logrecord.LogOperationTypeInsert,
+		TxnState:        logrecord.TransactionStatePrepare,
+		EntryType:       logrecord.LogEntryTypeKV,
+		PrevTxnWalIndex: beginOffset.Encode(),
+		Entries:         [][]byte{prepareEntry},
+	}
+	prepareOffset := appendRaftLogRecord(t, engine, 2, prepare)
+
+	commit := logcodec.LogRecord{
+		HLC:             HLCNow(),
+		TxnID:           txnID,
+		OperationType:   logrecord.LogOperationTypeInsert,
+		TxnState:        logrecord.TransactionStateCommit,
+		EntryType:       logrecord.LogEntryTypeKV,
+		PrevTxnWalIndex: prepareOffset.Encode(),
+	}
+
+	result := engine.Apply(makeRaftLog(3, commit))
+	require.Nil(t, result)
+
+	val, err := engine.GetKV([]byte("key1"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value1"), val)
+}
+
+func TestEngine_ApplyRaftTxnStateCommitRow_ReplaysChain(t *testing.T) {
+	engine := setupRaftApplyTestEngine(t)
+
+	txnID := []byte("txn-commit-row")
+	begin := logcodec.LogRecord{
+		HLC:       HLCNow(),
+		TxnID:     txnID,
+		TxnState:  logrecord.TransactionStateBegin,
+		EntryType: logrecord.LogEntryTypeRow,
+	}
+	beginOffset := appendRaftLogRecord(t, engine, 1, begin)
+
+	rowKey := keycodec.RowKey([]byte("row1"))
+	rowEntry := logcodec.SerializeRowUpdateEntry(rowKey, map[string][]byte{
+		"col1": []byte("val1"),
+	})
+	prepare := logcodec.LogRecord{
+		HLC:             HLCNow(),
+		TxnID:           txnID,
+		OperationType:   logrecord.LogOperationTypeInsert,
+		TxnState:        logrecord.TransactionStatePrepare,
+		EntryType:       logrecord.LogEntryTypeRow,
+		PrevTxnWalIndex: beginOffset.Encode(),
+		Entries:         [][]byte{rowEntry},
+	}
+	prepareOffset := appendRaftLogRecord(t, engine, 2, prepare)
+
+	commit := logcodec.LogRecord{
+		HLC:             HLCNow(),
+		TxnID:           txnID,
+		OperationType:   logrecord.LogOperationTypeInsert,
+		TxnState:        logrecord.TransactionStateCommit,
+		EntryType:       logrecord.LogEntryTypeRow,
+		PrevTxnWalIndex: prepareOffset.Encode(),
+	}
+
+	result := engine.Apply(makeRaftLog(3, commit))
+	require.Nil(t, result)
+
+	rowData, err := engine.GetRowColumns("row1", nil)
+	require.NoError(t, err)
+	assert.Equal(t, []byte("val1"), rowData["col1"])
+}
+
+func TestEngine_ApplyRaftTxnStateCommitChunked_UsesCommitOffset(t *testing.T) {
+	engine := setupRaftApplyTestEngine(t)
+
+	chunkKey := keycodec.KeyBlobChunk([]byte("blob"), 0)
+	commitEntry := logcodec.SerializeKVEntry(chunkKey, nil)
+	commit := logcodec.LogRecord{
+		HLC:           HLCNow(),
+		OperationType: logrecord.LogOperationTypeInsert,
+		TxnState:      logrecord.TransactionStateCommit,
+		EntryType:     logrecord.LogEntryTypeChunked,
+		Entries:       [][]byte{commitEntry},
+	}
+
+	commitLog := makeRaftLog(1, commit)
+	encoded, err := raftwalfs.BinaryCodecV1{}.Encode(commitLog)
+	require.NoError(t, err)
+
+	commitOffset, err := engine.walIO.Append(encoded, commitLog.Index)
+	require.NoError(t, err)
+
+	engine.SetPositionLookup(func(index uint64) (walfs.RecordPosition, bool) {
+		if index == commitLog.Index {
+			return *commitOffset, true
+		}
+		return walfs.RecordPosition{}, false
+	})
+
+	result := engine.Apply(commitLog)
+	require.Nil(t, result)
+
+	memValue := engine.activeMemTable.Get(chunkKey)
+	assert.Equal(t, byte(logrecord.LogOperationTypeInsert), memValue.Meta)
+	assert.Equal(t, byte(logrecord.LogEntryTypeChunked), memValue.UserMeta)
+	assert.True(t, bytes.Equal(commitOffset.Encode(), memValue.Value))
+}
+
+func TestEngine_ApplyRaftTxnStateNone_AppliesRecord(t *testing.T) {
+	engine := setupRaftApplyTestEngine(t)
+
+	entry := logcodec.SerializeKVEntry(keycodec.KeyKV([]byte("key1")), []byte("value1"))
+	record := logcodec.LogRecord{
+		HLC:           HLCNow(),
+		OperationType: logrecord.LogOperationTypeInsert,
+		TxnState:      logrecord.TransactionStateNone,
+		EntryType:     logrecord.LogEntryTypeKV,
+		Entries:       [][]byte{entry},
+	}
+
+	result := engine.Apply(makeRaftLog(1, record))
+	require.Nil(t, result)
+
+	val, err := engine.GetKV([]byte("key1"))
+	require.NoError(t, err)
+	assert.Equal(t, []byte("value1"), val)
+}
+
+func TestEngine_ApplyRaftTxnStateUnknown_DoesNotApplyRecord(t *testing.T) {
+	engine := setupRaftApplyTestEngine(t)
+
+	entry := logcodec.SerializeKVEntry(keycodec.KeyKV([]byte("key1")), []byte("value1"))
+	record := logcodec.LogRecord{
+		HLC:           HLCNow(),
+		OperationType: logrecord.LogOperationTypeInsert,
+		TxnState:      logrecord.TransactionState(99),
+		EntryType:     logrecord.LogEntryTypeKV,
+		Entries:       [][]byte{entry},
+	}
+
+	result := engine.Apply(makeRaftLog(1, record))
+	require.Nil(t, result)
+	assert.Equal(t, uint64(1), engine.AppliedIndex())
+
+	_, err := engine.GetKV([]byte("key1"))
+	assert.ErrorIs(t, err, ErrKeyNotFound)
+}
+
+func setupRaftTxnReaderEngine(t *testing.T) (*Engine, func()) {
+	t.Helper()
+
+	dir := t.TempDir()
+	namespace := "txn_reader_raft"
+
+	conf := NewDefaultEngineConfig()
+	conf.DBEngine = LMDBEngine
+	conf.BtreeConfig.Namespace = namespace
+	conf.WalConfig.RaftMode = true
+	conf.WalConfig.AutoCleanup = false
+
+	engine, err := NewStorageEngine(dir, namespace, conf)
+	require.NoError(t, err)
+
+	r, logStore, raftCleanup := setupSingleNodeRaftWithEngineWAL(t, engine)
+	engine.SetPositionLookup(logStore.GetPosition)
+	engine.SetRaftApplier(&raftApplierWrapper{
+		raft:    r,
+		timeout: 5 * time.Second,
+	})
+	engine.SetWALCommitCallback(logStore.CommitPosition)
+	engine.SetRaftMode(true)
+
+	cleanup := func() {
+		raftCleanup()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = engine.Close(ctx)
+	}
+
+	return engine, cleanup
+}
+
+func TestRaftTxnReaderReturnsDecodedChunkedCommit(t *testing.T) {
+	engine, cleanup := setupRaftTxnReaderEngine(t)
+	defer cleanup()
+
+	txn, err := engine.NewTransaction(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeChunked)
+	require.NoError(t, err)
+
+	err = txn.AppendKVTxn([]byte("lob-key"), []byte("chunk1-"))
+	require.NoError(t, err)
+	err = txn.AppendKVTxn([]byte("lob-key"), []byte("chunk2"))
+	require.NoError(t, err)
+
+	err = txn.Commit()
+	require.NoError(t, err)
+
+	reader, err := engine.NewReader()
+	require.NoError(t, err)
+	defer reader.Close()
+
+	expectedKey := keycodec.KeyBlobChunk([]byte("lob-key"), 0)
+	found := false
+
+	for {
+		data, _, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+
+		record := logrecord.GetRootAsLogRecord(data, 0)
+		if record.OperationType() == logrecord.LogOperationTypeRaftInternal {
+			continue
+		}
+		if !bytes.Equal(record.TxnIdBytes(), txn.TxnID()) {
+			continue
+		}
+
+		if record.TxnState() == logrecord.TransactionStateCommit && record.EntryType() == logrecord.LogEntryTypeChunked {
+			logEntry := logcodec.DeserializeFBRootLogRecord(record)
+			require.Len(t, logEntry.Entries, 1)
+			kv := logcodec.DeserializeKVEntry(logEntry.Entries[0])
+			require.Equal(t, expectedKey, kv.Key)
+			found = true
+			break
+		}
+	}
+
+	require.True(t, found, "expected decoded chunked commit record from reader")
 }

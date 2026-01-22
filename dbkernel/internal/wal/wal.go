@@ -64,6 +64,7 @@ type WalIO struct {
 	namespace        string
 	taggedScope      umetrics.Scope
 	entriesInSegment atomic.Int64
+	recordDecoder    walfs.RecordDecoder
 }
 
 // NewWalIO initializes and returns a new instance of WalIO.
@@ -76,6 +77,9 @@ func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
 	w := &WalIO{
 		namespace:   namespace,
 		taggedScope: taggedScope,
+	}
+	if config.RaftMode {
+		w.recordDecoder = NewRaftWALDecoder(nil)
 	}
 
 	callbackOnRotate := func() {
@@ -125,6 +129,15 @@ func WrapWAL(wal *walfs.WALog, namespace string) *WalIO {
 // WAL returns the underlying walfs.WALog.
 func (w *WalIO) WAL() *walfs.WALog {
 	return w.appendLog
+}
+
+// DecodeRecord decodes a WAL entry to its underlying payload.
+// In Raft mode, WAL entries are encoded Raft logs; otherwise the data is returned as-is.
+func (w *WalIO) DecodeRecord(data []byte) ([]byte, error) {
+	if w.recordDecoder == nil {
+		return data, nil
+	}
+	return w.recordDecoder.Decode(data)
 }
 
 // RunWalCleanup starts background cleanup routines for old WAL segments.
@@ -411,7 +424,15 @@ func (w *WalIO) GetTransactionRecords(startOffset *Offset) ([]*logrecord.LogReco
 			return nil, errors.Wrapf(ErrWalNextOffset, "failed to read WAL at offset %+v: %s", nextOffset, err)
 		}
 
-		record := logrecord.GetRootAsLogRecord(walEntry, 0)
+		payload, err := w.DecodeRecord(walEntry)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to decode WAL record at offset %+v", nextOffset)
+		}
+		if len(payload) == 0 {
+			break
+		}
+
+		record := logrecord.GetRootAsLogRecord(payload, 0)
 		records = append(records, record)
 
 		if record.PrevTxnWalIndexLength() == 0 {

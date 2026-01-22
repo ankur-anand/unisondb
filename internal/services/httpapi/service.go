@@ -45,7 +45,7 @@ type Service struct {
 
 // transactionState holds the state of an active transaction.
 type transactionState struct {
-	txn       *dbkernel.Txn
+	txn       dbkernel.Transaction
 	namespace string
 	createdAt time.Time
 	lastWrite time.Time
@@ -200,7 +200,7 @@ func respondError(w http.ResponseWriter, statusCode int, message string) {
 
 func statusFromEngineError(err error) int {
 	switch {
-	case errors.Is(err, dbkernel.ErrTxnConflict), errors.Is(err, dbkernel.ErrTxnAlreadyCommitted):
+	case errors.Is(err, dbkernel.ErrTxnAlreadyCommitted):
 		return http.StatusConflict
 	case errors.Is(err, dbkernel.ErrKeyNotFound):
 		return http.StatusNotFound

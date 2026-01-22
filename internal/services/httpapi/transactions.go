@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/gorilla/mux"
 )
@@ -82,7 +81,7 @@ func (s *Service) handleBeginTransaction(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	txn, err := engine.NewTxn(opType, entryType)
+	txn, err := engine.NewTransaction(opType, entryType)
 	if err != nil {
 		respondError(w, statusFromEngineError(err), fmt.Sprintf("failed to create transaction: %v", err))
 		return
@@ -258,10 +257,6 @@ func (s *Service) handleCommitTransaction(w http.ResponseWriter, r *http.Request
 	defer state.mu.Unlock()
 
 	if err := state.txn.Commit(); err != nil {
-		if errors.Is(err, dbkernel.ErrTxnConflict) {
-			respondError(w, http.StatusConflict, fmt.Sprintf("failed to commit transaction: %v", err))
-			return
-		}
 		respondError(w, http.StatusInternalServerError, fmt.Sprintf("failed to commit transaction: %v", err))
 		return
 	}

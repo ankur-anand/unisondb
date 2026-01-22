@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"sync"
@@ -1315,136 +1314,6 @@ func readWalRecordLSN(t *testing.T, walog *walfs.WALog, idx uint64) uint64 {
 	return decoded.LSN
 }
 
-func TestKeyVersionEvictionRespectsActiveTxns(t *testing.T) {
-	baseDir := t.TempDir()
-	engine, err := NewStorageEngine(baseDir, "eviction_ns", NewDefaultEngineConfig())
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_ = engine.Close(context.Background())
-	})
-
-	require.NoError(t, engine.PutKV([]byte("k1"), []byte("v1")))
-	engine.mu.RLock()
-	require.Equal(t, 1, len(engine.keyVersions))
-	engine.mu.RUnlock()
-
-	engine.evictKeyVersions()
-	engine.mu.RLock()
-	require.Equal(t, 0, len(engine.keyVersions))
-	engine.mu.RUnlock()
-
-	txn, err := engine.NewTxn(logrecord.LogOperationTypeInsert, logrecord.LogEntryTypeKV)
-	require.NoError(t, err)
-	require.NoError(t, txn.AppendKVTxn([]byte("k2"), []byte("v2")))
-	require.NoError(t, engine.PutKV([]byte("k3"), []byte("v3")))
-
-	engine.evictKeyVersions()
-	engine.mu.RLock()
-	preserved := len(engine.keyVersions)
-	engine.mu.RUnlock()
-	require.NotEqual(t, 0, preserved, "versions should stay while txn is active")
-
-	require.NoError(t, txn.Commit())
-	engine.evictKeyVersions()
-	engine.mu.RLock()
-	defer engine.mu.RUnlock()
-	require.Equal(t, 0, len(engine.keyVersions))
-}
-
-func TestEvictKeyVersionsRespectsOldestTxn(t *testing.T) {
-	e := &Engine{
-		keyVersions:     map[string]uint64{"a": 1, "b": 5, "c": 10},
-		activeTxnBegins: map[uint64]int{7: 1},
-	}
-
-	e.evictKeyVersions()
-
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	require.Equal(t, map[string]uint64{"c": 10}, e.keyVersions)
-}
-
-func TestEvictKeyVersionsClearsWhenNoActiveTxn(t *testing.T) {
-	e := &Engine{
-		keyVersions:     map[string]uint64{"a": 1, "b": 2},
-		activeTxnBegins: make(map[uint64]int),
-	}
-
-	e.evictKeyVersions()
-
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	require.Empty(t, e.keyVersions)
-}
-
-func TestRegisterUnregisterTxnBeginCounts(t *testing.T) {
-	e := &Engine{
-		activeTxnBegins: make(map[uint64]int),
-	}
-
-	e.registerTxnBegin(10)
-	e.registerTxnBegin(10)
-	e.registerTxnBegin(20)
-
-	e.mu.RLock()
-	require.Equal(t, map[uint64]int{10: 2, 20: 1}, e.activeTxnBegins)
-	e.mu.RUnlock()
-
-	e.unregisterTxnBegin(10)
-	e.unregisterTxnBegin(10)
-	e.unregisterTxnBegin(20)
-
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	require.Empty(t, e.activeTxnBegins)
-}
-
-func TestEvictKeyVersionsNoopOnEmpty(t *testing.T) {
-	e := &Engine{
-		keyVersions:     make(map[string]uint64),
-		activeTxnBegins: make(map[uint64]int),
-	}
-
-	// should not panic or change anything
-	e.evictKeyVersions()
-
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	require.Empty(t, e.keyVersions)
-	require.Empty(t, e.activeTxnBegins)
-}
-
-func TestRecordKeyVersionsAndConflicts(t *testing.T) {
-	e := &Engine{
-		keyVersions:     make(map[string]uint64),
-		activeTxnBegins: make(map[uint64]int),
-	}
-
-	e.mu.Lock()
-	e.recordKeyVersions([][]byte{[]byte("k1"), []byte("k2")}, 5)
-	e.recordKeyVersions([][]byte{[]byte("k3")}, 10)
-	e.mu.Unlock()
-
-	e.mu.RLock()
-	require.Equal(t, map[string]uint64{"k1": 5, "k2": 5, "k3": 10}, e.keyVersions)
-	e.mu.RUnlock()
-
-	e.mu.RLock()
-	err := e.checkKeyConflicts([][]byte{[]byte("k1")}, 4)
-	e.mu.RUnlock()
-	require.ErrorIs(t, err, ErrTxnConflict)
-
-	e.mu.RLock()
-	err = e.checkKeyConflicts([][]byte{[]byte("k1"), []byte("k2")}, 5)
-	e.mu.RUnlock()
-	require.NoError(t, err)
-
-	e.mu.RLock()
-	err = e.checkKeyConflicts([][]byte{[]byte("unknown")}, 0)
-	e.mu.RUnlock()
-	require.NoError(t, err)
-}
-
 func TestNewWalCleanupPredicate(t *testing.T) {
 	t.Run("uses_checkpoint", func(t *testing.T) {
 		checkpoint := &internal.Metadata{Pos: &wal.Offset{SegmentID: 4, Offset: 10}}
@@ -1465,32 +1334,6 @@ func TestNewWalCleanupPredicate(t *testing.T) {
 		})
 		assert.False(t, predicateNil(1), "nil checkpoint should keep segments")
 	})
-}
-
-func TestMinActiveTxnBegin(t *testing.T) {
-	e := &Engine{
-		activeTxnBegins: make(map[uint64]int),
-	}
-
-	e.mu.Lock()
-	e.registerTxnBegin(100)
-	e.registerTxnBegin(50)
-	e.registerTxnBegin(75)
-	e.registerTxnBegin(50)
-	min := e.minActiveTxnBegin()
-	e.mu.Unlock()
-
-	require.Equal(t, uint64(50), min)
-
-	e.mu.Lock()
-	e.unregisterTxnBegin(50)
-	e.unregisterTxnBegin(50)
-	e.unregisterTxnBegin(100)
-	e.unregisterTxnBegin(75)
-	min = e.minActiveTxnBegin()
-	e.mu.Unlock()
-
-	require.Equal(t, uint64(math.MaxUint64), min)
 }
 
 func TestNewRaftWalCleanupPredicate(t *testing.T) {
