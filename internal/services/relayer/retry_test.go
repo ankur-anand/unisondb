@@ -134,6 +134,11 @@ func TestDefaultClassifier(t *testing.T) {
 			expected: relayer.Transient,
 		},
 		{
+			name:     "gRPC OutOfRange is permanent",
+			err:      status.Error(codes.OutOfRange, "LSN truncated"),
+			expected: relayer.Permanent,
+		},
+		{
 			name:     "gRPC InvalidArgument is permanent",
 			err:      status.Error(codes.InvalidArgument, "bad request"),
 			expected: relayer.Permanent,
@@ -146,6 +151,11 @@ func TestDefaultClassifier(t *testing.T) {
 		{
 			name:     "error with 'denied' in message is permanent",
 			err:      errors.New("access denied"),
+			expected: relayer.Permanent,
+		},
+		{
+			name:     "error with 'truncated' in message is permanent",
+			err:      errors.New("lsn truncated at 10"),
 			expected: relayer.Permanent,
 		},
 		{

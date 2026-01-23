@@ -774,9 +774,9 @@ func (e *Engine) NewReaderFromLSN(startLSN uint64, tail bool) (*Reader, error) {
 
 	walog := e.WAL()
 
-	pos, err := walog.PositionForIndex(startLSN)
+	pos, err := walog.PositionForIndexWithBounds(startLSN)
 	if err != nil {
-		return nil, fmt.Errorf("LSN %d not found: %w", startLSN, err)
+		return nil, fmt.Errorf("LSN %d: %w", startLSN, err)
 	}
 
 	startOffset := &Offset{

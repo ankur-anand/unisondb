@@ -55,6 +55,23 @@ func (n *noopWalIO) WriteBatch(records []*v1.WALRecord) error {
 	return nil
 }
 
+type outOfRangeServer struct {
+	v1.UnimplementedWalStreamerServiceServer
+	callCount atomic.Int32
+}
+
+func (s *outOfRangeServer) StreamWalRecords(
+	_ *v1.StreamWalRecordsRequest,
+	_ grpc.ServerStreamingServer[v1.StreamWalRecordsResponse],
+) error {
+	s.callCount.Add(1)
+	return status.Error(codes.OutOfRange, services.ErrLSNTruncated.Error())
+}
+
+func (s *outOfRangeServer) GetLatestLSN(_ context.Context, _ *v1.GetLatestLSNRequest) (*v1.GetLatestLSNResponse, error) {
+	return &v1.GetLatestLSNResponse{Lsn: 0}, nil
+}
+
 func bufDialer(lis *bufconn.Listener) func(ctx context.Context, s string) (net.Conn, error) {
 	return func(ctx context.Context, s string) (net.Conn, error) {
 		return lis.Dial()
@@ -653,4 +670,35 @@ type wrappedServerStream struct {
 
 func (w *wrappedServerStream) Context() context.Context {
 	return w.ctx
+}
+
+func TestClient_StreamWAL_LSNTruncated(t *testing.T) {
+	listener := bufconn.Listen(listenerBuffSize)
+	defer listener.Close()
+
+	server := &outOfRangeServer{}
+	gS := grpc.NewServer()
+	defer gS.Stop()
+
+	go func() {
+		v1.RegisterWalStreamerServiceServer(gS, server)
+		if err := gS.Serve(listener); err != nil {
+			assert.NoError(t, err, "failed to grpc start server")
+		}
+	}()
+
+	conn, err := grpc.NewClient("passthrough://bufnet", grpc.WithContextDialer(bufDialer(listener)),
+		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	assert.NoError(t, err, "failed to create grpc client")
+
+	client := streamer.NewGrpcStreamerClient(conn, "test-namespace", &noopWalIO{}, 10)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err = client.StreamWAL(ctx)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "resync required")
+	assert.Equal(t, int32(1), server.callCount.Load(), "should not retry on LSN truncation")
+
+	assert.NoError(t, conn.Close())
 }

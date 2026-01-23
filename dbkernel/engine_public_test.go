@@ -1218,10 +1218,15 @@ func TestEngine_NewReaderFromLSN(t *testing.T) {
 
 		_, err = engine.NewReaderFromLSN(100, false)
 		assert.Error(t, err, "should error for non-existent LSN")
-		assert.Contains(t, err.Error(), "LSN 100 not found")
+		var notYet *walfs.LSNNotYetAvailableError
+		assert.ErrorAs(t, err, &notYet)
+		assert.Equal(t, uint64(100), notYet.RequestedLSN)
+		assert.Equal(t, uint64(5), notYet.CurrentMaxLSN)
 
 		_, err = engine.NewReaderFromLSN(100, true)
 		assert.Error(t, err, "should error for non-existent LSN with tail")
+		var notYetTail *walfs.LSNNotYetAvailableError
+		assert.ErrorAs(t, err, &notYetTail)
 	})
 
 	t.Run("read_all_from_specific_lsn", func(t *testing.T) {

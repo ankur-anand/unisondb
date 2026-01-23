@@ -88,40 +88,57 @@ func (c *GrpcStreamerClient) StreamWAL(ctx context.Context) error {
 		client, err := v1.NewWalStreamerServiceClient(c.gcc).StreamWalRecords(ctx, req)
 
 		if err != nil {
-			if shouldRetry(err) {
-				retryCount++
-				slog.Warn("[unisondb.streamer.grpc.client] StreamWAL failed, retrying",
-					"namespace", c.namespace, "error", err,
-					"retry_count", retryCount)
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(getJitteredBackoff(&backoff)):
-				}
+			shouldContinue, handledErr := c.handleStreamAttemptError(ctx, err, &retryCount, &backoff, true)
+			if shouldContinue {
 				continue
 			}
-			return handleStreamError(c.namespace, err)
+			return handledErr
 		}
 
 		if err := c.receiveWALRecords(client, streamStartTime); err != nil {
-			if shouldRetry(err) {
-				retryCount++
-				slog.Warn("[unisondb.streamer.grpc.client] StreamWAL failed, retrying",
-					"namespace", c.namespace, "error", err,
-					"retry_count", retryCount)
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(getJitteredBackoff(&backoff)):
-				}
+			shouldContinue, handledErr := c.handleStreamAttemptError(ctx, err, &retryCount, &backoff, false)
+			if shouldContinue {
 				continue
 			}
-			return err
+			return handledErr
 		}
 
 		retryCount = 0
 		backoff = initialBackoff
 	}
+}
+
+func (c *GrpcStreamerClient) handleStreamAttemptError(
+	ctx context.Context,
+	err error,
+	retryCount *int,
+	backoff *time.Duration,
+	useStreamError bool,
+) (bool, error) {
+	if requiresResync(err) {
+		slog.Error("[unisondb.streamer.grpc.client] LSN truncated - resync required",
+			"namespace", c.namespace,
+			"lsn", c.lsn,
+			"error", err)
+		clientWalStreamErrTotal.WithLabelValues(c.namespace, "grpc", "lsn_truncated").Inc()
+		return false, fmt.Errorf("LSN %d truncated, resync required: %w", c.lsn, err)
+	}
+	if shouldRetry(err) {
+		*retryCount = *retryCount + 1
+		slog.Warn("[unisondb.streamer.grpc.client] StreamWAL failed, retrying",
+			"namespace", c.namespace, "error", err,
+			"retry_count", *retryCount)
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(getJitteredBackoff(backoff)):
+		}
+		return true, nil
+	}
+	if useStreamError {
+		return false, handleStreamError(c.namespace, err)
+	}
+	return false, err
 }
 
 type batchJob struct {
@@ -204,6 +221,11 @@ func handleStreamError(namespace string, err error) error {
 func shouldRetry(err error) bool {
 	sErr := status.Convert(err)
 	return sErr.Code() == codes.Unavailable || sErr.Code() == codes.ResourceExhausted
+}
+
+func requiresResync(err error) bool {
+	sErr := status.Convert(err)
+	return sErr.Code() == codes.OutOfRange
 }
 
 func getJitteredBackoff(backoff *time.Duration) time.Duration {
