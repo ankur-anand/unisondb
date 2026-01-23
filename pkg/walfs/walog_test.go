@@ -3201,3 +3201,129 @@ func TestWALog_CustomMarkerValidatorOnRecover(t *testing.T) {
 	}))
 	require.Error(t, err)
 }
+
+func TestWALog_Bounds_UpdateOnWriteAndRecovery(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal")
+	require.NoError(t, err)
+
+	first, last := wal.GetBounds()
+	assert.Equal(t, uint64(0), first)
+	assert.Equal(t, uint64(0), last)
+
+	_, err = wal.Write([]byte("first"), 5)
+	require.NoError(t, err)
+	_, err = wal.Write([]byte("second"), 6)
+	require.NoError(t, err)
+
+	first, last = wal.GetBounds()
+	assert.Equal(t, uint64(5), first)
+	assert.Equal(t, uint64(6), last)
+
+	require.NoError(t, wal.Close())
+
+	wal2, err := walfs.NewWALog(dir, ".wal")
+	require.NoError(t, err)
+	defer wal2.Close()
+
+	first, last = wal2.GetBounds()
+	assert.Equal(t, uint64(5), first)
+	assert.Equal(t, uint64(6), last)
+}
+
+func TestWALog_Bounds_UpdateOnWriteBatch(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal")
+	require.NoError(t, err)
+	defer wal.Close()
+
+	records := [][]byte{
+		[]byte("a"),
+		[]byte("b"),
+		[]byte("c"),
+	}
+	logIndexes := []uint64{10, 11, 12}
+
+	_, err = wal.WriteBatch(records, logIndexes)
+	require.NoError(t, err)
+
+	first, last := wal.GetBounds()
+	assert.Equal(t, uint64(10), first)
+	assert.Equal(t, uint64(12), last)
+
+	moreRecords := [][]byte{
+		[]byte("d"),
+		[]byte("e"),
+	}
+	moreIndexes := []uint64{13, 14}
+
+	_, err = wal.WriteBatch(moreRecords, moreIndexes)
+	require.NoError(t, err)
+
+	first, last = wal.GetBounds()
+	assert.Equal(t, uint64(10), first)
+	assert.Equal(t, uint64(14), last)
+}
+
+func TestWALog_Bounds_UpdateOnTruncateAndReset(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal")
+	require.NoError(t, err)
+	defer wal.Close()
+
+	for i := 1; i <= 10; i++ {
+		_, err := wal.Write([]byte("payload"), uint64(i))
+		require.NoError(t, err)
+	}
+
+	first, last := wal.GetBounds()
+	assert.Equal(t, uint64(1), first)
+	assert.Equal(t, uint64(10), last)
+
+	require.NoError(t, wal.Truncate(5))
+
+	first, last = wal.GetBounds()
+	assert.Equal(t, uint64(1), first)
+	assert.Equal(t, uint64(5), last)
+
+	require.NoError(t, wal.Truncate(0))
+
+	first, last = wal.GetBounds()
+	assert.Equal(t, uint64(0), first)
+	assert.Equal(t, uint64(0), last)
+}
+
+func TestWALog_Bounds_UpdateOnPendingDeletionCleanup(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal",
+		walfs.WithAutoCleanupPolicy(time.Millisecond*100, 1, 1, true))
+	require.NoError(t, err)
+	defer wal.Close()
+
+	for i := 1; i <= 6; i++ {
+		_, err := wal.Write([]byte("payload"), uint64(i))
+		require.NoError(t, err)
+		if i%2 == 0 && i < 6 {
+			require.NoError(t, wal.RotateSegment())
+		}
+	}
+
+	require.Greater(t, len(wal.Segments()), 1)
+	expectedLast := uint64(6)
+	expectedFirst := wal.Current().FirstLogIndex()
+
+	wal.MarkSegmentsForDeletion()
+	require.NotEmpty(t, wal.QueuedSegmentsForDeletion())
+	wal.CleanupStalePendingSegments()
+
+	first, last := wal.GetBounds()
+	assert.Equal(t, expectedFirst, first)
+	assert.Equal(t, expectedLast, last)
+
+	_, ok := wal.LogIndex().Get(1)
+	assert.False(t, ok, "deleted segments should be removed from the log index")
+}
