@@ -3327,3 +3327,34 @@ func TestWALog_Bounds_UpdateOnPendingDeletionCleanup(t *testing.T) {
 	_, ok := wal.LogIndex().Get(1)
 	assert.False(t, ok, "deleted segments should be removed from the log index")
 }
+
+func TestPositionForIndexWithBounds(t *testing.T) {
+	dir := t.TempDir()
+
+	wal, err := walfs.NewWALog(dir, ".wal")
+	require.NoError(t, err)
+	defer wal.Close()
+
+	for i := 10; i <= 12; i++ {
+		_, err := wal.Write([]byte("payload"), uint64(i))
+		require.NoError(t, err)
+	}
+
+	pos, err := wal.PositionForIndexWithBounds(10)
+	require.NoError(t, err)
+	assert.NotEqual(t, walfs.NilRecordPosition, pos)
+
+	_, err = wal.PositionForIndexWithBounds(9)
+	require.Error(t, err)
+	var truncated *walfs.LSNTruncatedError
+	require.ErrorAs(t, err, &truncated)
+	assert.Equal(t, uint64(9), truncated.RequestedLSN)
+	assert.Equal(t, uint64(10), truncated.FirstAvailableLSN)
+
+	_, err = wal.PositionForIndexWithBounds(20)
+	require.Error(t, err)
+	var notYet *walfs.LSNNotYetAvailableError
+	require.ErrorAs(t, err, &notYet)
+	assert.Equal(t, uint64(20), notYet.RequestedLSN)
+	assert.Equal(t, uint64(12), notYet.CurrentMaxLSN)
+}

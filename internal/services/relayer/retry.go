@@ -68,13 +68,17 @@ func DefaultClassifier(err error) ErrorKind {
 		switch s.Code() {
 		case codes.Unavailable, codes.ResourceExhausted, codes.DeadlineExceeded:
 			return Transient
+		case codes.OutOfRange:
+			return Permanent
 		default:
 			return Permanent
 		}
 	}
 
 	// fallback for plain errors
-	if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "denied") {
+	if strings.Contains(err.Error(), "invalid") ||
+		strings.Contains(err.Error(), "denied") ||
+		strings.Contains(err.Error(), "truncated") {
 		return Permanent
 	}
 	return Transient

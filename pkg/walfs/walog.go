@@ -25,6 +25,26 @@ var (
 	ErrRecordTooLarge     = errors.New("record size exceeds maximum segment capacity")
 )
 
+// LSNNotYetAvailableError indicates the requested LSN is beyond the current max.
+type LSNNotYetAvailableError struct {
+	RequestedLSN  uint64
+	CurrentMaxLSN uint64
+}
+
+func (e *LSNNotYetAvailableError) Error() string {
+	return fmt.Sprintf("LSN %d not yet available (current max: %d)", e.RequestedLSN, e.CurrentMaxLSN)
+}
+
+// LSNTruncatedError indicates the requested LSN has been garbage collected.
+type LSNTruncatedError struct {
+	RequestedLSN      uint64
+	FirstAvailableLSN uint64
+}
+
+func (e *LSNTruncatedError) Error() string {
+	return fmt.Sprintf("LSN %d truncated (first available: %d)", e.RequestedLSN, e.FirstAvailableLSN)
+}
+
 // DeletionPredicate is a function that determines if a segment ID is safe to delete.
 type DeletionPredicate func(segID SegmentID) bool
 
@@ -1440,4 +1460,41 @@ func (wl *WALog) NewReaderWithStart(pos RecordPosition, opts ...ReaderOption) (*
 	}
 
 	return r, nil
+}
+
+// PositionForIndexWithBounds returns the RecordPosition for the given log index,
+// returning typed errors for "not yet available" vs "truncated".
+func (wl *WALog) PositionForIndexWithBounds(idx uint64) (RecordPosition, error) {
+	if wl.logIndex == nil {
+		return NilRecordPosition, errors.New("log index not initialized")
+	}
+
+	first, last := wl.GetBounds()
+	if first == 0 && last == 0 {
+		return NilRecordPosition, &LSNNotYetAvailableError{
+			RequestedLSN:  idx,
+			CurrentMaxLSN: 0,
+		}
+	}
+	if idx > last {
+		return NilRecordPosition, &LSNNotYetAvailableError{
+			RequestedLSN:  idx,
+			CurrentMaxLSN: last,
+		}
+	}
+	if idx < first {
+		return NilRecordPosition, &LSNTruncatedError{
+			RequestedLSN:      idx,
+			FirstAvailableLSN: first,
+		}
+	}
+
+	pos, ok := wl.logIndex.Get(idx)
+	if !ok {
+		return NilRecordPosition, fmt.Errorf(
+			"log index %d not found (expected range [%d, %d])",
+			idx, first, last,
+		)
+	}
+	return pos, nil
 }

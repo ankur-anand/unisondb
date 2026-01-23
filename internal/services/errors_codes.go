@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/ankur-anand/unisondb/internal/grpcutils"
+	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -20,11 +21,20 @@ var (
 	ErrPutChunkCheckSumMismatch   = errors.New("invalid checksum: checksum mismatch")
 	ErrPutChunkAlreadyCommited    = errors.New("put chunk stream already commited")
 	ErrClientMaxRetriesExceeded   = errors.New("max retries exceeded")
+	ErrLSNNotYetAvailable         = errors.New("LSN not yet available")
+	ErrLSNTruncated               = errors.New("LSN truncated")
 )
 
 // ToGRPCError Convert business error to gRPC error.
 // Custom types to avoid ordering issue while calling the function.
 func ToGRPCError(namespace string, reqID grpcutils.RequestID, method grpcutils.Method, err error) error {
+	if isLSNNotYetAvailable(err) {
+		return status.Error(codes.Unavailable, ErrLSNNotYetAvailable.Error())
+	}
+	if isLSNTruncated(err) {
+		return status.Error(codes.OutOfRange, ErrLSNTruncated.Error())
+	}
+
 	switch {
 	case errors.Is(err, ErrMissingNamespace):
 		return status.Error(codes.InvalidArgument, ErrMissingNamespace.Error())
@@ -49,4 +59,20 @@ func ToGRPCError(namespace string, reqID grpcutils.RequestID, method grpcutils.M
 			"namespace", namespace)
 		return status.Errorf(codes.Internal, "internal server error")
 	}
+}
+
+func isLSNNotYetAvailable(err error) bool {
+	if errors.Is(err, ErrLSNNotYetAvailable) {
+		return true
+	}
+	var notYet *walfs.LSNNotYetAvailableError
+	return errors.As(err, &notYet)
+}
+
+func isLSNTruncated(err error) bool {
+	if errors.Is(err, ErrLSNTruncated) {
+		return true
+	}
+	var truncated *walfs.LSNTruncatedError
+	return errors.As(err, &truncated)
 }
