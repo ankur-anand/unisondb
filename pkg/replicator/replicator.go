@@ -156,7 +156,12 @@ func (r *Replicator) replicateFromReader(_ context.Context, recordsChan chan<- [
 		}
 
 		walRecord := acquireWalRecord()
-		walRecord.Record = value
+		// Create a copy of the data. The original 'value' points to memory-mapped file content.
+		// If the reader closes and unmaps the file before the async streamer sends this,
+		// accessing 'value' would cause a SIGSEGV.
+		dataCopy := make([]byte, len(value))
+		copy(dataCopy, value)
+		walRecord.Record = dataCopy
 		decoded := logrecord.GetRootAsLogRecord(value, 0)
 		r.lastLSN = decoded.Lsn()
 
