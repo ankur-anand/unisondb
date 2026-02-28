@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "^1.24.0"
+
+      - name: Install CGO dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config liblmdb-dev nodejs
+
+      - name: Run GoReleaser (act snapshot)
+        if: ${{ env.ACT == 'true' }}
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --snapshot --clean --skip=publish
+
+      - name: Run GoReleaser (publish)
+        if: ${{ env.ACT != 'true' }}
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
