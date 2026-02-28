@@ -43,3 +43,7 @@ gen-fb:
 .PHONY: install
 install:
 	@go install tool
+
+.PHONY: test-release-act
+test-release-act:
+	@scripts/test_release_act.sh .github/act-events/release-tag.json --run

@@ -19,6 +19,8 @@ var formatFlag = &cli.StringFlag{
 	Usage:   "Output format: table, json",
 }
 
+var version = "dev"
+
 func getFormatter(c *cli.Context) (output.Formatter, error) {
 	format := c.String("format")
 	if format != "table" && format != "json" {
@@ -31,7 +33,7 @@ func main() {
 	app := &cli.App{
 		Name:    "udbctl",
 		Usage:   "UnisonDB control CLI",
-		Version: "0.1.0",
+		Version: version,
 		Commands: []*cli.Command{
 			walCommand(),
 			restoreCommand(),
