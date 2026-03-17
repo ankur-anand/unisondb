@@ -36,12 +36,19 @@ var commonFlags = []cli.Flag{
 	},
 }
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 func main() {
 	cliapp.PrintBanner()
 
 	app := &cli.App{
-		Name:  "unisondb",
-		Usage: "Database + Message Bus. Built for Edge.",
+		Name:    "unisondb",
+		Usage:   "Database + Message Bus. Built for Edge.",
+		Version: version,
 		Commands: []*cli.Command{
 			serverCommand,
 			replicaCommand,

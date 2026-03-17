@@ -1,0 +1,65 @@
+version: 2
+
+project_name: unisondb
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: unisondb
+    binary: unisondb
+    main: ./cmd/unisondb
+    env:
+      - CGO_ENABLED=1
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+  - id: udbctl
+    binary: udbctl
+    main: ./cmd/udbctl
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos:
+      - linux
+    goarch:
+      - amd64
+
+archives:
+  - id: binaries
+    ids:
+      - unisondb
+      - udbctl
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+
+release:
+  draft: true
+  prerelease: auto
