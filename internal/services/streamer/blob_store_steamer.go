@@ -32,7 +32,7 @@ const (
 
 // BlobStoreStreamer reads WAL records from storage engines via the Replicator
 // and writes them to an isledb-backed blob store keyed by big-endian LSN.
-// Downstream consumers use BlobStoreStreamerClient (TailingReader) to consume.
+// Downstream consumers use BlobStoreStreamerClient to refresh and consume.
 type BlobStoreStreamer struct {
 	storageEngines  map[string]*dbkernel.Engine
 	namespaceStores map[string]*blobstore.Store
