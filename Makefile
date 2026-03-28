@@ -32,7 +32,7 @@ lint: lint-check-deps
 lint-check-deps:
 	@if [ -z `which golangci-lint` ]; then \
 		echo "[go get] installing golangci-lint";\
-		go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.61.0;\
+		go install github.com/golangci/golangci-lint/cmd/golangci-lint@v2.11.3;\
 	fi
 
 .PHONY: gen-fb

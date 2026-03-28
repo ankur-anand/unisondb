@@ -1,40 +1,39 @@
+version: "2"
+
+run:
+  tests: false
+
 linters:
-  # Disable all linters.
-  # Default: false
-  disable-all: false
-  # Enable specific linter
-  # https://golangci-lint.run/usage/linters/#enabled-by-default
+  default: standard
   enable:
     - bodyclose
+    - funlen
+    - gocognit
     - goconst
     - gocyclo
     - godot
-    - gci
-    - funlen
-    - gocognit
-    - gofmt
-    - goimports
     - nilerr
     - perfsprint
     - rowserrcheck
     - sloglint
     - sqlclosecheck
-    - stylecheck
+    - staticcheck
     - tagalign
     - whitespace
   disable:
-    - unused
+    - errcheck
     - ireturn
+    - unused
+  settings:
+    funlen:
+      lines: 100
+      ignore-comments: true
 
 issues:
   fix: true
 
-run:
-  # Include test files or not.
-  # Default: true
-  tests: false
-
-linters-settings:
-  funlen:
-    lines: 100
-    ignore-comments: true
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - goimports
