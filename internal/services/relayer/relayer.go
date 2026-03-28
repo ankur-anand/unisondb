@@ -218,7 +218,6 @@ func NewRelayerWithStreamer(engine *dbkernel.Engine,
 	walIO WalIO,
 	lsnLagThreshold int,
 	log *slog.Logger) *Relayer {
-
 	currentOffset := engine.CurrentOffset()
 	segmentID := 0
 	if currentOffset != nil {
