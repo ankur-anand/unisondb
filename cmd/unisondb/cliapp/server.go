@@ -411,6 +411,10 @@ func buildNamespaceGrpcClients(cfg config.Config) (map[string]*grpc.ClientConn, 
 	var mu sync.Mutex
 
 	for _, relay := range cfg.RelayConfigs {
+		if relay.StreamerType == config.StreamerTypeBlobStore {
+			continue
+		}
+
 		hash := config.HashRelayConfig(relay)
 
 		mu.Lock()

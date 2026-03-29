@@ -22,6 +22,7 @@ type Config struct {
 	ListenIP           string                    `toml:"listen_ip"`
 	Grpc               GrpcConfig                `toml:"grpc_config"`
 	Storage            StorageConfig             `toml:"storage_config"`
+	BlobStoreStreaming BlobStoreStreamingConfig  `toml:"blob_store_streaming"`
 	PProfConfig        PProfConfig               `toml:"pprof_config"`
 	RelayConfigs       map[string]RelayConfig    `toml:"relayer_config"`
 	WalIOGlobalLimiter WalIOGlobalLimiter        `toml:"wal_io_global_limiter"`
@@ -113,16 +114,54 @@ type NotifierConfig struct {
 	LingerTime    int `toml:"linger_time"`
 }
 
+// StreamerType identifies the replication transport.
+type StreamerType string
+
+const (
+	// StreamerTypeGRPC uses gRPC streaming (default).
+	StreamerTypeGRPC StreamerType = "grpc"
+	// StreamerTypeBlobStore uses isledb-backed blob store streaming.
+	StreamerTypeBlobStore StreamerType = "blobstore"
+)
+
 // RelayConfig holds TLS and upstream gRPC config.
 type RelayConfig struct {
-	Namespaces        []string `toml:"namespaces"`
-	CertPath          string   `toml:"cert_path"`
-	KeyPath           string   `toml:"key_path"`
-	CAPath            string   `toml:"ca_path"`
-	UpstreamAddress   string   `toml:"upstream_address"`
-	GrpcServiceConfig string   `toml:"grpc_service_config"`
-	LSNLagThreshold   int      `toml:"lsn_lag_threshold"`
-	AllowInsecure     bool     `toml:"allow_insecure"`
+	Namespaces        []string     `toml:"namespaces"`
+	StreamerType      StreamerType `toml:"streamer_type"`
+	CertPath          string       `toml:"cert_path"`
+	KeyPath           string       `toml:"key_path"`
+	CAPath            string       `toml:"ca_path"`
+	UpstreamAddress   string       `toml:"upstream_address"`
+	GrpcServiceConfig string       `toml:"grpc_service_config"`
+	LSNLagThreshold   int          `toml:"lsn_lag_threshold"`
+	AllowInsecure     bool         `toml:"allow_insecure"`
+
+	// BlobStore-specific config (used when StreamerType == "blobstore").
+	BlobStore BlobStoreRelayConfig `toml:"blobstore"`
+}
+
+// BlobStoreRelayConfig holds blob store streamer settings.
+type BlobStoreRelayConfig struct {
+	// BucketURL is the object storage URL (e.g. "s3://bucket?region=us-east-1", "file:///data").
+	BucketURL string `toml:"bucket_url"`
+	// Prefix is the key prefix within the bucket.
+	Prefix string `toml:"prefix"`
+	// CacheDir is the local directory used to cache SST files.
+	CacheDir string `toml:"cache_dir"`
+	// RefreshInterval controls how often the blobstore reader refreshes and
+	// checks for newly committed WAL records.
+	RefreshInterval string `toml:"refresh_interval"`
+}
+
+type BlobStoreStreamingConfig struct {
+	Enabled       bool                              `toml:"enabled"`
+	FlushInterval string                            `toml:"flush_interval"`
+	Namespaces    map[string]BlobStoreWriteNSConfig `toml:"namespaces"`
+}
+
+type BlobStoreWriteNSConfig struct {
+	BucketURL  string `toml:"bucket_url"`
+	BasePrefix string `toml:"base_prefix"`
 }
 
 type LogConfig struct {

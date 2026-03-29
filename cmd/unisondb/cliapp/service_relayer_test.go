@@ -40,3 +40,46 @@ func TestRelayerService_Close_NoConnections(t *testing.T) {
 	err := svc.Close(context.Background())
 	assert.NoError(t, err)
 }
+
+func TestBuildNamespaceStreamerTypeMap(t *testing.T) {
+	cfg := &config.Config{
+		RelayConfigs: map[string]config.RelayConfig{
+			"default": {
+				Namespaces: []string{"orders"},
+			},
+			"blob": {
+				Namespaces:   []string{"inventory"},
+				StreamerType: config.StreamerTypeBlobStore,
+			},
+		},
+	}
+
+	got := buildNamespaceStreamerTypeMap(cfg)
+
+	assert.Equal(t, config.StreamerTypeGRPC, got["orders"])
+	assert.Equal(t, config.StreamerTypeBlobStore, got["inventory"])
+}
+
+func TestFindBlobStoreConfig(t *testing.T) {
+	cfg := &config.Config{
+		RelayConfigs: map[string]config.RelayConfig{
+			"blob": {
+				Namespaces:   []string{"orders"},
+				StreamerType: config.StreamerTypeBlobStore,
+				BlobStore: config.BlobStoreRelayConfig{
+					BucketURL:       "s3://bucket",
+					Prefix:          "unisondb",
+					CacheDir:        "/tmp/cache",
+					RefreshInterval: "1s",
+				},
+			},
+		},
+	}
+
+	got := findBlobStoreConfig("orders", cfg)
+
+	assert.Equal(t, "s3://bucket", got.BucketURL)
+	assert.Equal(t, "unisondb", got.Prefix)
+	assert.Equal(t, "/tmp/cache", got.CacheDir)
+	assert.Equal(t, "1s", got.RefreshInterval)
+}

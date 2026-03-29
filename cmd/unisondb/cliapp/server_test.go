@@ -11,6 +11,7 @@ import (
 
 	"github.com/ankur-anand/unisondb/cmd/unisondb/config"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 )
 
@@ -529,4 +530,25 @@ func TestBuildNamespaceGrpcClientsError(t *testing.T) {
 	if !strings.Contains(err.Error(), "failed to dial") && !strings.Contains(err.Error(), "no such file") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestBuildNamespaceGrpcClientsSkipsBlobStoreRelays(t *testing.T) {
+	cfg := config.Config{
+		RelayConfigs: map[string]config.RelayConfig{
+			"blob-relay": {
+				Namespaces:      []string{"orders"},
+				StreamerType:    config.StreamerTypeBlobStore,
+				LSNLagThreshold: 5,
+				BlobStore: config.BlobStoreRelayConfig{
+					BucketURL:       "file:///tmp/blobstore",
+					Prefix:          "unisondb",
+					RefreshInterval: "1s",
+				},
+			},
+		},
+	}
+
+	clients, err := buildNamespaceGrpcClients(cfg)
+	require.NoError(t, err)
+	assert.Empty(t, clients)
 }
