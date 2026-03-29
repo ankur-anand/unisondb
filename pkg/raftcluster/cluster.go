@@ -52,9 +52,11 @@ type Cluster struct {
 	// Raft rejects concurrent config changes with ErrConfigurationBusy.
 	configMu        sync.Mutex
 	leaderBarrierMu sync.Mutex
+	leaderSubsMu    sync.Mutex
 	leaderReady     atomic.Bool
 	leaderStopCh    chan struct{}
 	leaderStopOnce  sync.Once
+	leaderSubs      map[chan bool]struct{}
 
 	closed atomic.Bool
 }
@@ -66,6 +68,7 @@ func NewCluster(r *raft.Raft, localID raft.ServerID, namespace string) *Cluster 
 		localID:      localID,
 		namespace:    namespace,
 		leaderStopCh: make(chan struct{}),
+		leaderSubs:   make(map[chan bool]struct{}),
 	}
 	go c.monitorLeadership()
 	return c
@@ -100,6 +103,23 @@ func (c *Cluster) State() raft.RaftState {
 // LastIndex returns the last log index.
 func (c *Cluster) LastIndex() uint64 {
 	return c.raft.LastIndex()
+}
+
+func (c *Cluster) LeaderCh() <-chan bool {
+	ch := make(chan bool, 1)
+	if c.closed.Load() {
+		close(ch)
+		return ch
+	}
+
+	c.leaderSubsMu.Lock()
+	defer c.leaderSubsMu.Unlock()
+	if c.closed.Load() {
+		close(ch)
+		return ch
+	}
+	c.leaderSubs[ch] = struct{}{}
+	return ch
 }
 
 func (c *Cluster) ApplyBatch(payloads [][]byte, timeout time.Duration) []error {
@@ -435,12 +455,14 @@ func (c *Cluster) monitorLeadership() {
 	if c.raft == nil {
 		return
 	}
+	defer c.closeLeaderSubscribers()
 
 	leaderCh := c.raft.LeaderCh()
 	for {
 		select {
 		case isLeader := <-leaderCh:
 			c.leaderReady.Store(false)
+			c.broadcastLeaderChange(isLeader)
 			leaderAddr, leaderID := c.raft.LeaderWithID()
 			if isLeader {
 				slog.Info("[raftcluster]",
@@ -458,6 +480,36 @@ func (c *Cluster) monitorLeadership() {
 		case <-c.leaderStopCh:
 			return
 		}
+	}
+}
+
+func (c *Cluster) broadcastLeaderChange(isLeader bool) {
+	c.leaderSubsMu.Lock()
+	defer c.leaderSubsMu.Unlock()
+
+	for ch := range c.leaderSubs {
+		select {
+		case ch <- isLeader:
+		default:
+			select {
+			case <-ch:
+			default:
+			}
+			select {
+			case ch <- isLeader:
+			default:
+			}
+		}
+	}
+}
+
+func (c *Cluster) closeLeaderSubscribers() {
+	c.leaderSubsMu.Lock()
+	defer c.leaderSubsMu.Unlock()
+
+	for ch := range c.leaderSubs {
+		close(ch)
+		delete(c.leaderSubs, ch)
 	}
 }
 

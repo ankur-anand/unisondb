@@ -110,6 +110,10 @@ func (r *RaftService) Setup(ctx context.Context, deps *Dependencies) error {
 		return errors.New("raft: peers cannot be set when serf membership is enabled")
 	}
 
+	if err := r.validateConfig(cfg); err != nil {
+		return err
+	}
+
 	r.enabled = true
 
 	// Create shared transport manager for all namespaces
@@ -422,6 +426,14 @@ func (r *RaftService) buildRaftConfig(cfg config.RaftConfig) *raft.Config {
 	return rc
 }
 
+func (r *RaftService) validateConfig(cfg config.RaftConfig) error {
+	rc := r.buildRaftConfig(cfg)
+	if err := raft.ValidateConfig(rc); err != nil {
+		return fmt.Errorf("raft: invalid configuration: %w", err)
+	}
+	return nil
+}
+
 func (r *RaftService) getApplyTimeout(cfg config.RaftConfig) time.Duration {
 	if cfg.ApplyTimeout != "" {
 		if d, err := time.ParseDuration(cfg.ApplyTimeout); err == nil {
@@ -573,6 +585,14 @@ func (r *RaftService) GetCluster(namespace string) *raftcluster.Cluster {
 		return nr.cluster
 	}
 	return nil
+}
+
+func (r *RaftService) Clusters() map[string]*raftcluster.Cluster {
+	clusters := make(map[string]*raftcluster.Cluster, len(r.clusters))
+	for namespace, nr := range r.clusters {
+		clusters[namespace] = nr.cluster
+	}
+	return clusters
 }
 
 func (r *RaftService) IsLeader(namespace string) bool {

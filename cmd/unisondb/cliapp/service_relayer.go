@@ -4,9 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/ankur-anand/unisondb/cmd/unisondb/config"
+	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/services/relayer"
+	"github.com/ankur-anand/unisondb/internal/services/streamer"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/time/rate"
 	"google.golang.org/grpc"
@@ -58,28 +61,44 @@ func (r *RelayerService) Setup(ctx context.Context, deps *Dependencies) error {
 		)
 	}
 
+	// Resolve per-namespace streamer type.
+	nsStreamerType := buildNamespaceStreamerTypeMap(&deps.Config)
+
 	// relayers for each engine
 	for _, engine := range deps.Engines {
-		conn, ok := conns[engine.Namespace()]
-		if !ok || conn == nil {
-			return fmt.Errorf("grpc client connection missing for namespace: %s", engine.Namespace())
-		}
+		ns := engine.Namespace()
+		st := nsStreamerType[ns]
 
-		rl := relayer.NewRelayer(
-			engine,
-			engine.Namespace(),
-			conn,
-			lagConf[engine.Namespace()],
-			deps.Logger,
-		)
+		var rl *relayer.Relayer
+		switch st {
+		case config.StreamerTypeBlobStore:
+			var err error
+			rl, err = r.setupBlobStoreRelayer(ctx, engine, ns, lagConf[ns], deps)
+			if err != nil {
+				return fmt.Errorf("blobstore relayer setup for %s: %w", ns, err)
+			}
+		default:
+			conn, ok := conns[ns]
+			if !ok || conn == nil {
+				return fmt.Errorf("grpc client connection missing for namespace: %s", ns)
+			}
 
-		if limiter != nil {
-			limitIO := relayer.NewRateLimitedWalIO(ctx, rl.CurrentWalIO(), limiter)
-			rl.EnableRateLimitedWalIO(limitIO)
+			rl = relayer.NewRelayer(
+				engine,
+				ns,
+				conn,
+				lagConf[ns],
+				deps.Logger,
+			)
+
+			if limiter != nil {
+				limitIO := relayer.NewRateLimitedWalIO(ctx, rl.CurrentWalIO(), limiter)
+				rl.EnableRateLimitedWalIO(limitIO)
+			}
 		}
 
 		r.relayers = append(r.relayers, relayerInfo{
-			namespace: engine.Namespace(),
+			namespace: ns,
 			relayer:   rl,
 		})
 	}
@@ -147,4 +166,67 @@ func (r *RelayerService) Close(ctx context.Context) error {
 
 func (r *RelayerService) Enabled() bool {
 	return r.enabled
+}
+
+// setupBlobStoreRelayer creates a Relayer backed by a BlobStoreStreamerClient.
+func (r *RelayerService) setupBlobStoreRelayer(
+	ctx context.Context,
+	engine *dbkernel.Engine,
+	ns string,
+	lsnLagThreshold int,
+	deps *Dependencies,
+) (*relayer.Relayer, error) {
+	bsCfg := findBlobStoreConfig(ns, &deps.Config)
+	if bsCfg.BucketURL == "" {
+		return nil, fmt.Errorf("blobstore bucket_url not configured for namespace %s", ns)
+	}
+
+	store, err := streamer.OpenNamespaceBlobStore(ctx, bsCfg.BucketURL, bsCfg.Prefix, ns)
+	if err != nil {
+		return nil, fmt.Errorf("open blobstore: %w", err)
+	}
+
+	handler := dbkernel.NewReplicaWALHandler(engine)
+	walIO := relayer.NewWalIOHandler(handler)
+
+	currentLSN := engine.OpsReceivedCount()
+	var refreshInterval time.Duration
+	if bsCfg.RefreshInterval != "" {
+		if d, err := time.ParseDuration(bsCfg.RefreshInterval); err == nil {
+			refreshInterval = d
+		}
+	}
+	client := streamer.NewBlobStoreStreamerClient(store, ns, walIO, currentLSN, refreshInterval)
+
+	if bsCfg.CacheDir != "" {
+		client.CacheDir = bsCfg.CacheDir
+	}
+
+	rl := relayer.NewRelayerWithStreamer(engine, ns, client, walIO, lsnLagThreshold, deps.Logger)
+	return rl, nil
+}
+
+func findBlobStoreConfig(ns string, cfg *config.Config) config.BlobStoreRelayConfig {
+	for _, relay := range cfg.RelayConfigs {
+		for _, rns := range relay.Namespaces {
+			if rns == ns {
+				return relay.BlobStore
+			}
+		}
+	}
+	return config.BlobStoreRelayConfig{}
+}
+
+func buildNamespaceStreamerTypeMap(cfg *config.Config) map[string]config.StreamerType {
+	m := make(map[string]config.StreamerType)
+	for _, relay := range cfg.RelayConfigs {
+		st := relay.StreamerType
+		if st == "" {
+			st = config.StreamerTypeGRPC
+		}
+		for _, ns := range relay.Namespaces {
+			m[ns] = st
+		}
+	}
+	return m
 }

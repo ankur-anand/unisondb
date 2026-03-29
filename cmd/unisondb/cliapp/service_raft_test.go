@@ -91,6 +91,26 @@ func TestRaftService_SetupRejectsPeersWithSerf(t *testing.T) {
 	assert.Contains(t, err.Error(), "peers cannot be set when serf membership is enabled")
 }
 
+func TestRaftService_SetupRejectsInvalidValidatedConfig(t *testing.T) {
+	svc := &RaftService{}
+	deps := &Dependencies{
+		Config: config.Config{
+			RaftConfig: config.RaftConfig{
+				Enabled:          true,
+				NodeID:           "node1",
+				BindAddr:         "127.0.0.1:0",
+				HeartbeatTimeout: "300ms",
+			},
+		},
+	}
+
+	err := svc.Setup(context.Background(), deps)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "invalid configuration")
+	assert.Contains(t, err.Error(), "LeaderLeaseTimeout")
+}
+
 func TestRaftService_SetupSkipsBootstrapWhenExistingState(t *testing.T) {
 	baseDir := t.TempDir()
 	namespace := "test"

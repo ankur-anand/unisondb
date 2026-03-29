@@ -76,6 +76,11 @@ type walIOHandler struct {
 	replica *dbkernel.ReplicaWALHandler
 }
 
+// NewWalIOHandler returns a WalIO backed by the given ReplicaWALHandler.
+func NewWalIOHandler(handler *dbkernel.ReplicaWALHandler) WalIO {
+	return walIOHandler{replica: handler}
+}
+
 func (w walIOHandler) Write(data *v1.WALRecord) error {
 	return w.replica.ApplyRecordsLSNOnly([][]byte{data.Record})
 }
@@ -149,9 +154,9 @@ func (r *RateLimitedWalIO) WriteBatch(records []*v1.WALRecord) error {
 type Relayer struct {
 	namespace string
 	engine    *dbkernel.Engine
-	// TODO: refactor, relayer should be independent of this?
-	grpcConn        *grpc.ClientConn
-	client          Streamer
+	grpcConn  *grpc.ClientConn
+	client    Streamer
+
 	lsnLagThreshold int
 
 	// protect duplicate start.
@@ -164,7 +169,7 @@ type Relayer struct {
 	offsetMonitorInterval time.Duration
 }
 
-// NewRelayer returns an initialized Relayer instance.
+// NewRelayer returns an initialized Relayer instance that uses gRPC streaming.
 func NewRelayer(engine *dbkernel.Engine,
 	namespace string,
 	grpcConn *grpc.ClientConn,
@@ -203,6 +208,39 @@ func NewRelayer(engine *dbkernel.Engine,
 		client:          client,
 		startOffset:     currentOffset,
 		walIOHandler:    walHandler,
+	}
+}
+
+// NewRelayerWithStreamer returns a Relayer that uses the provided Streamer implementation.
+func NewRelayerWithStreamer(engine *dbkernel.Engine,
+	namespace string,
+	client Streamer,
+	walIO WalIO,
+	lsnLagThreshold int,
+	log *slog.Logger) *Relayer {
+	currentOffset := engine.CurrentOffset()
+	segmentID := 0
+	if currentOffset != nil {
+		segmentID = int(currentOffset.SegmentID)
+	}
+
+	lsnLagThresholdGauge.WithLabelValues(namespace).Set(float64(lsnLagThreshold))
+
+	log.Info("[unisondb.relayer]",
+		slog.String("event_type", "relayer.initialized"),
+		slog.String("namespace", namespace),
+		slog.Uint64("start_lsn", engine.OpsReceivedCount()),
+	)
+
+	return &Relayer{
+		engine:          engine,
+		namespace:       namespace,
+		lsnLagThreshold: lsnLagThreshold,
+		logger:          log,
+		startSegmentID:  segmentID,
+		client:          client,
+		startOffset:     currentOffset,
+		walIOHandler:    walIO,
 	}
 }
 
