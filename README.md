@@ -14,15 +14,24 @@
 
 UnisonDB is an open-source database designed specifically for [**Edge AI**](https://www.ibm.com/think/topics/edge-ai) and [**Edge Computing**](https://en.wikipedia.org/wiki/Edge_computing).  
 
-It is a **reactive**, [**log-native**](https://www.unisondb.io/docs/architecture/) and [**multi-model database**](https://en.wikipedia.org/wiki/Multi-model_database) built for real-time and edge-scale applications.  UnisonDB combines a [**B+Tree storage engine**](https://en.wikipedia.org/wiki/B%2B_tree) with WAL-based ([**Write-Ahead Logging**](https://en.wikipedia.org/wiki/Write-ahead_logging)) streaming replication, enabling near-instant fan-out replication across hundreds of nodes — all while preserving strong consistency and durability.
+It is a **reactive**, [**log-native**](https://www.unisondb.io/docs/architecture/) and [**multi-model database**](https://en.wikipedia.org/wiki/Multi-model_database) built for real-time and edge-scale applications. UnisonDB combines a [**B+Tree storage engine**](https://en.wikipedia.org/wiki/B%2B_tree) with WAL-based ([**Write-Ahead Logging**](https://en.wikipedia.org/wiki/Write-ahead_logging)) replication over **gRPC** or **S3-compatible blob/object storage**, enabling near-instant fan-out replication across hundreds of nodes while preserving strong consistency and durability.
 
 ## Replication Model
 
-Writes are committed by a Raft quorum on the write servers (if enabled); read‑only edge replicas/relayers stay ISR‑synced for low‑latency reads.
+Writes are committed by a Raft quorum on the write servers (if enabled); read-only edge replicas and relayers can consume WAL through either a live **gRPC** stream or **blob-backed replication** using S3-compatible object storage.
+
+Blob-backed replication changes the fan-out model:
+
+- The writer publishes WAL durably into object storage
+- Any number of readers can poll and catch up directly from the blob store
+- Teams already running S3 or MinIO do not need to maintain an always-on gRPC replication path for every replica
+
+See [`cmd/examples/blobstore-minio`](./cmd/examples/blobstore-minio) for a local MinIO example.
 
 ## Key Features
 - **High Availability Writes**: Raft consensus on write servers (quorum acks); relayer/replica use in-sync replica (ISR) replication
-- **Streaming Replication**: In-sync replica (ISR)-based WAL streaming with sub-second fan-out to 1000+ edge replicas
+- **Streaming Replication**: WAL replication over gRPC or S3-compatible blob/object storage
+- **Blob Fan-Out**: Publish WAL once into object storage and let N readers poll directly from S3/MinIO-backed replication stores
 - **Multi-Modal Storage**: Key-Value, Wide-Column, and Large Objects (LOB)
 - **Real-Time Notifications**: ZeroMQ-based(Side-car) change notifications with sub-millisecond latency
 - **Durable**: B+Tree storage with Write-Ahead Logging
