@@ -1,0 +1,35 @@
+http_port = 28080
+listen_ip = "127.0.0.1"
+
+[grpc_config]
+listen_ip = "127.0.0.1"
+port = 28081
+allow_insecure = true
+
+[storage_config]
+base_dir = "/tmp/unisondb/blobstore-minio/producer"
+namespaces = ["orders", "inventory"]
+bytes_per_sync = "1MB"
+segment_size = "16MB"
+arena_size = "4MB"
+db_engine = "BOLT"
+btree_flush_interval = "0s"
+
+[blob_store_streaming]
+enabled = true
+flush_interval = "1s"
+
+[blob_store_streaming.namespaces.orders]
+bucket_url = "s3://unisondb-blob-demo?endpoint=http://127.0.0.1:9000&region=us-east-1&use_path_style=true&response_checksum_validation=when_required&request_checksum_calculation=when_required"
+base_prefix = "unisondb/examples/blobstore-minio"
+
+[blob_store_streaming.namespaces.inventory]
+bucket_url = "s3://unisondb-blob-demo?endpoint=http://127.0.0.1:9000&region=us-east-1&use_path_style=true&response_checksum_validation=when_required&request_checksum_calculation=when_required"
+base_prefix = "unisondb/examples/blobstore-minio"
+
+[pprof_config]
+enabled = false
+
+[log_config]
+log_level = "info"
+disable_timestamp = true

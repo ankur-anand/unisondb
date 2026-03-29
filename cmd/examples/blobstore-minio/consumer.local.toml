@@ -1,0 +1,29 @@
+http_port = 29080
+listen_ip = "127.0.0.1"
+
+[storage_config]
+base_dir = "/tmp/unisondb/blobstore-minio/consumer"
+namespaces = ["orders", "inventory"]
+bytes_per_sync = "1MB"
+segment_size = "16MB"
+arena_size = "4MB"
+db_engine = "BOLT"
+btree_flush_interval = "0s"
+
+[relayer_config.blob_demo]
+namespaces = ["orders", "inventory"]
+streamer_type = "blobstore"
+lsn_lag_threshold = 1
+
+[relayer_config.blob_demo.blobstore]
+bucket_url = "s3://unisondb-blob-demo?endpoint=http://127.0.0.1:9000&region=us-east-1&use_path_style=true&response_checksum_validation=when_required&request_checksum_calculation=when_required"
+prefix = "unisondb/examples/blobstore-minio"
+cache_dir = "/tmp/unisondb/blobstore-minio/consumer-cache"
+refresh_interval = "250ms"
+
+[pprof_config]
+enabled = false
+
+[log_config]
+log_level = "info"
+disable_timestamp = true

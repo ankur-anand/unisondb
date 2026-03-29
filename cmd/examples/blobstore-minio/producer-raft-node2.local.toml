@@ -1,0 +1,47 @@
+http_port = 28280
+listen_ip = "127.0.0.1"
+
+[grpc_config]
+listen_ip = "127.0.0.1"
+port = 28281
+allow_insecure = true
+
+[storage_config]
+base_dir = "/tmp/unisondb/blobstore-minio-raft/node1"
+namespaces = ["orders", "inventory"]
+bytes_per_sync = "1MB"
+segment_size = "16MB"
+arena_size = "4MB"
+db_engine = "BOLT"
+btree_flush_interval = "0s"
+
+[blob_store_streaming]
+enabled = true
+flush_interval = "1s"
+
+[blob_store_streaming.namespaces.orders]
+bucket_url = "s3://unisondb-blob-demo?endpoint=http://127.0.0.1:9000&region=us-east-1&use_path_style=true&response_checksum_validation=when_required&request_checksum_calculation=when_required"
+base_prefix = "unisondb/examples/blobstore-minio-raft"
+
+[blob_store_streaming.namespaces.inventory]
+bucket_url = "s3://unisondb-blob-demo?endpoint=http://127.0.0.1:9000&region=us-east-1&use_path_style=true&response_checksum_validation=when_required&request_checksum_calculation=when_required"
+base_prefix = "unisondb/examples/blobstore-minio-raft"
+
+[raft_config]
+enabled = true
+node_id = "node1"
+bind_addr = "127.0.0.1:28290"
+heartbeat_timeout = "750ms"
+election_timeout = "750ms"
+commit_timeout = "50ms"
+apply_timeout = "10s"
+serf_bind_addr = "127.0.0.1"
+serf_bind_port = 17002
+serf_peers = ["127.0.0.1:17001"]
+
+[pprof_config]
+enabled = false
+
+[log_config]
+log_level = "info"
+disable_timestamp = true
