@@ -1,11 +1,12 @@
-# UnisonDB Blobstore + MinIO Example
+# UnisonDB Object-Store Replication + MinIO Example
 
-This folder has two live MinIO demos:
+This folder has two live MinIO demos for object-store backed WAL replication:
 
 - standalone: 1 producer + 1 consumer
 - raft: 3 producer nodes + 1 consumer
 
 Both demos use the namespaces `orders` and `inventory`.
+Each namespace is written as its own stream under the configured object-store prefix. Producers publish WAL records as immutable segment files plus catalog metadata. Consumers read the finalized history directly from MinIO and apply it to their local read-only engines.
 
 It uses the MinIO defaults from your local command:
 
@@ -50,6 +51,25 @@ What the standalone script does:
 5. Writes one KV into `orders` and one KV into `inventory` through the producer HTTP API
 6. Waits until the consumer serves both replicated values
 7. Keeps both processes running until you press `Ctrl+C`
+
+The producer config uses:
+
+```toml
+[blob_store_streaming.namespaces.orders]
+bucket_url = "s3://unisondb-blob-demo?endpoint=http://127.0.0.1:9000&region=us-east-1&use_path_style=true&response_checksum_validation=when_required&request_checksum_calculation=when_required"
+base_prefix = "unisondb/examples/blobstore-minio"
+```
+
+The consumer config uses:
+
+```toml
+[relayer_config.blob_demo.blobstore]
+bucket_url = "s3://unisondb-blob-demo?endpoint=http://127.0.0.1:9000&region=us-east-1&use_path_style=true&response_checksum_validation=when_required&request_checksum_calculation=when_required"
+prefix = "unisondb/examples/blobstore-minio"
+refresh_interval = "250ms"
+```
+
+`base_prefix` on the producer and `prefix` on the consumer must point to the same object-store root. There is no local blob cache directory in this path; the consumer reads catalog and segment data from MinIO.
 
 ## Raft Demo
 
