@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"math/rand/v2"
 	"sync"
 	"time"
 
-	"github.com/ankur-anand/isledb"
-	"github.com/ankur-anand/isledb/blobstore"
+	"github.com/ankur-anand/unijord/partitionlog"
 	"github.com/ankur-anand/unisondb/internal/services"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 )
@@ -24,31 +24,24 @@ const (
 )
 
 // BlobStoreStreamerClient implements the relayer.Streamer interface by reading
-// WAL records from an isledb-backed blob store using a refreshed Reader.
+// committed WAL records from a partitionlog stream on object storage.
 type BlobStoreStreamerClient struct {
-	store     *blobstore.Store
+	log       *partitionlog.Log
 	namespace string
 	wIO       WalIO
 
 	mu sync.RWMutex
 	// lsn of the record that was last received.
 	lsn uint64
-	// reader is set while StreamWAL is actively running so monitoring can reuse
-	// the live reader instead of opening a new one.
-	reader *isledb.Reader
 
 	refreshInterval time.Duration
-	CacheDir        string
 }
 
 // NewBlobStoreStreamerClient creates a new BlobStoreStreamerClient.
-// The provided store must already be scoped to the target namespace prefix.
 // startLSN is the LSN of the last record already applied; tailing resumes
 // from the next record after this LSN — exactly like GrpcStreamerClient.
-// refreshInterval controls how often the reader refreshes its manifest and
-// checks for newly committed records. Zero or negative values use the default.
 func NewBlobStoreStreamerClient(
-	store *blobstore.Store,
+	log *partitionlog.Log,
 	namespace string,
 	wIO WalIO,
 	startLSN uint64,
@@ -59,7 +52,7 @@ func NewBlobStoreStreamerClient(
 	}
 
 	return &BlobStoreStreamerClient{
-		store:           store,
+		log:             log,
 		namespace:       namespace,
 		wIO:             wIO,
 		lsn:             startLSN,
@@ -67,47 +60,24 @@ func NewBlobStoreStreamerClient(
 	}
 }
 
-// GetLatestLSN reads the latest committed LSN from isledb CURRENT metadata.
+// GetLatestLSN reads the latest committed LSN from partitionlog catalog head.
 func (c *BlobStoreStreamerClient) GetLatestLSN(ctx context.Context) (uint64, error) {
-	if reader := c.activeReader(); reader != nil {
-		lsn, found, err := reader.MaxCommittedLSN(ctx)
-		if err != nil {
-			return 0, fmt.Errorf("blobstore client: read max committed lsn from active reader: %w", err)
-		}
-		if !found {
-			return 0, nil
-		}
-		return lsn, nil
+	if c.log == nil {
+		return 0, errors.New("blobstore client: nil partitionlog")
 	}
-
-	return c.getLatestLSNFromReader(ctx)
+	result, err := c.log.Reader().Partition(blobStorePartition).Read(ctx, partitionlog.ReadRequest{
+		StartLSN:  math.MaxUint64,
+		Limit:     1,
+		Freshness: partitionlog.FreshnessLatest,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("blobstore client: read head: %w", err)
+	}
+	return previousLSN(result.Head.NextLSN), nil
 }
 
-func (c *BlobStoreStreamerClient) getLatestLSNFromReader(ctx context.Context) (uint64, error) {
-	readerOpts := isledb.ReaderOpenOptions{}
-	if c.CacheDir != "" {
-		readerOpts.CacheDir = c.CacheDir
-	}
-
-	reader, err := isledb.OpenReader(ctx, c.store, readerOpts)
-	if err != nil {
-		return 0, fmt.Errorf("blobstore client: open reader: %w", err)
-	}
-	defer reader.Close()
-
-	lsn, found, err := reader.MaxCommittedLSN(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("blobstore client: read max committed lsn: %w", err)
-	}
-	if !found {
-		return 0, nil
-	}
-	return lsn, nil
-}
-
-// StreamWAL periodically refreshes the blob store reader, scans newly
-// committed WAL records, and applies them via the configured WalIO.
-// It implements the relayer.Streamer interface.
+// StreamWAL periodically checks the partitionlog head, reads newly committed
+// WAL records, and applies them via the configured WalIO.
 func (c *BlobStoreStreamerClient) StreamWAL(ctx context.Context) error {
 	var retryCount int
 	backoff := blobStoreClientInitialBackoff
@@ -136,6 +106,11 @@ func (c *BlobStoreStreamerClient) StreamWAL(ctx context.Context) error {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
+		var expired partitionlog.LSNExpiredError
+		if errors.As(err, &expired) {
+			clientWalStreamErrTotal.WithLabelValues(c.namespace, blobStoreLabel, "lsn_truncated").Inc()
+			return fmt.Errorf("LSN %d truncated, resync required: %w", c.currentLSN(), err)
+		}
 
 		retryCount++
 		slog.Warn("[unisondb.streamer.blobstore.client] tail failed, retrying",
@@ -152,22 +127,7 @@ func (c *BlobStoreStreamerClient) StreamWAL(ctx context.Context) error {
 }
 
 func (c *BlobStoreStreamerClient) streamWALRecords(ctx context.Context) error {
-	readerOpts := isledb.ReaderOpenOptions{}
-	if c.CacheDir != "" {
-		readerOpts.CacheDir = c.CacheDir
-	}
-
-	reader, err := isledb.OpenReader(ctx, c.store, readerOpts)
-	if err != nil {
-		return fmt.Errorf("blobstore client: open reader: %w", err)
-	}
-	defer func() {
-		c.clearActiveReader(reader)
-		_ = reader.Close()
-	}()
-	c.setActiveReader(reader)
-
-	if err := c.refreshAndApply(ctx, reader); err != nil {
+	if err := c.refreshAndApply(ctx); err != nil {
 		return err
 	}
 
@@ -181,85 +141,51 @@ func (c *BlobStoreStreamerClient) streamWALRecords(ctx context.Context) error {
 		case <-ticker.C:
 		}
 
-		if err := c.refreshAndApply(ctx, reader); err != nil {
+		if err := c.refreshAndApply(ctx); err != nil {
 			return err
 		}
 	}
 }
 
-func (c *BlobStoreStreamerClient) refreshAndApply(ctx context.Context, reader *isledb.Reader) error {
-	if err := reader.Refresh(ctx); err != nil {
-		return fmt.Errorf("blobstore client: refresh reader: %w", err)
-	}
-
-	latestLSN, found, err := reader.MaxCommittedLSN(ctx)
+func (c *BlobStoreStreamerClient) refreshAndApply(ctx context.Context) error {
+	latestLSN, err := c.GetLatestLSN(ctx)
 	if err != nil {
-		return fmt.Errorf("blobstore client: read max committed lsn: %w", err)
+		return err
 	}
-	if !found || latestLSN <= c.currentLSN() {
+	if latestLSN <= c.currentLSN() {
 		return nil
 	}
-
-	return c.applyCommittedRange(ctx, reader, latestLSN)
+	return c.applyCommittedRange(ctx, latestLSN)
 }
 
-func (c *BlobStoreStreamerClient) applyCommittedRange(ctx context.Context, reader *isledb.Reader, latestLSN uint64) error {
-	startLSN := c.currentLSN() + 1
-	iterOpts := isledb.IteratorOptions{
-		MaxKey: EncodeLSNKey(latestLSN),
-	}
-	if startLSN > 0 {
-		iterOpts.MinKey = EncodeLSNKey(startLSN)
-	}
-
-	iter, err := reader.NewIterator(ctx, iterOpts)
-	if err != nil {
-		return fmt.Errorf("blobstore client: open iterator: %w", err)
-	}
-	defer iter.Close()
-
-	var batch []*v1.WALRecord
-	var lastLSN uint64
-
-	flushBatch := func() error {
-		if len(batch) == 0 {
+func (c *BlobStoreStreamerClient) applyCommittedRange(ctx context.Context, latestLSN uint64) error {
+	partition := c.log.Reader().Partition(blobStorePartition)
+	for c.currentLSN() < latestLSN {
+		startLSN := c.currentLSN() + 1
+		result, err := partition.Read(ctx, partitionlog.ReadRequest{
+			StartLSN:  startLSN,
+			Limit:     batchSize,
+			Freshness: partitionlog.FreshnessCached,
+		})
+		if err != nil {
+			return fmt.Errorf("blobstore client: read committed range: %w", err)
+		}
+		if len(result.Records) == 0 {
 			return nil
+		}
+
+		batch := make([]*v1.WALRecord, 0, len(result.Records))
+		var lastLSN uint64
+		for _, record := range result.Records {
+			batch = append(batch, &v1.WALRecord{Record: append([]byte(nil), record.Value...)})
+			lastLSN = record.LSN
+			clientWalRecvTotal.WithLabelValues(c.namespace, blobStoreLabel).Inc()
 		}
 		if err := c.wIO.WriteBatch(batch); err != nil {
 			return fmt.Errorf("blobstore client: write batch: %w", err)
 		}
 		c.setLSN(lastLSN)
-		batch = nil
-		return nil
 	}
-
-	for iter.Next() {
-		key := iter.Key()
-		if len(key) != 8 {
-			slog.Warn("[unisondb.streamer.blobstore.client] skipping malformed key",
-				"namespace", c.namespace,
-				"key_len", len(key))
-			continue
-		}
-
-		lastLSN = DecodeLSNKey(key)
-		batch = append(batch, &v1.WALRecord{Record: iter.Value()})
-		clientWalRecvTotal.WithLabelValues(c.namespace, blobStoreLabel).Inc()
-
-		if len(batch) >= batchSize {
-			if err := flushBatch(); err != nil {
-				return err
-			}
-		}
-	}
-
-	if err := iter.Err(); err != nil {
-		return fmt.Errorf("blobstore client: iterate wal range: %w", err)
-	}
-	if err := flushBatch(); err != nil {
-		return err
-	}
-
 	return nil
 }
 
@@ -275,29 +201,6 @@ func (c *BlobStoreStreamerClient) setLSN(lsn uint64) {
 	defer c.mu.Unlock()
 
 	c.lsn = lsn
-}
-
-func (c *BlobStoreStreamerClient) activeReader() *isledb.Reader {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	return c.reader
-}
-
-func (c *BlobStoreStreamerClient) setActiveReader(reader *isledb.Reader) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.reader = reader
-}
-
-func (c *BlobStoreStreamerClient) clearActiveReader(reader *isledb.Reader) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.reader == reader {
-		c.reader = nil
-	}
 }
 
 func blobStoreGetJitteredBackoff(backoff *time.Duration) time.Duration {

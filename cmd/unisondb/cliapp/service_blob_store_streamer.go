@@ -8,8 +8,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/ankur-anand/isledb/blobstore"
-	manifeststore "github.com/ankur-anand/isledb/manifest"
+	"github.com/ankur-anand/unijord/partitionlog"
 	"github.com/ankur-anand/unisondb/cmd/unisondb/config"
 	"github.com/ankur-anand/unisondb/dbkernel"
 	udbinternal "github.com/ankur-anand/unisondb/internal"
@@ -23,8 +22,7 @@ type BlobStoreStreamerService struct {
 	cfg           config.BlobStoreStreamingConfig
 	enabled       bool
 	flushInterval time.Duration
-	stores        map[string]*blobstore.Store
-	manifests     map[string]*manifeststore.Store
+	logs          map[string]*partitionlog.Log
 }
 
 type blobStoreStreamerTerm struct {
@@ -40,8 +38,9 @@ func (b *BlobStoreStreamerService) Name() string {
 func (b *BlobStoreStreamerService) Setup(ctx context.Context, deps *Dependencies) error {
 	b.deps = deps
 	b.cfg = deps.Config.BlobStoreStreaming
-	b.stores = make(map[string]*blobstore.Store)
-	b.manifests = make(map[string]*manifeststore.Store)
+	if b.logs == nil {
+		b.logs = make(map[string]*partitionlog.Log)
+	}
 
 	if !b.cfg.Enabled {
 		b.enabled = false
@@ -69,24 +68,34 @@ func (b *BlobStoreStreamerService) Setup(ctx context.Context, deps *Dependencies
 		return errors.New("blobstore streamer: enabled but no namespaces configured")
 	}
 
+	type logGroupKey struct {
+		bucketURL  string
+		basePrefix string
+	}
+	logGroups := make(map[logGroupKey][]string)
 	for namespace, nsCfg := range b.cfg.Namespaces {
 		if _, ok := deps.Engines[namespace]; !ok {
-			b.closeStores()
 			return fmt.Errorf("blobstore streamer: namespace %q not found in engines", namespace)
 		}
+		if log := b.logs[namespace]; log != nil {
+			continue
+		}
 		if nsCfg.BucketURL == "" {
-			b.closeStores()
 			return fmt.Errorf("blobstore streamer: bucket_url not configured for namespace %q", namespace)
 		}
+		key := logGroupKey{bucketURL: nsCfg.BucketURL, basePrefix: nsCfg.BasePrefix}
+		logGroups[key] = append(logGroups[key], namespace)
+	}
 
-		store, err := streamer.OpenNamespaceBlobStore(ctx, nsCfg.BucketURL, nsCfg.BasePrefix, namespace)
+	for key, namespaces := range logGroups {
+		slices.Sort(namespaces)
+		logs, err := streamer.OpenNamespacePartitionLogs(ctx, key.bucketURL, key.basePrefix, namespaces)
 		if err != nil {
-			b.closeStores()
-			return fmt.Errorf("blobstore streamer: open store for %q: %w", namespace, err)
+			return fmt.Errorf("blobstore streamer: open partitionlogs for bucket_url %q base_prefix %q: %w", key.bucketURL, key.basePrefix, err)
 		}
-
-		b.stores[namespace] = store
-		b.manifests[namespace] = manifeststore.NewStore(store)
+		for namespace, log := range logs {
+			b.logs[namespace] = log
+		}
 	}
 
 	b.enabled = true
@@ -109,7 +118,7 @@ func (b *BlobStoreStreamerService) Run(ctx context.Context) error {
 }
 
 func (b *BlobStoreStreamerService) Close(ctx context.Context) error {
-	return b.closeStores()
+	return nil
 }
 
 func (b *BlobStoreStreamerService) runStandalone(ctx context.Context) error {
@@ -213,11 +222,6 @@ func (b *BlobStoreStreamerService) watchLeadership(ctx context.Context, namespac
 }
 
 func (b *BlobStoreStreamerService) startTerm(ctx context.Context, namespace string) (*blobStoreStreamerTerm, error) {
-	startLSN, err := b.lastWrittenLSN(ctx, namespace)
-	if err != nil {
-		return nil, fmt.Errorf("blobstore streamer: last written lsn for %q: %w", namespace, err)
-	}
-
 	termCtx, cancel := context.WithCancel(ctx)
 	errGrp, streamCtx := errgroup.WithContext(termCtx)
 	engine, ok := b.deps.Engines[namespace]
@@ -229,9 +233,10 @@ func (b *BlobStoreStreamerService) startTerm(ctx context.Context, namespace stri
 		streamCtx,
 		errGrp,
 		map[string]*dbkernel.Engine{namespace: engine},
-		map[string]*blobstore.Store{namespace: b.stores[namespace]},
+		map[string]*partitionlog.Log{namespace: b.logs[namespace]},
 		streamer.BlobStoreStreamerConfig{
-			FlushInterval: b.flushInterval,
+			FlushInterval:     b.flushInterval,
+			BootstrapAfterLSN: map[string]uint64{namespace: b.cfg.Namespaces[namespace].BootstrapAfterLSN},
 		},
 	)
 	if err != nil {
@@ -241,12 +246,11 @@ func (b *BlobStoreStreamerService) startTerm(ctx context.Context, namespace stri
 
 	slog.Info("[unisondb.cliapp]",
 		slog.String("event_type", "blobstore.streamer.term.started"),
-		slog.String("namespace", namespace),
-		slog.Uint64("start_lsn", startLSN))
+		slog.String("namespace", namespace))
 
 	done := make(chan error, 1)
 	go func() {
-		streamErr := s.StreamNamespace(streamCtx, namespace, startLSN)
+		streamErr := s.StreamNamespace(streamCtx, namespace)
 		waitErr := errGrp.Wait()
 		done <- firstNonNil(streamErr, waitErr)
 		close(done)
@@ -275,19 +279,23 @@ func (b *BlobStoreStreamerService) streamNamespace(ctx context.Context, namespac
 }
 
 func (b *BlobStoreStreamerService) lastWrittenLSN(ctx context.Context, namespace string) (uint64, error) {
-	manifestStore, ok := b.manifests[namespace]
-	if !ok || manifestStore == nil {
-		return 0, fmt.Errorf("manifest store not configured for namespace %q", namespace)
+	log, ok := b.logs[namespace]
+	if !ok || log == nil {
+		return 0, fmt.Errorf("partitionlog not configured for namespace %q", namespace)
 	}
-
-	current, err := manifestStore.ReadCurrentData(ctx)
+	result, err := log.Reader().Partition(0).Read(ctx, partitionlog.ReadRequest{
+		StartLSN:  ^uint64(0),
+		Limit:     1,
+		Freshness: partitionlog.FreshnessLatest,
+	})
 	if err != nil {
 		return 0, err
 	}
-	if current == nil || current.MaxCommittedLSN == nil {
+	head := result.Head
+	if head.NextLSN == 0 {
 		return 0, nil
 	}
-	return *current.MaxCommittedLSN, nil
+	return head.NextLSN - 1, nil
 }
 
 func (b *BlobStoreStreamerService) sortedNamespaces() []string {
@@ -297,19 +305,6 @@ func (b *BlobStoreStreamerService) sortedNamespaces() []string {
 	}
 	slices.Sort(namespaces)
 	return namespaces
-}
-
-func (b *BlobStoreStreamerService) closeStores() error {
-	var errs []error
-	for namespace, store := range b.stores {
-		if store == nil {
-			continue
-		}
-		if err := store.Close(); err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", namespace, err))
-		}
-	}
-	return errors.Join(errs...)
 }
 
 func isBenignBlobStoreStreamerError(err error) bool {

@@ -120,7 +120,7 @@ type StreamerType string
 const (
 	// StreamerTypeGRPC uses gRPC streaming (default).
 	StreamerTypeGRPC StreamerType = "grpc"
-	// StreamerTypeBlobStore uses isledb-backed blob store streaming.
+	// StreamerTypeBlobStore uses partitionlog-backed object-store streaming.
 	StreamerTypeBlobStore StreamerType = "blobstore"
 )
 
@@ -140,14 +140,13 @@ type RelayConfig struct {
 	BlobStore BlobStoreRelayConfig `toml:"blobstore"`
 }
 
-// BlobStoreRelayConfig holds blob store streamer settings.
+// BlobStoreRelayConfig holds object-store streamer settings.
 type BlobStoreRelayConfig struct {
-	// BucketURL is the object storage URL (e.g. "s3://bucket?region=us-east-1", "file:///data").
+	// BucketURL is the object storage URL.
+	// Supported schemes: s3://, gcs://, azblob://.
 	BucketURL string `toml:"bucket_url"`
 	// Prefix is the key prefix within the bucket.
 	Prefix string `toml:"prefix"`
-	// CacheDir is the local directory used to cache SST files.
-	CacheDir string `toml:"cache_dir"`
 	// RefreshInterval controls how often the blobstore reader refreshes and
 	// checks for newly committed WAL records.
 	RefreshInterval string `toml:"refresh_interval"`
@@ -160,8 +159,16 @@ type BlobStoreStreamingConfig struct {
 }
 
 type BlobStoreWriteNSConfig struct {
-	BucketURL  string `toml:"bucket_url"`
+	// BucketURL is the object storage URL.
+	// Supported schemes: s3://, gcs://, azblob://.
+	BucketURL string `toml:"bucket_url"`
+
+	// BasePrefix is the object key root for this namespace stream.
 	BasePrefix string `toml:"base_prefix"`
+
+	// BootstrapAfterLSN initializes a fresh object-store stream at this WAL LSN + 1.
+	// Use it when enabling blob streaming after an existing local WAL checkpoint.
+	BootstrapAfterLSN uint64 `toml:"bootstrap_after_lsn"`
 }
 
 type LogConfig struct {

@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/ankur-anand/unijord/partitionlog"
+	segmentsink "github.com/ankur-anand/unijord/partitionlog/blob/sink"
+	"github.com/ankur-anand/unijord/partitionlog/blob/sink/multipart"
+	"github.com/ankur-anand/unijord/partitionlog/catalog"
+	plwriter "github.com/ankur-anand/unijord/partitionlog/writer"
 	"github.com/ankur-anand/unisondb/cmd/unisondb/config"
 	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/pkg/raftcluster"
@@ -32,10 +36,9 @@ func TestBlobStoreStreamerService_StandaloneStreamsAndResumes(t *testing.T) {
 	}
 	initialLSN := engine.OpsReceivedCount()
 
-	bucketDir := t.TempDir()
-	bucketURL := (&url.URL{Scheme: "file", Path: bucketDir}).String()
-
-	svc := &BlobStoreStreamerService{}
+	svc := &BlobStoreStreamerService{
+		logs: map[string]*partitionlog.Log{namespace: newCLIMemoryPartitionLog(t)},
+	}
 	deps := &Dependencies{
 		Mode: "server",
 		Config: config.Config{
@@ -44,7 +47,6 @@ func TestBlobStoreStreamerService_StandaloneStreamsAndResumes(t *testing.T) {
 				FlushInterval: "50ms",
 				Namespaces: map[string]config.BlobStoreWriteNSConfig{
 					namespace: {
-						BucketURL:  bucketURL,
 						BasePrefix: "unisondb",
 					},
 				},
@@ -135,10 +137,9 @@ func TestBlobStoreStreamerService_RaftLeadershipChangeResumesFromCurrent(t *test
 	t.Cleanup(cleanupRaft)
 	require.Eventually(t, func() bool { return cluster1.IsLeader() }, 5*time.Second, 20*time.Millisecond)
 
-	bucketDir := t.TempDir()
-	bucketURL := (&url.URL{Scheme: "file", Path: bucketDir}).String()
-
-	svc := &BlobStoreStreamerService{}
+	svc := &BlobStoreStreamerService{
+		logs: map[string]*partitionlog.Log{namespace: newCLIMemoryPartitionLog(t)},
+	}
 	deps := &Dependencies{
 		Mode: "server",
 		Config: config.Config{
@@ -148,7 +149,6 @@ func TestBlobStoreStreamerService_RaftLeadershipChangeResumesFromCurrent(t *test
 				FlushInterval: "50ms",
 				Namespaces: map[string]config.BlobStoreWriteNSConfig{
 					namespace: {
-						BucketURL:  bucketURL,
 						BasePrefix: "unisondb",
 					},
 				},
@@ -271,4 +271,52 @@ func newLeadershipTestClusters(t *testing.T, namespace string) (*raftcluster.Clu
 	}
 
 	return cluster1, cluster2, cleanup
+}
+
+func newCLIMemoryPartitionLog(t *testing.T) *partitionlog.Log {
+	t.Helper()
+	objects := multipart.NewMemoryStore()
+	sinkFactory, err := segmentsink.New(objects, segmentsink.Options{})
+	require.NoError(t, err)
+	store := &cliTestPartitionLogStore{
+		catalog: catalog.NewMemory(),
+		sink:    sinkFactory,
+		source:  &cliTestSegmentStore{objects: objects},
+	}
+	log, err := partitionlog.Open(partitionlog.Options{Store: store})
+	require.NoError(t, err)
+	return log
+}
+
+type cliTestPartitionLogStore struct {
+	catalog *catalog.MemoryCatalog
+	sink    *segmentsink.Factory
+	source  *cliTestSegmentStore
+}
+
+func (s *cliTestPartitionLogStore) WriterManager() catalog.WriterManager { return s.catalog }
+func (s *cliTestPartitionLogStore) ReaderCatalog() catalog.Reader        { return s.catalog }
+func (s *cliTestPartitionLogStore) SinkFactory() plwriter.SinkFactory    { return s.sink }
+func (s *cliTestPartitionLogStore) SegmentStore() partitionlog.SegmentStore {
+	return s.source
+}
+
+type cliTestSegmentStore struct {
+	objects *multipart.MemoryStore
+}
+
+func (s *cliTestSegmentStore) ReadAt(ctx context.Context, uri string, off uint64, n uint64) ([]byte, error) {
+	body, _, err := s.objects.Read(ctx, uri)
+	if err != nil {
+		return nil, err
+	}
+	if off > uint64(len(body)) {
+		return nil, fmt.Errorf("offset=%d beyond object size=%d", off, len(body))
+	}
+	if n > uint64(len(body))-off {
+		return nil, fmt.Errorf("range offset=%d length=%d beyond object size=%d", off, n, len(body))
+	}
+	start := int(off)
+	end := start + int(n)
+	return append([]byte(nil), body[start:end]...), nil
 }

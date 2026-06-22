@@ -279,3 +279,31 @@ func TestReplicator_SendFuncNoDuplicateOffsets(t *testing.T) {
 
 	assert.Equal(t, totalWrites, len(seen), "should see each WAL LSN exactly once")
 }
+
+func TestReplicator_DrainsExistingRecordsBeforeWaiting(t *testing.T) {
+	baseDir := t.TempDir()
+	engine, err := dbkernel.NewStorageEngine(baseDir, "test_existing_records", dbkernel.NewDefaultEngineConfig())
+	assert.NoError(t, err)
+	t.Cleanup(func() { _ = engine.Close(context.Background()) })
+
+	for i := 0; i < 5; i++ {
+		assert.NoError(t, engine.PutKV([]byte("key"+strconv.Itoa(i)), []byte("value"+strconv.Itoa(i))))
+	}
+
+	rep := NewReplicator(engine, 10, 2*time.Second, 0, "existing-records")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	recvChan := make(chan []*v1.WALRecord, 5)
+	go func() { _ = rep.Replicate(ctx, recvChan) }()
+
+	var got []*v1.WALRecord
+	for len(got) < 5 {
+		select {
+		case batch := <-recvChan:
+			got = append(got, batch...)
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for existing records; got %d", len(got))
+		}
+	}
+}

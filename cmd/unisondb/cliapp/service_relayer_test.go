@@ -69,7 +69,6 @@ func TestFindBlobStoreConfig(t *testing.T) {
 				BlobStore: config.BlobStoreRelayConfig{
 					BucketURL:       "s3://bucket",
 					Prefix:          "unisondb",
-					CacheDir:        "/tmp/cache",
 					RefreshInterval: "1s",
 				},
 			},
@@ -80,6 +79,5 @@ func TestFindBlobStoreConfig(t *testing.T) {
 
 	assert.Equal(t, "s3://bucket", got.BucketURL)
 	assert.Equal(t, "unisondb", got.Prefix)
-	assert.Equal(t, "/tmp/cache", got.CacheDir)
 	assert.Equal(t, "1s", got.RefreshInterval)
 }
