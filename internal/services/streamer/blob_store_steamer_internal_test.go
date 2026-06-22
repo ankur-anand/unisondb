@@ -79,6 +79,38 @@ func TestWriterIDForNamespaceStable(t *testing.T) {
 	assert.NotEqual(t, writerIDForNamespace("orders"), writerIDForNamespace("inventory"))
 }
 
+func TestNewBlobStoreStreamerDefaultsMaxRecordsForKVWorkloads(t *testing.T) {
+	ctx := context.Background()
+	namespace := "defaults"
+	engine, err := dbkernel.NewStorageEngine(t.TempDir(), namespace, dbkernel.NewDefaultEngineConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = engine.Close(context.Background()) })
+
+	s, err := NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*partitionlog.Log{namespace: newInternalMemoryPartitionLog(t)}, BlobStoreStreamerConfig{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	assert.Equal(t, uint32(1_048_576), s.cfg.Batch.MaxRecords)
+}
+
+func TestNewBlobStoreStreamerKeepsConfiguredMaxRecords(t *testing.T) {
+	ctx := context.Background()
+	namespace := "configured"
+	engine, err := dbkernel.NewStorageEngine(t.TempDir(), namespace, dbkernel.NewDefaultEngineConfig())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = engine.Close(context.Background()) })
+
+	s, err := NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*partitionlog.Log{namespace: newInternalMemoryPartitionLog(t)}, BlobStoreStreamerConfig{
+		Batch: partitionlog.BatchPolicy{
+			MaxRecords: 64,
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = s.Close() })
+
+	assert.Equal(t, uint32(64), s.cfg.Batch.MaxRecords)
+}
+
 func TestBlobStoreStreamerClientApplyCommittedRangeUsesCachedHead(t *testing.T) {
 	ctx := context.Background()
 	log, countingCatalog := newCountingInternalMemoryPartitionLog(t)
