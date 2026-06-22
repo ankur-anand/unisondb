@@ -39,6 +39,7 @@ const (
 	blobStorePartition = uint32(0)
 
 	defaultBlobStoreFlushInterval = time.Second
+	defaultBlobStoreMaxRecords    = uint32(1_048_576)
 )
 
 // BlobStoreStreamer reads WAL records from storage engines and writes them to
@@ -75,6 +76,9 @@ type BlobStoreStreamerConfig struct {
 func DefaultBlobStoreStreamerConfig() BlobStoreStreamerConfig {
 	return BlobStoreStreamerConfig{
 		FlushInterval: defaultBlobStoreFlushInterval,
+		Batch: partitionlog.BatchPolicy{
+			MaxRecords: defaultBlobStoreMaxRecords,
+		},
 	}
 }
 
@@ -97,6 +101,9 @@ func NewBlobStoreStreamer(
 	}
 	if cfg.Batch.MaxDelay == 0 {
 		cfg.Batch.MaxDelay = cfg.FlushInterval
+	}
+	if cfg.Batch.MaxRecords == 0 {
+		cfg.Batch.MaxRecords = defaultBlobStoreMaxRecords
 	}
 
 	for namespace := range storageEngines {

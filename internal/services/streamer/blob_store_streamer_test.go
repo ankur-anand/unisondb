@@ -28,7 +28,7 @@ import (
 func TestDefaultBlobStoreStreamerConfig(t *testing.T) {
 	cfg := streamer.DefaultBlobStoreStreamerConfig()
 	assert.Equal(t, time.Second, cfg.FlushInterval)
-	assert.Zero(t, cfg.Batch.MaxRecords)
+	assert.Equal(t, uint32(1_048_576), cfg.Batch.MaxRecords)
 }
 
 func TestBlobStoreStreamer_StreamAndConsume(t *testing.T) {
