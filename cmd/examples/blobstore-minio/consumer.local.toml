@@ -18,7 +18,6 @@ lsn_lag_threshold = 1
 [relayer_config.blob_demo.blobstore]
 bucket_url = "s3://unisondb-blob-demo?endpoint=http://127.0.0.1:9000&region=us-east-1&use_path_style=true&response_checksum_validation=when_required&request_checksum_calculation=when_required"
 prefix = "unisondb/examples/blobstore-minio"
-cache_dir = "/tmp/unisondb/blobstore-minio/consumer-cache"
 refresh_interval = "250ms"
 
 [pprof_config]

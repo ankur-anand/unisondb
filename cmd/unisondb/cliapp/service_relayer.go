@@ -181,9 +181,9 @@ func (r *RelayerService) setupBlobStoreRelayer(
 		return nil, fmt.Errorf("blobstore bucket_url not configured for namespace %s", ns)
 	}
 
-	store, err := streamer.OpenNamespaceBlobStore(ctx, bsCfg.BucketURL, bsCfg.Prefix, ns)
+	log, err := streamer.OpenNamespacePartitionLog(ctx, bsCfg.BucketURL, bsCfg.Prefix, ns)
 	if err != nil {
-		return nil, fmt.Errorf("open blobstore: %w", err)
+		return nil, fmt.Errorf("open partitionlog: %w", err)
 	}
 
 	handler := dbkernel.NewReplicaWALHandler(engine)
@@ -196,11 +196,7 @@ func (r *RelayerService) setupBlobStoreRelayer(
 			refreshInterval = d
 		}
 	}
-	client := streamer.NewBlobStoreStreamerClient(store, ns, walIO, currentLSN, refreshInterval)
-
-	if bsCfg.CacheDir != "" {
-		client.CacheDir = bsCfg.CacheDir
-	}
+	client := streamer.NewBlobStoreStreamerClient(log, ns, walIO, currentLSN, refreshInterval)
 
 	rl := relayer.NewRelayerWithStreamer(engine, ns, client, walIO, lsnLagThreshold, deps.Logger)
 	return rl, nil

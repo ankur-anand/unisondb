@@ -96,19 +96,15 @@ func (r *Replicator) Replicate(ctx context.Context, recordsChan chan<- []*v1.WAL
 			return ctx.Err()
 		}
 
-		err := r.engine.WaitForAppendOrDone(r.ctxDone, &r.lastOffset)
-
-		if err != nil && !errors.Is(err, dbkernel.ErrWaitTimeoutExceeded) {
-			if r.reader != nil {
-				r.reader.Close()
-			}
+		err := r.replicateFromReader(ctx, recordsChan)
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, dbkernel.ErrNoNewData) {
 			return err
 		}
 
-		err = r.replicateFromReader(ctx, recordsChan)
-		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, dbkernel.ErrNoNewData) {
-				continue
+		err = r.engine.WaitForAppendOrDone(r.ctxDone, &r.lastOffset)
+		if err != nil && !errors.Is(err, dbkernel.ErrWaitTimeoutExceeded) {
+			if r.reader != nil {
+				r.reader.Close()
 			}
 			return err
 		}
