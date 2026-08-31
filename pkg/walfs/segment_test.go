@@ -2373,6 +2373,39 @@ func TestSegment_TruncateTo_UnsealsAndKeepsSegment(t *testing.T) {
 	assert.Equal(t, []byte("data-3-new"), data)
 }
 
+func TestSegment_TruncateTo_ClampsDiscardedTailToMapping(t *testing.T) {
+	dir := t.TempDir()
+
+	seg, err := OpenSegmentFile(dir, ".wal", 1, WithSegmentSize(segmentSize+(2<<20)))
+	require.NoError(t, err)
+
+	_, err = seg.Write([]byte("first"), 1)
+	require.NoError(t, err)
+
+	oneMiB := make([]byte, 1<<20)
+	for index := uint64(2); index <= 17; index++ {
+		_, err = seg.Write(oneMiB, index)
+		require.NoError(t, err)
+	}
+	require.Greater(t, seg.WriteOffset(), int64(segmentSize))
+
+	require.NoError(t, seg.SealSegment())
+	require.NoError(t, seg.Close())
+
+	// Reopening without the original size option maps and truncates the file to
+	// the 16 MiB default, while a sealed segment retains its larger header offset.
+	reopened, err := OpenSegmentFile(dir, ".wal", 1)
+	require.NoError(t, err)
+	defer reopened.Close()
+	require.Greater(t, reopened.WriteOffset(), reopened.GetSegmentSize())
+
+	var truncateErr error
+	require.NotPanics(t, func() {
+		truncateErr = reopened.TruncateTo(1)
+	})
+	require.NoError(t, truncateErr)
+}
+
 func TestSegment_TruncateTo_Errors(t *testing.T) {
 	dir := t.TempDir()
 

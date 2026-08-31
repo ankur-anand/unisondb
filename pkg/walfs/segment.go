@@ -1361,6 +1361,7 @@ func (seg *Segment) TruncateTo(logIndex uint64) error {
 	rawSize := int64(recordHeaderSize) + int64(targetEntry.Length) + int64(recordTrailerMarkerSize)
 	entrySize := alignUp(rawSize)
 
+	oldWriteOffset := seg.writeOffset.Load()
 	newWriteOffset := int64(targetEntry.Offset) + entrySize
 	seg.writeOffset.Store(newWriteOffset)
 	seg.indexEntries = seg.indexEntries[:relativeIndex+1]
@@ -1368,7 +1369,7 @@ func (seg *Segment) TruncateTo(logIndex uint64) error {
 	newEntryCount := int64(relativeIndex + 1)
 
 	seg.applyTruncateHeader(newWriteOffset, newEntryCount)
-	seg.zeroAheadFrom(newWriteOffset)
+	seg.zeroDiscardedTail(newWriteOffset, oldWriteOffset)
 
 	if err := seg.MSync(); err != nil {
 		return fmt.Errorf("failed to sync truncated segment: %w", err)
@@ -1399,14 +1400,17 @@ func (seg *Segment) applyTruncateHeader(newWriteOffset int64, newEntryCount int6
 	binary.LittleEndian.PutUint32(seg.mmapData[56:60], crc)
 }
 
-func (seg *Segment) zeroAheadFrom(offset int64) {
-	clearEnd := offset + 1024
-	if clearEnd > seg.mmapSize {
-		clearEnd = seg.mmapSize
+func (seg *Segment) zeroDiscardedTail(from, to int64) {
+	if to > seg.mmapSize {
+		to = seg.mmapSize
 	}
-	for i := offset; i < clearEnd; i++ {
-		seg.mmapData[i] = 0
+	if from >= to {
+		return
 	}
+	// Recovery scans unsealed segments from the beginning, so leaving valid
+	// records anywhere in the discarded range can reconnect them to later
+	// rewrites and resurrect truncated entries.
+	clear(seg.mmapData[from:to])
 }
 
 // Remove closes the segment and removes its underlying files (segment and index).
