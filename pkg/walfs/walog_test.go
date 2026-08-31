@@ -2669,6 +2669,77 @@ func TestWALog_Truncate_HeaderIntegrity(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestWALog_Truncate_RewriteAndReopenDoesNotResurrectRecords(t *testing.T) {
+	dir := t.TempDir()
+	ext := ".wal"
+
+	wal, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+
+	// A 112-byte payload makes each record exactly 128 bytes including its
+	// header and trailer. The former 1 KiB clear erased records 11-18, while
+	// rewriting 11-19 reconnected the valid stream to stale record 20.
+	payload := func(term byte, index uint64) []byte {
+		data := bytes.Repeat([]byte{term}, 112)
+		binary.LittleEndian.PutUint64(data, index)
+		return data
+	}
+
+	for index := uint64(1); index <= 30; index++ {
+		_, err := wal.Write(payload('a', index), index)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, wal.Truncate(10))
+	for index := uint64(11); index <= 19; index++ {
+		_, err := wal.Write(payload('b', index), index)
+		require.NoError(t, err)
+	}
+
+	first, last := wal.GetBounds()
+	require.Equal(t, uint64(1), first)
+	require.Equal(t, uint64(19), last)
+	require.NoError(t, wal.Close())
+
+	reopened, err := walfs.NewWALog(dir, ext)
+	require.NoError(t, err)
+	defer reopened.Close()
+
+	first, last = reopened.GetBounds()
+	assert.Equal(t, uint64(1), first)
+	assert.Equal(t, uint64(19), last)
+
+	reader := reopened.NewReader()
+	defer reader.Close()
+
+	var indexes []uint64
+	var terms []byte
+	for {
+		data, _, err := reader.Next()
+		if errors.Is(err, io.EOF) || errors.Is(err, walfs.ErrNoNewData) {
+			break
+		}
+		require.NoError(t, err)
+		require.Len(t, data, 112)
+		indexes = append(indexes, binary.LittleEndian.Uint64(data))
+		terms = append(terms, data[8])
+	}
+
+	expectedIndexes := make([]uint64, 19)
+	expectedTerms := make([]byte, 19)
+	for i := range expectedIndexes {
+		expectedIndexes[i] = uint64(i + 1)
+		if i < 10 {
+			expectedTerms[i] = 'a'
+		} else {
+			expectedTerms[i] = 'b'
+		}
+	}
+
+	assert.Equal(t, expectedIndexes, indexes)
+	assert.Equal(t, expectedTerms, terms)
+}
+
 func TestWALog_Truncate_Reseal(t *testing.T) {
 	dir := t.TempDir()
 	ext := ".wal"
