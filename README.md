@@ -520,4 +520,4 @@ mkcert -key-file grpc.key -cert-file grpc.crt localhost 127.0.0.1 ::1
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=ankur-anand/unisondb&type=date&legend=top-left)](https://www.star-history.com/#ankur-anand/unisondb&type=date&legend=top-left)
+[![Star History Chart](https://star-history.dera.page/svg?repos=ankur-anand/unisondb&type=date&legend=top-left)](https://star-history.dera.page/#ankur-anand/unisondb&type=date&legend=top-left)
