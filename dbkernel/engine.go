@@ -173,11 +173,14 @@ type Engine struct {
 }
 
 // NewStorageEngine initializes WAL, MemTable, and BtreeStore and returns an initialized Engine for a namespace.
-func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, error) {
+func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (result *Engine, err error) {
+	if err := conf.validate(); err != nil {
+		return nil, err
+	}
+
 	signal := make(chan struct{}, 2)
 	btreeFlushInterval, btreeFlushIntervalEnabled := conf.effectiveBTreeFlushInterval()
 	ctx, cancel := context.WithCancel(context.Background())
-	initMonotonic(ctx)
 	taggedScope := umetrics.AutoScope().Tagged(map[string]string{
 		"namespace": namespace,
 	})
@@ -205,6 +208,13 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		changeNotifier:            chNotifier,
 		coalesceDuration:          conf.WriteNotifyCoalescing.Duration,
 	}
+	defer func() {
+		if err != nil {
+			if cleanupErr := engine.cleanupInitialization(); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
+			}
+		}
+	}()
 	engine.backupRoot = filepath.Join(dataDir, BackupRootDirName)
 	engine.backupNamespaceRoot = filepath.Join(engine.backupRoot, namespace)
 	if err := os.MkdirAll(engine.backupNamespaceRoot, 0o755); err != nil {
@@ -218,11 +228,6 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 		return nil, err
 	}
 
-	// background task:
-	engine.asyncMemTableFlusher(ctx)
-	engine.syncWalAtInterval(ctx)
-	engine.fsyncBtreeAtInterval(ctx)
-
 	if err := engine.loadMetaValues(); err != nil {
 		return nil, err
 	}
@@ -232,6 +237,12 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 	}
 
 	engine.appendNotify = make(chan struct{})
+	// Start workers only after initialization succeeds. Recovery can queue a
+	// metadata sync request in fsyncReqSignal before the workers start.
+	initMonotonic(ctx)
+	engine.asyncMemTableFlusher(ctx)
+	engine.syncWalAtInterval(ctx)
+	engine.fsyncBtreeAtInterval(ctx)
 	if conf.WalConfig.AutoCleanup {
 		var predicate walfs.DeletionPredicate
 		if conf.WalConfig.RaftMode {
@@ -243,6 +254,29 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (*Engine, e
 	}
 
 	return engine, nil
+}
+
+// cleanupInitialization releases acquired resources without flushing engine
+// metadata, which may be incomplete. No engine workers have started on failure.
+func (e *Engine) cleanupInitialization() error {
+	e.cancel()
+	var errs []error
+	if e.dataStore != nil {
+		if err := e.dataStore.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close B-tree after failed initialization: %w", err))
+		}
+	}
+	if e.walIO != nil {
+		if err := e.walIO.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close WAL after failed initialization: %w", err))
+		}
+	}
+	if e.fileLock != nil {
+		if err := e.fileLock.Unlock(); err != nil {
+			errs = append(errs, fmt.Errorf("unlock namespace after failed initialization: %w", err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func newWalCleanupPredicate(checkpoint func() (*internal.Metadata, error)) func(segID wal.SegID) bool {
@@ -320,12 +354,6 @@ func (e *Engine) initStorage(dataDir, namespace string, conf *EngineConfig) erro
 	err = e.initKVDriver(dbFile, conf)
 	if err != nil {
 		return err
-	}
-
-	// skip list itself needs few bytes for initialization
-	// and, we don't want to keep on trashing writing to btreeStore often.
-	if conf.ArenaSize < minArenaSize {
-		return errors.New("arena capacity too small min capacity 2 KB")
 	}
 
 	mTable := memtable.NewMemTable(conf.ArenaSize, walIO, namespace, e.newTxnBatcher)

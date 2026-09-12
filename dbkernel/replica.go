@@ -87,11 +87,11 @@ func (wh *ReplicaWALHandler) ApplyRecord(encodedWal []byte, receivedOffset Offse
 		return fmt.Errorf("%w %d, expected %d", ErrInvalidLSN, decoded.Lsn(), lsn)
 	}
 
-	wh.engine.writeSeenCounter.Add(1)
 	offset, err := wh.engine.walIO.Append(encodedWal, decoded.Lsn())
 	if err != nil {
 		return err
 	}
+	wh.engine.writeSeenCounter.Add(1)
 
 	if !isEqualOffset(offset, receivedOffset) {
 		slog.Error("[dbkernel]",

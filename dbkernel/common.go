@@ -2,6 +2,7 @@ package dbkernel
 
 import (
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
@@ -75,6 +76,19 @@ func NewDefaultEngineConfig() *EngineConfig {
 		},
 		DBEngine: LMDBEngine,
 	}
+}
+
+func (cfg *EngineConfig) validate() error {
+	if cfg == nil {
+		return errors.New("engine configuration is nil")
+	}
+	if cfg.ArenaSize < minArenaSize {
+		return fmt.Errorf("arena capacity too small: minimum capacity is %d bytes", minArenaSize)
+	}
+	if cfg.DBEngine != BoltDBEngine && cfg.DBEngine != LMDBEngine {
+		return fmt.Errorf("unsupported database engine %s", cfg.DBEngine)
+	}
+	return nil
 }
 
 func (cfg *EngineConfig) effectiveBTreeFlushInterval() (time.Duration, bool) {

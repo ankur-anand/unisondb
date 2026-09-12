@@ -1,12 +1,14 @@
 package dbkernel_test
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"iter"
 	"log"
 	"maps"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -19,6 +21,53 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReplicaApplyRecordRetriesFailedAppend(t *testing.T) {
+	leaderDir, followerDir := t.TempDir(), t.TempDir()
+	conf := dbkernel.NewDefaultEngineConfig()
+	conf.WalConfig.SegmentSize = 1024
+	leader, err := dbkernel.NewStorageEngine(leaderDir, "leader", conf)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, leader.Close(context.Background())) })
+	followerConf := dbkernel.NewDefaultEngineConfig()
+	followerConf.WalConfig.SegmentSize = conf.WalConfig.SegmentSize
+	follower, err := dbkernel.NewStorageEngine(followerDir, "follower", followerConf)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, follower.Close(context.Background())) })
+
+	value := bytes.Repeat([]byte("v"), 600)
+	require.NoError(t, leader.PutKV([]byte("first"), value))
+	require.NoError(t, leader.PutKV([]byte("second"), value))
+	reader, err := leader.NewReader()
+	require.NoError(t, err)
+	defer reader.Close()
+	first, firstOffset, err := reader.Next()
+	require.NoError(t, err)
+	handler := dbkernel.NewReplicaWALHandler(follower)
+	require.NoError(t, handler.ApplyRecord(first, firstOffset))
+	second, secondOffset, err := reader.Next()
+	require.NoError(t, err)
+	require.Equal(t, firstOffset.SegmentID+1, secondOffset.SegmentID)
+
+	// Prevent creation of the next segment, then retry the identical record
+	// after removing the obstruction. No append implementation is mocked.
+	blocked := walfs.SegmentFileName(filepath.Join(followerDir, "follower", "wal"), ".seg", secondOffset.SegmentID)
+	require.NoError(t, os.Mkdir(blocked, 0755))
+	err = handler.ApplyRecord(second, secondOffset)
+	require.ErrorContains(t, err, "failed to rotate segment")
+	require.Equal(t, uint64(1), follower.OpsReceivedCount())
+	require.Equal(t, firstOffset, *follower.CurrentOffset())
+	_, err = follower.GetKV([]byte("second"))
+	require.ErrorIs(t, err, dbkernel.ErrKeyNotFound)
+	require.NoError(t, os.Remove(blocked))
+	require.NoError(t, handler.ApplyRecord(second, secondOffset))
+	require.Equal(t, uint64(2), follower.OpsReceivedCount())
+	require.Equal(t, secondOffset, *follower.CurrentOffset())
+	got, err := follower.GetKV([]byte("second"))
+	require.NoError(t, err)
+	require.Equal(t, value, got)
+	require.ErrorIs(t, handler.ApplyRecord(second, secondOffset), dbkernel.ErrInvalidLSN)
+}
 
 func TestReplicaWALHandler_ApplyRecord(t *testing.T) {
 	baseDir := t.TempDir()
