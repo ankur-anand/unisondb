@@ -23,7 +23,8 @@ const (
 // It encodes the last known chunk position (`Pos`) within the segment file. This is primarily used for
 // recovery and replication tracking.
 type Metadata struct {
-	// (monotonic)
+	// Cumulative flushed-record count. This is not a WAL LSN: unfinished
+	// transactions also consume sequence numbers without materializing data.
 	RecordProcessed uint64
 	// Position of the last written chunk in WAL
 	Pos *wal.Offset

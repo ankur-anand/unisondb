@@ -103,7 +103,7 @@ func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	// start the batch marker in wal
-	index := e.writeSeenCounter.Add(1)
+	index := e.writeSeenCounter.Load() + 1
 	record := logcodec.LogRecord{
 		LSN:             index,
 		HLC:             HLCNow(),
@@ -119,6 +119,7 @@ func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.
 		return nil, err
 	}
 
+	e.writeSeenCounter.Store(index)
 	e.taggedScope.Counter(mTxnBeginTotal).Inc(1)
 	return &Txn{
 		txnID:           uuid,
@@ -164,7 +165,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 	t.chunkedValueChecksum = crc32.Update(t.chunkedValueChecksum, crc32.IEEETable, value)
 	t.engine.mu.Lock()
 	defer t.engine.mu.Unlock()
-	index := t.engine.writeSeenCounter.Add(1)
+	index := t.engine.writeSeenCounter.Load() + 1
 
 	record := logcodec.LogRecord{
 		LSN:             index,
@@ -187,6 +188,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 		return err
 	}
 
+	t.engine.writeSeenCounter.Store(index)
 	t.prevOffset = offset
 
 	// for chunked type we just dataStore the last offset.
@@ -227,7 +229,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 
 	t.engine.mu.Lock()
 	defer t.engine.mu.Unlock()
-	index := t.engine.writeSeenCounter.Add(1)
+	index := t.engine.writeSeenCounter.Load() + 1
 
 	record := logcodec.LogRecord{
 		LSN:             index,
@@ -251,6 +253,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 		return err
 	}
 
+	t.engine.writeSeenCounter.Store(index)
 	t.prevOffset = offset
 
 	memValue := getValueStruct(byte(t.txnOperation), byte(t.txnEntryType), rce)
@@ -274,7 +277,7 @@ func (t *Txn) Commit() error {
 	kv := logcodec.SerializeKVEntry(t.rowKey, nil)
 	t.engine.mu.Lock()
 	defer t.engine.mu.Unlock()
-	index := t.engine.writeSeenCounter.Add(1)
+	index := t.engine.writeSeenCounter.Load() + 1
 
 	record := logcodec.LogRecord{
 		LSN:             index,
@@ -299,6 +302,7 @@ func (t *Txn) Commit() error {
 		return err
 	}
 
+	t.engine.writeSeenCounter.Store(index)
 	defer func() {
 		t.engine.taggedScope.Counter(mTxnCommitTotal).Inc(1)
 		t.engine.taggedScope.Timer(mTxnLifecycleSeconds).Record(time.Since(t.startTime))
@@ -349,6 +353,8 @@ func (t *Txn) memWriteFull() error {
 		t.engine.writeNilOffset()
 	}
 
+	// Begin has no memtable value but is part of the committed WAL chain.
+	t.engine.writeNilOffset()
 	t.engine.writeOffset(t.prevOffset)
 	return nil
 }

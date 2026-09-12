@@ -458,7 +458,9 @@ func (wl *WALog) Write(data []byte, logIndex uint64) (RecordPosition, error) {
 
 	if wl.bytesPerSync > 0 && wl.unSynced >= wl.bytesPerSync {
 		if err := wl.currentSegment.MSync(); err != nil {
-			return RecordPosition{}, err
+			// Bytes were already appended. Signal a durability failure so callers
+			// cannot treat this as an unwritten record and reuse its LSN.
+			return RecordPosition{}, fmt.Errorf("%w: %w", ErrFsync, err)
 		}
 		wl.unSynced = 0
 		wl.bytesPerSyncCalled.Add(1)
@@ -538,7 +540,7 @@ func (wl *WALog) writeBatchLocked(records [][]byte, logIndexes []uint64) ([]Reco
 
 		if wl.bytesPerSync > 0 && wl.unSynced >= wl.bytesPerSync {
 			if syncErr := wl.currentSegment.MSync(); syncErr != nil {
-				return allPositions, syncErr
+				return allPositions, fmt.Errorf("%w: %w", ErrFsync, syncErr)
 			}
 			wl.unSynced = 0
 			wl.bytesPerSyncCalled.Add(1)

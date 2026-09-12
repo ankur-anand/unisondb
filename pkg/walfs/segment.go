@@ -808,7 +808,7 @@ func (seg *Segment) Write(data []byte, logIndex uint64) (RecordPosition, error) 
 	// MSync if option is set
 	if seg.syncOption == MsyncOnWrite {
 		if err := seg.mmapData.Flush(); err != nil {
-			return NilRecordPosition, fmt.Errorf("mmap flush error after write: %w", err)
+			return NilRecordPosition, fmt.Errorf("%w: mmap flush error after write: %w", ErrFsync, err)
 		}
 	}
 
@@ -942,7 +942,7 @@ func (seg *Segment) WriteBatch(records [][]byte, logIndexes []uint64) ([]RecordP
 	// MSync if option is set
 	if seg.syncOption == MsyncOnWrite {
 		if err := seg.mmapData.Flush(); err != nil {
-			return positions, recordsToWrite, fmt.Errorf("mmap flush error after batch write: %w", err)
+			return positions, recordsToWrite, fmt.Errorf("%w: mmap flush error after batch write: %w", ErrFsync, err)
 		}
 	}
 

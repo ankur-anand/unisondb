@@ -32,6 +32,12 @@ func (w *WalRecovery) RecoveredCount() int {
 	return w.w.recoveredCount
 }
 
+// LastSeenLSN includes the checkpoint record and every subsequent WAL record,
+// even Begin/Prepare records whose transaction never committed.
+func (w *WalRecovery) LastSeenLSN() uint64 {
+	return w.w.lastSeenLSN
+}
+
 func (w *WalRecovery) LastRecoveredOffset() *wal.Offset {
 	if w.w.lastRecoveredPos == nil {
 		return nil
@@ -50,13 +56,20 @@ type walRecovery struct {
 	walIO            *wal.WalIO
 	recoveredCount   int
 	lastRecoveredPos *wal.Offset
+	lastSeenLSN      uint64
+	seenRecord       bool
 }
 
 // recoverWAL recover wal from last check point saved in btree store.
 func (wr *walRecovery) recoverWAL(checkPoint []byte) error {
+	wr.lastSeenLSN = 0
+	wr.seenRecord = false
 	var offset wal.Offset
 	if len(checkPoint) != 0 {
 		metadata := internal.UnmarshalMetadata(checkPoint)
+		if metadata.Pos == nil || metadata.Pos.SegmentID == 0 || metadata.Pos.Offset == 0 {
+			return errors.New("recover WAL failed: invalid checkpoint position")
+		}
 		offset = *metadata.Pos
 	}
 
@@ -67,10 +80,27 @@ func (wr *walRecovery) recoverWAL(checkPoint []byte) error {
 	defer reader.Close()
 
 	if len(checkPoint) != 0 {
-		// first value will be duplicate, so we can ignore it.
-		_, _, err := reader.Next()
-		if wr.isFatalError(err) {
-			return fmt.Errorf("recover WAL failed %w", err)
+		// The checkpoint's data is already persisted, but its embedded LSN
+		// establishes the sequence independently of flushed-operation counts.
+		value, pos, err := reader.Next()
+		if err != nil {
+			return fmt.Errorf("recover WAL checkpoint at %v: %w", offset, err)
+		}
+		if pos != offset {
+			return fmt.Errorf("recover WAL checkpoint at %v: found record at %v", offset, pos)
+		}
+		if err := wr.observeLSN(logrecord.GetRootAsLogRecord(value, 0), pos); err != nil {
+			return err
+		}
+		// The segment index is rebuilt from physical record order on open.
+		// A checkpoint at a previously duplicated/skipped LSN must not silently
+		// establish a new sequence over an inconsistent index.
+		indexedPos, err := wr.walIO.WAL().PositionForIndex(wr.lastSeenLSN)
+		if err != nil {
+			return fmt.Errorf("recover WAL checkpoint LSN %d: %w", wr.lastSeenLSN, err)
+		}
+		if indexedPos != pos {
+			return fmt.Errorf("recover WAL checkpoint LSN %d: index points to %v, checkpoint at %v", wr.lastSeenLSN, indexedPos, pos)
 		}
 	}
 
@@ -84,12 +114,25 @@ func (wr *walRecovery) recoverWAL(checkPoint []byte) error {
 			return fmt.Errorf("recover WAL failed %w", err)
 		}
 		record := logrecord.GetRootAsLogRecord(value, 0)
+		if err := wr.observeLSN(record, pos); err != nil {
+			return err
+		}
 		err = wr.handleRecord(record)
 		wr.lastRecoveredPos = &pos
 		if err != nil {
 			return fmt.Errorf("recover WAL failed %w", err)
 		}
 	}
+	return nil
+}
+
+func (wr *walRecovery) observeLSN(record *logrecord.LogRecord, pos wal.Offset) error {
+	lsn := record.Lsn()
+	if lsn == 0 || (wr.seenRecord && lsn-1 != wr.lastSeenLSN) {
+		return fmt.Errorf("invalid WAL LSN at %v: got %d, expected %d", pos, lsn, wr.lastSeenLSN+1)
+	}
+	wr.lastSeenLSN = lsn
+	wr.seenRecord = true
 	return nil
 }
 
@@ -176,10 +219,6 @@ func (wr *walRecovery) handleDeleteRowByKey(record *logrecord.LogRecord) error {
 	}
 	_, err := wr.store.BatchDeleteRows(keys)
 	return err
-}
-
-func (wr *walRecovery) isFatalError(err error) bool {
-	return err != nil && !errors.Is(err, io.EOF)
 }
 
 // handleTxnCommited handles the current commited txn, for chunked, insert and delete ops.
