@@ -20,6 +20,8 @@ It is a **reactive**, [**log-native**](https://www.unisondb.io/docs/architecture
 
 Writes are committed on the write server; read-only edge replicas and relayers can consume WAL through either a live **gRPC** stream or **blob-backed replication** using object storage.
 
+![UnisonDB write path and replication fan-out](docs/replication_architecture.svg)
+
 Blob-backed replication changes the fan-out model:
 
 - The writer publishes WAL as immutable segment files plus bounded catalog metadata

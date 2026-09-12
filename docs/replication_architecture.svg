@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1200 1044" font-family="Helvetica, Arial, sans-serif" role="img" aria-label="UnisonDB write path: a client write is appended to the write server's LSN-ordered write-ahead log and flushed to a B+Tree, then the committed WAL fans out over two independent paths — a gRPC relay tree that multiplies fan-out per hop using in-sync replica replication, and object-store publishing that lets any number of readers poll independently — both reaching thousands of read-only edge nodes.">
+  <title>UnisonDB Write Path and Replication Fan-Out</title>
+  <desc>Animated data-flow diagram. Records travel from the client into the write-ahead log, then split into a gRPC streaming branch and a blob-backed object-store branch.</desc>
+
+  <defs>
+    <!-- markerUnits=userSpaceOnUse keeps the head a fixed 14 units instead of
+         scaling with stroke-width, so every arrow keeps a visible shaft. -->
+    <marker id="arrow-slate" viewBox="0 0 10 10" refX="8.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="8.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#1d4ed8"/>
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="8.5" refY="5" markerUnits="userSpaceOnUse" markerWidth="14" markerHeight="14" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#9a3412"/>
+    </marker>
+
+    <!-- invisible motion tracks -->
+    <path id="track-trunk"  fill="none" stroke="none" d="M600,140 V178 H395 V436 H600 V526"/>
+    <path id="track-left"   fill="none" stroke="none" d="M600,526 L320,586 V886"/>
+    <path id="track-right"  fill="none" stroke="none" d="M600,526 L880,586 V886"/>
+    <path id="track-flush"  fill="none" stroke="none" d="M540,302 H652"/>
+    <path id="track-notify" fill="none" stroke="none" d="M1020,302 H1048"/>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="1044" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="600" y="40" text-anchor="middle" font-size="26" font-weight="700" fill="#0f172a">UnisonDB &#8212; Write Path &amp; Replication Fan-Out</text>
+
+  <!-- Legend (single inline strip) -->
+  <line x1="374" y1="70" x2="408" y2="70" stroke="#334155" stroke-width="2.4" marker-end="url(#arrow-slate)"/>
+  <text x="416" y="74" font-size="12.5" fill="#334155">pushed / streamed</text>
+  <line x1="553" y1="70" x2="587" y2="70" stroke="#334155" stroke-width="2.2" stroke-dasharray="5,4" marker-end="url(#arrow-slate)"/>
+  <text x="595" y="74" font-size="12.5" fill="#334155">pulled / polled</text>
+  <circle cx="722" cy="70" r="5.5" fill="#0f766e" stroke="#ffffff" stroke-width="1.4"/>
+  <text x="734" y="74" font-size="12.5" fill="#334155">record in flight</text>
+
+  <!-- Client -->
+  <rect x="470" y="92" width="260" height="48" rx="8" fill="#eef2f7" stroke="#334155" stroke-width="1.8"/>
+  <text x="600" y="122" text-anchor="middle" font-size="16" font-weight="600" fill="#0f172a">Client / Application</text>
+
+  <!-- Client -> WAL -->
+  <path d="M600,140 V178 H395 V236" fill="none" stroke="#334155" stroke-width="2.4" marker-end="url(#arrow-slate)"/>
+  <text x="614" y="166" font-size="13" fill="#334155">write (HTTP / gRPC)</text>
+
+  <!-- Write server -->
+  <rect x="180" y="210" width="840" height="200" rx="14" fill="#f8fafc" stroke="#64748b" stroke-width="1.8" stroke-dasharray="6,4"/>
+  <text x="204" y="236" font-size="16" font-weight="700" fill="#0f172a">WRITE SERVER &#8212; SINGLE WRITER PER NAMESPACE</text>
+
+  <rect x="250" y="246" width="290" height="112" rx="10" fill="#0f766e" stroke="#0f766e" stroke-width="2.4"/>
+  <text x="395" y="290" text-anchor="middle" font-size="17" font-weight="700" fill="#ffffff">Write-Ahead Log</text>
+  <text x="395" y="314" text-anchor="middle" font-size="13" fill="#d1fae5">append-only &#183; LSN-ordered</text>
+  <text x="395" y="336" text-anchor="middle" font-size="13" fill="#d1fae5">durable on commit</text>
+
+  <path d="M540,302 H652" fill="none" stroke="#334155" stroke-width="2.2" marker-end="url(#arrow-slate)"/>
+  <text x="596" y="292" text-anchor="middle" font-size="13" fill="#334155">async flush</text>
+
+  <rect x="660" y="246" width="290" height="112" rx="10" fill="#e2e8f0" stroke="#334155" stroke-width="1.8"/>
+  <text x="805" y="290" text-anchor="middle" font-size="17" font-weight="700" fill="#0f172a">B+Tree Store</text>
+  <text x="805" y="314" text-anchor="middle" font-size="13" fill="#334155">serves local reads</text>
+  <text x="805" y="336" text-anchor="middle" font-size="13" fill="#334155">LMDB / BoltDB backend</text>
+
+  <text x="600" y="392" text-anchor="middle" font-size="13.5" font-style="italic" fill="#0f172a">namespace-isolated &#183; Key-Value &#183; Wide-Column &#183; Large Objects</text>
+
+  <!-- ZeroMQ sidecar -->
+  <path d="M1020,302 H1048" fill="none" stroke="#334155" stroke-width="2" marker-end="url(#arrow-slate)"/>
+  <rect x="1054" y="268" width="132" height="68" rx="8" fill="#f1f5f9" stroke="#64748b" stroke-width="1.6"/>
+  <text x="1120" y="296" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">ZeroMQ</text>
+  <text x="1120" y="316" text-anchor="middle" font-size="11.5" fill="#334155">change notify</text>
+
+  <!-- WAL -> committed WAL -->
+  <path d="M395,358 V436 H600 V462" fill="none" stroke="#334155" stroke-width="2.4" marker-end="url(#arrow-slate)"/>
+
+  <rect x="460" y="470" width="280" height="56" rx="8" fill="#ccfbf1" stroke="#0f766e" stroke-width="1.8">
+    <animate attributeName="stroke-width" values="1.8;3.4;1.8" dur="2.6s" repeatCount="indefinite"/>
+  </rect>
+  <text x="600" y="495" text-anchor="middle" font-size="17" font-weight="700" fill="#134e4a">Committed WAL</text>
+  <text x="600" y="515" text-anchor="middle" font-size="12.5" fill="#134e4a">one log, two independent consumers</text>
+
+  <!-- Fork -->
+  <path d="M600,526 L326,582" fill="none" stroke="#1d4ed8" stroke-width="2.2" marker-end="url(#arrow-blue)"/>
+  <path d="M600,526 L874,582" fill="none" stroke="#9a3412" stroke-width="2.2" marker-end="url(#arrow-amber)"/>
+  <text x="424" y="542" text-anchor="middle" font-size="15" font-weight="700" fill="#1d4ed8">gRPC path</text>
+  <text x="776" y="542" text-anchor="middle" font-size="15" font-weight="700" fill="#9a3412">blob path</text>
+
+  <!-- LEFT: gRPC streaming -->
+  <rect x="170" y="588" width="300" height="64" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.8"/>
+  <text x="320" y="612" text-anchor="middle" font-size="15" font-weight="700" fill="#1e3a8a">gRPC WAL Streaming</text>
+  <text x="320" y="634" text-anchor="middle" font-size="12.5" fill="#1e3a8a">live tail &#183; in-sync replica (ISR)</text>
+
+  <path d="M320,652 V690" fill="none" stroke="#1d4ed8" stroke-width="2.2" marker-end="url(#arrow-blue)"/>
+  <text x="334" y="676" font-size="12.5" fill="#1d4ed8">hop 1 &#183; relay</text>
+
+  <rect x="182" y="696" width="300" height="72" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
+  <rect x="176" y="702" width="300" height="72" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.2"/>
+  <rect x="170" y="708" width="300" height="72" rx="8" fill="#dbeafe" stroke="#1d4ed8" stroke-width="1.8"/>
+  <text x="320" y="738" text-anchor="middle" font-size="17" font-weight="700" fill="#1e3a8a">Relayer Hubs</text>
+  <text x="320" y="760" text-anchor="middle" font-size="12.5" fill="#1e3a8a">re-stream to further hubs</text>
+
+  <path d="M320,784 V832" fill="none" stroke="#1d4ed8" stroke-width="2.2" marker-end="url(#arrow-blue)"/>
+  <text x="334" y="808" font-size="12.5" fill="#1d4ed8">hop 2 &#183; relay (repeats)</text>
+
+  <rect x="182" y="840" width="300" height="68" rx="8" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+  <rect x="176" y="846" width="300" height="68" rx="8" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.2"/>
+  <rect x="170" y="852" width="300" height="68" rx="8" fill="#bfdbfe" stroke="#1d4ed8" stroke-width="1.8"/>
+  <text x="320" y="880" text-anchor="middle" font-size="17" font-weight="700" fill="#1e3a8a">Edge Replicas</text>
+  <text x="320" y="902" text-anchor="middle" font-size="12.5" fill="#1e3a8a">read-only &#183; fan-out grows per hop</text>
+
+  <!-- RIGHT: blob-backed replication -->
+  <rect x="730" y="588" width="300" height="64" rx="8" fill="#fef3c7" stroke="#9a3412" stroke-width="1.8"/>
+  <text x="880" y="612" text-anchor="middle" font-size="15" font-weight="700" fill="#7c2d12">Publish WAL Segments</text>
+  <text x="880" y="634" text-anchor="middle" font-size="12.5" fill="#7c2d12">immutable files + catalog metadata</text>
+
+  <path d="M880,652 V686" fill="none" stroke="#9a3412" stroke-width="2.2" marker-end="url(#arrow-amber)"/>
+  <text x="894" y="674" font-size="12.5" fill="#9a3412">write once</text>
+
+  <path d="M780,706 a100,13 0 1,0 200,0 v70 a100,13 0 1,1 -200,0 z" fill="#fef3c7" stroke="#9a3412" stroke-width="1.8"/>
+  <ellipse cx="880" cy="706" rx="100" ry="13" fill="#fde68a" stroke="#9a3412" stroke-width="1.8"/>
+  <text x="880" y="742" text-anchor="middle" font-size="17" font-weight="700" fill="#7c2d12">Object Store</text>
+  <text x="880" y="760" text-anchor="middle" font-size="12.5" fill="#7c2d12">S3 &#183; MinIO &#183; GCS &#183; Azure</text>
+
+  <path d="M880,793 V834" fill="none" stroke="#9a3412" stroke-width="2.2" stroke-dasharray="5,4" marker-end="url(#arrow-amber)">
+    <animate attributeName="stroke-dashoffset" values="9;0" dur="0.75s" repeatCount="indefinite"/>
+  </path>
+  <text x="894" y="812" font-size="12.5" fill="#9a3412">poll (independent)</text>
+
+  <rect x="742" y="840" width="300" height="68" rx="8" fill="#fef3c7" stroke="#fbbf7d" stroke-width="1.2"/>
+  <rect x="736" y="846" width="300" height="68" rx="8" fill="#fef3c7" stroke="#fbbf7d" stroke-width="1.2"/>
+  <rect x="730" y="852" width="300" height="68" rx="8" fill="#fde9b8" stroke="#9a3412" stroke-width="1.8"/>
+  <text x="880" y="880" text-anchor="middle" font-size="17" font-weight="700" fill="#7c2d12">Readers / Replicas</text>
+  <text x="880" y="902" text-anchor="middle" font-size="12.5" fill="#7c2d12">any number &#183; no coordination</text>
+
+  <!-- Convergence -->
+  <path d="M320,920 L520,958" fill="none" stroke="#64748b" stroke-width="1.6" stroke-dasharray="4,3"/>
+  <path d="M880,920 L680,958" fill="none" stroke="#64748b" stroke-width="1.6" stroke-dasharray="4,3"/>
+
+  <rect x="350" y="960" width="500" height="58" rx="10" fill="#0f172a"/>
+  <text x="600" y="997" text-anchor="middle" font-size="20" font-weight="700" fill="#ffffff">Both Paths Reach 1,000s of Nodes</text>
+
+  <!-- ================= animated records in flight ================= -->
+  <!-- Each dot is hidden until its own motion begins, so a renderer without
+       SMIL support shows the diagram cleanly instead of a pile at the origin. -->
+
+  <!-- trunk: client -> WAL -> committed -->
+  <g fill="#0f766e" stroke="#ffffff" stroke-width="1.4">
+    <circle r="5.5" opacity="0"><set attributeName="opacity" to="1" begin="0s"/><animateMotion dur="2.6s" repeatCount="indefinite" begin="0s"><mpath xlink:href="#track-trunk"/></animateMotion></circle>
+    <circle r="5.5" opacity="0"><set attributeName="opacity" to="1" begin="0.87s"/><animateMotion dur="2.6s" repeatCount="indefinite" begin="0.87s"><mpath xlink:href="#track-trunk"/></animateMotion></circle>
+    <circle r="5.5" opacity="0"><set attributeName="opacity" to="1" begin="1.74s"/><animateMotion dur="2.6s" repeatCount="indefinite" begin="1.74s"><mpath xlink:href="#track-trunk"/></animateMotion></circle>
+  </g>
+
+  <!-- async flush into the B+Tree -->
+  <g fill="#334155" stroke="#ffffff" stroke-width="1.2">
+    <circle r="4.5" opacity="0"><set attributeName="opacity" to="1" begin="0.4s"/><animateMotion dur="1.6s" repeatCount="indefinite" begin="0.4s"><mpath xlink:href="#track-flush"/></animateMotion></circle>
+  </g>
+
+  <!-- change notification to the ZeroMQ sidecar -->
+  <g fill="#64748b" stroke="#ffffff" stroke-width="1.1">
+    <circle r="4" opacity="0"><set attributeName="opacity" to="1" begin="0.9s"/><animateMotion dur="1.2s" repeatCount="indefinite" begin="0.9s"><mpath xlink:href="#track-notify"/></animateMotion></circle>
+  </g>
+
+  <!-- left branch: gRPC relay tree -->
+  <g fill="#1d4ed8" stroke="#ffffff" stroke-width="1.4">
+    <circle r="5.5" opacity="0"><set attributeName="opacity" to="1" begin="0s"/><animateMotion dur="3.4s" repeatCount="indefinite" begin="0s"><mpath xlink:href="#track-left"/></animateMotion></circle>
+    <circle r="5.5" opacity="0"><set attributeName="opacity" to="1" begin="1.13s"/><animateMotion dur="3.4s" repeatCount="indefinite" begin="1.13s"><mpath xlink:href="#track-left"/></animateMotion></circle>
+    <circle r="5.5" opacity="0"><set attributeName="opacity" to="1" begin="2.26s"/><animateMotion dur="3.4s" repeatCount="indefinite" begin="2.26s"><mpath xlink:href="#track-left"/></animateMotion></circle>
+  </g>
+
+  <!-- right branch: object-store publish and poll -->
+  <g fill="#9a3412" stroke="#ffffff" stroke-width="1.4">
+    <circle r="5.5" opacity="0"><set attributeName="opacity" to="1" begin="0.55s"/><animateMotion dur="3.4s" repeatCount="indefinite" begin="0.55s"><mpath xlink:href="#track-right"/></animateMotion></circle>
+    <circle r="5.5" opacity="0"><set attributeName="opacity" to="1" begin="1.68s"/><animateMotion dur="3.4s" repeatCount="indefinite" begin="1.68s"><mpath xlink:href="#track-right"/></animateMotion></circle>
+    <circle r="5.5" opacity="0"><set attributeName="opacity" to="1" begin="2.81s"/><animateMotion dur="3.4s" repeatCount="indefinite" begin="2.81s"><mpath xlink:href="#track-right"/></animateMotion></circle>
+  </g>
+</svg>
