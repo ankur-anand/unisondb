@@ -58,8 +58,8 @@ github.com/alecthomas/units v0.0.0-20190717042225-c3de453c63f4/go.mod h1:ybxpYRF
 github.com/alecthomas/units v0.0.0-20190924025748-f65c72e2690d/go.mod h1:rBZYJk541a8SKzHPHnH3zbiI+7dagKZ0cgpgrD7Fyho=
 github.com/anishathalye/porcupine v1.0.3 h1:0V+ZTHPjWUhYhiVaksoBFKfmBvoJrM3BXLQKGqPqiHM=
 github.com/anishathalye/porcupine v1.0.3/go.mod h1:WM0SsFjWNl2Y4BqHr/E/ll2yY1GY1jqn+W7Z/84Zoog=
-github.com/ankur-anand/unijord v0.0.0-20260622125045-3c106ca832c4 h1:jBBvTIObBJ6KhnMYt4dHZZ4/NzKvOkwJIQe4h+ECTbM=
-github.com/ankur-anand/unijord v0.0.0-20260622125045-3c106ca832c4/go.mod h1:QaikTm0i3G/p2u62SIw2byzFLyoXVn8udRkp/sOdZ/M=
+github.com/ankur-anand/objlog v0.0.0-20260831033720-0eb164c2159b h1:HW97u6yU3eN+hRd6T/vfIAz9zjY+4vJMG1ng0dlVU+w=
+github.com/ankur-anand/objlog v0.0.0-20260831033720-0eb164c2159b/go.mod h1:Y60/TFDrdS9XrMCCfrJWZikAaw2K3P+qWhZDuWGGrjU=
 github.com/armon/go-metrics v0.4.1 h1:hR91U9KYmb6bLBYLQjyM+3j+rcd/UhE+G78SFnF8gJA=
 github.com/armon/go-metrics v0.4.1/go.mod h1:E6amYzXo6aW1tqzoZGT755KkbgrJsSdpwZ+3JqfkOG4=
 github.com/aws/aws-sdk-go-v2 v1.41.5 h1:dj5kopbwUsVUVFgO4Fi5BIT3t4WyqIDjGKCangnV/yY=

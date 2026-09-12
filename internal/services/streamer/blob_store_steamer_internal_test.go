@@ -8,13 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ankur-anand/unijord/partitionlog"
-	segmentsink "github.com/ankur-anand/unijord/partitionlog/blob/sink"
-	"github.com/ankur-anand/unijord/partitionlog/blob/sink/multipart"
-	"github.com/ankur-anand/unijord/partitionlog/catalog"
-	"github.com/ankur-anand/unijord/partitionlog/pmeta"
-	plwriter "github.com/ankur-anand/unijord/partitionlog/writer"
+	"github.com/ankur-anand/objlog"
 	"github.com/ankur-anand/unisondb/dbkernel"
+	"github.com/ankur-anand/unisondb/internal/testutil/objlogtest"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,8 +23,8 @@ func TestBlobStoreStreamer_NamespaceStateInitializesCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = engine.Close(context.Background()) })
 
-	log := newInternalMemoryPartitionLog(t)
-	streamer, err := NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*partitionlog.Log{namespace: log}, BlobStoreStreamerConfig{
+	log := objlogtest.NewLog(t, nil)
+	streamer, err := NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*objlog.Log{namespace: log}, BlobStoreStreamerConfig{
 		BootstrapAfterLSN: map[string]uint64{namespace: 99},
 	})
 	require.NoError(t, err)
@@ -52,11 +48,11 @@ func TestBlobStoreStreamer_NamespaceStateRejectsBootstrapAheadOfExistingHead(t *
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = engine.Close(context.Background()) })
 
-	log := newInternalMemoryPartitionLog(t)
-	_, err = log.InitializePartition(ctx, partitionlog.InitializePartition{Partition: 0, NextLSN: 10})
+	log := objlogtest.NewLog(t, nil)
+	_, err = log.InitializePartition(ctx, objlog.InitializePartition{Partition: 0, NextLSN: 10})
 	require.NoError(t, err)
 
-	streamer, err := NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*partitionlog.Log{namespace: log}, BlobStoreStreamerConfig{
+	streamer, err := NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*objlog.Log{namespace: log}, BlobStoreStreamerConfig{
 		BootstrapAfterLSN: map[string]uint64{namespace: 99},
 	})
 	require.NoError(t, err)
@@ -74,9 +70,31 @@ func TestNormalizeHLCTimestampMS(t *testing.T) {
 	assert.Equal(t, int64(1_700_000_000_000), normalizeHLCTimestampMS(uint64(1_700_000_000_000_000_000), fallback))
 }
 
-func TestWriterIDForNamespaceStable(t *testing.T) {
-	assert.Equal(t, writerIDForNamespace("orders"), writerIDForNamespace("orders"))
-	assert.NotEqual(t, writerIDForNamespace("orders"), writerIDForNamespace("inventory"))
+func TestBlobStoreStreamer_ReopenUsesNewWriterIdentity(t *testing.T) {
+	ctx := context.Background()
+	const namespace = "orders"
+	log := objlogtest.NewLog(t, nil)
+	openStreamer := func() *BlobStoreStreamer {
+		s, err := NewBlobStoreStreamer(ctx, nil, nil, map[string]*objlog.Log{namespace: log}, DefaultBlobStoreStreamerConfig())
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, s.Close()) })
+		return s
+	}
+
+	first := openStreamer()
+	firstState, err := first.namespaceState(ctx, namespace)
+	require.NoError(t, err)
+	firstIdentity := firstState.writer.State().Snapshot.Identity
+	_, err = firstState.writer.Append(ctx, objlog.Record{TimestampMS: 1, Value: []byte("record")})
+	require.NoError(t, err)
+	require.NoError(t, first.Close())
+
+	secondState, err := openStreamer().namespaceState(ctx, namespace)
+	require.NoError(t, err)
+	secondIdentity := secondState.writer.State().Snapshot.Identity
+	assert.NotEqual(t, firstIdentity.Tag, secondIdentity.Tag)
+	assert.Greater(t, secondIdentity.Epoch, firstIdentity.Epoch)
+	assert.Equal(t, uint64(1), secondState.startLSN, "reopening should resume after the committed record")
 }
 
 func TestNewBlobStoreStreamerDefaultsMaxRecordsForKVWorkloads(t *testing.T) {
@@ -86,7 +104,7 @@ func TestNewBlobStoreStreamerDefaultsMaxRecordsForKVWorkloads(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = engine.Close(context.Background()) })
 
-	s, err := NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*partitionlog.Log{namespace: newInternalMemoryPartitionLog(t)}, BlobStoreStreamerConfig{})
+	s, err := NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*objlog.Log{namespace: objlogtest.NewLog(t, nil)}, BlobStoreStreamerConfig{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 
@@ -100,8 +118,8 @@ func TestNewBlobStoreStreamerKeepsConfiguredMaxRecords(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = engine.Close(context.Background()) })
 
-	s, err := NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*partitionlog.Log{namespace: newInternalMemoryPartitionLog(t)}, BlobStoreStreamerConfig{
-		Batch: partitionlog.BatchPolicy{
+	s, err := NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*objlog.Log{namespace: objlogtest.NewLog(t, nil)}, BlobStoreStreamerConfig{
+		Batch: objlog.BatchPolicy{
 			MaxRecords: 64,
 		},
 	})
@@ -113,11 +131,12 @@ func TestNewBlobStoreStreamerKeepsConfiguredMaxRecords(t *testing.T) {
 
 func TestBlobStoreStreamerClientApplyCommittedRangeUsesCachedHead(t *testing.T) {
 	ctx := context.Background()
-	log, countingCatalog := newCountingInternalMemoryPartitionLog(t)
-	writer, err := log.OpenWriter(ctx, partitionlog.WriterOptions{
+	metrics := &catalogRefreshMetrics{}
+	log := objlogtest.NewLog(t, metrics)
+	writer, err := log.OpenWriter(ctx, objlog.WriterOptions{
 		Partition: 0,
 		WriterID:  [16]byte{1},
-		Batch: partitionlog.BatchPolicy{
+		Batch: objlog.BatchPolicy{
 			MaxRecords: 64,
 		},
 	})
@@ -125,7 +144,7 @@ func TestBlobStoreStreamerClientApplyCommittedRangeUsesCachedHead(t *testing.T) 
 
 	recordCount := batchSize*2 + 7
 	for i := 0; i < recordCount; i++ {
-		_, err = writer.Append(ctx, partitionlog.Record{
+		_, err = writer.Append(ctx, objlog.Record{
 			TimestampMS: int64(i + 1),
 			Value:       []byte("wal-record"),
 		})
@@ -139,9 +158,10 @@ func TestBlobStoreStreamerClientApplyCommittedRangeUsesCachedHead(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, uint64(recordCount-1), latest)
 
-	countingCatalog.loadPartitionCalls.Store(0)
+	require.Positive(t, metrics.refreshes.Load(), "latest head read should refresh the catalog")
+	metrics.refreshes.Store(0)
 	require.NoError(t, client.applyCommittedRange(ctx, latest))
-	assert.Zero(t, countingCatalog.loadPartitionCalls.Load(), "batch reads should use cached head after latest head refresh")
+	assert.Zero(t, metrics.refreshes.Load(), "batch reads should use cached head after latest head refresh")
 }
 
 func TestStreamNamespaceDerivesStartFromCatalog(t *testing.T) {
@@ -157,8 +177,8 @@ func TestStreamNamespaceDerivesStartFromCatalog(t *testing.T) {
 		require.NoError(t, engine.PutKV([]byte(fmt.Sprintf("k-%02d", i)), []byte("v")))
 	}
 
-	log := newInternalMemoryPartitionLog(t)
-	srv, err := NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*partitionlog.Log{namespace: log}, BlobStoreStreamerConfig{
+	log := objlogtest.NewLog(t, nil)
+	srv, err := NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*objlog.Log{namespace: log}, BlobStoreStreamerConfig{
 		FlushInterval:     25 * time.Millisecond,
 		BootstrapAfterLSN: map[string]uint64{namespace: 3},
 	})
@@ -179,13 +199,13 @@ func TestStreamNamespaceDerivesStartFromCatalog(t *testing.T) {
 	assert.True(t, err == nil || errors.Is(err, context.Canceled), "unexpected stream error: %v", err)
 }
 
-func TestPartitionLogStoreFactoryURLValidation(t *testing.T) {
+func TestObjLogStoreFactoryURLValidation(t *testing.T) {
 	tests := []struct {
 		name      string
 		bucketURL string
 		wantErr   string
 	}{
-		{name: "unsupported", bucketURL: "file:///tmp/log", wantErr: "unsupported partitionlog bucket scheme"},
+		{name: "unsupported", bucketURL: "file:///tmp/log", wantErr: "unsupported objlog bucket scheme"},
 		{name: "missing s3 bucket", bucketURL: "s3://", wantErr: "s3 bucket missing"},
 		{name: "missing gcs bucket", bucketURL: "gcs://", wantErr: "gcs bucket missing"},
 		{name: "missing azure container", bucketURL: "azblob://", wantErr: "azblob container missing"},
@@ -194,14 +214,14 @@ func TestPartitionLogStoreFactoryURLValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := newPartitionLogStoreFactory(context.Background(), tt.bucketURL, "prefix")
+			_, err := newObjLogStoreFactory(context.Background(), tt.bucketURL, "prefix")
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}
 }
 
-func TestPartitionLogStoreFactorySupportsLocalProviderURLs(t *testing.T) {
+func TestObjLogStoreFactorySupportsLocalProviderURLs(t *testing.T) {
 	tests := []struct {
 		name      string
 		bucketURL string
@@ -212,7 +232,7 @@ func TestPartitionLogStoreFactorySupportsLocalProviderURLs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			factory, err := newPartitionLogStoreFactory(context.Background(), tt.bucketURL, "prefix")
+			factory, err := newObjLogStoreFactory(context.Background(), tt.bucketURL, "prefix")
 			require.NoError(t, err)
 			store, err := factory.openStore("orders")
 			require.NoError(t, err)
@@ -221,74 +241,14 @@ func TestPartitionLogStoreFactorySupportsLocalProviderURLs(t *testing.T) {
 	}
 }
 
-func newInternalMemoryPartitionLog(t *testing.T) *partitionlog.Log {
-	t.Helper()
-	objects := multipart.NewMemoryStore()
-	sinkFactory, err := segmentsink.New(objects, segmentsink.Options{})
-	require.NoError(t, err)
-	store := &internalTestPartitionLogStore{
-		catalog: catalog.NewMemory(),
-		sink:    sinkFactory,
-		source:  &internalTestSegmentStore{objects: objects},
+type catalogRefreshMetrics struct {
+	refreshes atomic.Int64
+}
+
+func (m *catalogRefreshMetrics) Observe(metric objlog.Metric) {
+	if metric.Name == objlog.MetricReaderCatalogRefresh {
+		m.refreshes.Add(1)
 	}
-	log, err := partitionlog.Open(partitionlog.Options{Store: store})
-	require.NoError(t, err)
-	return log
-}
-
-func newCountingInternalMemoryPartitionLog(t *testing.T) (*partitionlog.Log, *countingCatalog) {
-	t.Helper()
-	objects := multipart.NewMemoryStore()
-	sinkFactory, err := segmentsink.New(objects, segmentsink.Options{})
-	require.NoError(t, err)
-	cat := &countingCatalog{inner: catalog.NewMemory()}
-	store := &countingTestPartitionLogStore{
-		catalog: cat,
-		sink:    sinkFactory,
-		source:  &internalTestSegmentStore{objects: objects},
-	}
-	log, err := partitionlog.Open(partitionlog.Options{Store: store})
-	require.NoError(t, err)
-	return log, cat
-}
-
-type countingCatalog struct {
-	inner              *catalog.MemoryCatalog
-	loadPartitionCalls atomic.Int64
-}
-
-func (c *countingCatalog) LoadPartition(ctx context.Context, partition uint32) (pmeta.PartitionHead, error) {
-	c.loadPartitionCalls.Add(1)
-	return c.inner.LoadPartition(ctx, partition)
-}
-
-func (c *countingCatalog) FindSegment(ctx context.Context, partition uint32, lsn uint64) (pmeta.SegmentRef, bool, error) {
-	return c.inner.FindSegment(ctx, partition, lsn)
-}
-
-func (c *countingCatalog) ListSegments(ctx context.Context, req catalog.ListSegmentsRequest) (pmeta.SegmentPage, error) {
-	return c.inner.ListSegments(ctx, req)
-}
-
-func (c *countingCatalog) OpenWriter(ctx context.Context, partition uint32, writerID [16]byte) (catalog.WriterSession, error) {
-	return c.inner.OpenWriter(ctx, partition, writerID)
-}
-
-func (c *countingCatalog) InitializePartition(ctx context.Context, partition uint32, nextLSN uint64) (pmeta.PartitionHead, bool, error) {
-	return c.inner.InitializePartition(ctx, partition, nextLSN)
-}
-
-type countingTestPartitionLogStore struct {
-	catalog *countingCatalog
-	sink    *segmentsink.Factory
-	source  *internalTestSegmentStore
-}
-
-func (s *countingTestPartitionLogStore) WriterManager() catalog.WriterManager { return s.catalog }
-func (s *countingTestPartitionLogStore) ReaderCatalog() catalog.Reader        { return s.catalog }
-func (s *countingTestPartitionLogStore) SinkFactory() plwriter.SinkFactory    { return s.sink }
-func (s *countingTestPartitionLogStore) SegmentStore() partitionlog.SegmentStore {
-	return s.source
 }
 
 type internalNoopWalIO struct{}
@@ -296,36 +256,3 @@ type internalNoopWalIO struct{}
 func (n *internalNoopWalIO) Write(*v1.WALRecord) error { return nil }
 
 func (n *internalNoopWalIO) WriteBatch([]*v1.WALRecord) error { return nil }
-
-type internalTestPartitionLogStore struct {
-	catalog *catalog.MemoryCatalog
-	sink    *segmentsink.Factory
-	source  *internalTestSegmentStore
-}
-
-func (s *internalTestPartitionLogStore) WriterManager() catalog.WriterManager { return s.catalog }
-func (s *internalTestPartitionLogStore) ReaderCatalog() catalog.Reader        { return s.catalog }
-func (s *internalTestPartitionLogStore) SinkFactory() plwriter.SinkFactory    { return s.sink }
-func (s *internalTestPartitionLogStore) SegmentStore() partitionlog.SegmentStore {
-	return s.source
-}
-
-type internalTestSegmentStore struct {
-	objects *multipart.MemoryStore
-}
-
-func (s *internalTestSegmentStore) ReadAt(ctx context.Context, uri string, off uint64, n uint64) ([]byte, error) {
-	body, _, err := s.objects.Read(ctx, uri)
-	if err != nil {
-		return nil, err
-	}
-	if off > uint64(len(body)) {
-		return nil, fmt.Errorf("offset=%d beyond object size=%d", off, len(body))
-	}
-	if n > uint64(len(body))-off {
-		return nil, fmt.Errorf("range offset=%d length=%d beyond object size=%d", off, n, len(body))
-	}
-	start := int(off)
-	end := start + int(n)
-	return append([]byte(nil), body[start:end]...), nil
-}
