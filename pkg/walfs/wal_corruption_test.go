@@ -413,8 +413,8 @@ func TestCorruption_MiddleSegment_StopsReading(t *testing.T) {
 		recovered++
 	}
 
-	// Verify behavior:
-	// We exhibits is the fail-fast behavior: for Raft/consensus, log continuity is required.
+	// Verify behavior: recovery stops at the first corrupt record rather than
+	// skipping past it, since log continuity is required.
 
 	assert.Greater(t, recovered, 0, "should recover records before corruption")
 

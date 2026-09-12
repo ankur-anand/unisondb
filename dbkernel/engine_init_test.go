@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/pkg/kvdrivers"
@@ -18,7 +17,7 @@ import (
 
 func TestStorageEngineReopensAfterInitializationFailure(t *testing.T) {
 	for _, backend := range []DBEngine{BoltDBEngine, LMDBEngine} {
-		for _, failure := range []string{"arena size", "unsupported engine", "WAL open", "B-tree open", "engine mode", "WAL recovery"} {
+		for _, failure := range []string{"arena size", "unsupported engine", "WAL open", "B-tree open", "WAL recovery"} {
 			t.Run(string(backend)+"/"+failure, func(t *testing.T) {
 				dir, namespace := t.TempDir(), "initialization-failure"
 				conf := NewDefaultEngineConfig()
@@ -45,23 +44,6 @@ func TestStorageEngineReopensAfterInitializationFailure(t *testing.T) {
 						require.NoError(t, os.WriteFile(dbPath, []byte("obstruction"), 0644))
 					}
 					repair = func() { require.NoError(t, os.Remove(dbPath)) }
-				case "engine mode":
-					engine, err := NewStorageEngine(dir, namespace, conf)
-					require.NoError(t, err)
-					require.NoError(t, engine.dataStore.StoreMetadata(internal.SysKeyEngineMode, []byte{internal.EngineModeRaft}))
-					require.NoError(t, engine.Close(context.Background()))
-					repair = func() {
-						var store internal.BTreeStore
-						var err error
-						if backend == BoltDBEngine {
-							store, err = kvdrivers.NewBoltdb(dbPath, conf.BtreeConfig)
-						} else {
-							store, err = kvdrivers.NewLmdb(dbPath, conf.BtreeConfig)
-						}
-						require.NoError(t, err)
-						require.NoError(t, store.StoreMetadata(internal.SysKeyEngineMode, []byte{internal.EngineModeStandalone}))
-						require.NoError(t, store.Close())
-					}
 				case "WAL recovery":
 					w, err := wal.NewWalIO(walDir, namespace, &conf.WalConfig)
 					require.NoError(t, err)
@@ -85,9 +67,6 @@ func TestStorageEngineReopensAfterInitializationFailure(t *testing.T) {
 					entries, err := os.ReadDir(dir)
 					require.NoError(t, err)
 					require.Empty(t, entries, "invalid configuration must not create storage")
-				}
-				if failure == "engine mode" {
-					require.ErrorIs(t, err, ErrEngineModeMismatch)
 				}
 				if failure == "WAL recovery" {
 					require.ErrorIs(t, err, kvdrivers.ErrInvalidArguments)

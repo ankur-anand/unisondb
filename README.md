@@ -18,7 +18,7 @@ It is a **reactive**, [**log-native**](https://www.unisondb.io/docs/architecture
 
 ## Replication Model
 
-Writes are committed by a Raft quorum on the write servers (if enabled); read-only edge replicas and relayers can consume WAL through either a live **gRPC** stream or **blob-backed replication** using object storage.
+Writes are committed on the write server; read-only edge replicas and relayers can consume WAL through either a live **gRPC** stream or **blob-backed replication** using object storage.
 
 Blob-backed replication changes the fan-out model:
 
@@ -29,7 +29,7 @@ Blob-backed replication changes the fan-out model:
 See [`cmd/examples/blobstore-minio`](./cmd/examples/blobstore-minio) for a local MinIO example using the same S3-compatible provider path.
 
 ## Key Features
-- **High Availability Writes**: Raft consensus on write servers (quorum acks); relayer/replica use in-sync replica (ISR) replication
+- **Streaming Fan-Out**: relayer/replica use in-sync replica (ISR) replication
 - **Streaming Replication**: WAL replication over gRPC or object-store backed replication
 - **Blob Fan-Out**: Publish WAL once into object storage and let N readers poll directly from S3/MinIO/GCS/Azure-backed replication stores
 - **Multi-Modal Storage**: Key-Value, Wide-Column, and Large Objects (LOB)

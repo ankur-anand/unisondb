@@ -185,10 +185,6 @@ func (ms *Server) InitTelemetry(ctx context.Context) error {
 }
 
 func (ms *Server) SetupStorageConfig(ctx context.Context) error {
-	if ms.cfg.RaftConfig.Enabled && (ms.mode == modeReplica || ms.mode == modeRelay) {
-		return fmt.Errorf("raft: cannot enable raft in %s mode", ms.mode)
-	}
-
 	storeConfig := dbkernel.NewDefaultEngineConfig()
 
 	if err := applyWalConfig(storeConfig, ms.cfg.Storage); err != nil {
@@ -376,11 +372,6 @@ func (ms *Server) SetupStorage(ctx context.Context) error {
 
 		if ms.mode == modeReplica || ms.mode == modeRelay {
 			engineConfig.ReadOnly = true
-		}
-
-		// Enable Raft mode WAL options when Raft is enabled in config
-		if ms.cfg.RaftConfig.Enabled {
-			engineConfig.WalConfig.RaftMode = true
 		}
 
 		if ms.notifiers != nil {

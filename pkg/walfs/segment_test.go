@@ -21,7 +21,7 @@ import (
 
 const (
 	testMarkerStandalone uint32 = 0x01
-	testMarkerRaft       uint32 = 0x02
+	testMarkerAlt        uint32 = 0x02
 )
 
 var errTestMarkerMismatch = errors.New("segment marker mismatch")
@@ -2481,22 +2481,22 @@ func TestSegmentMarkerMismatch_StandaloneMarker(t *testing.T) {
 		dir,
 		".wal",
 		1,
-		WithSegmentCustomMarker(testMarkerRaft),
-		WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerRaft)),
+		WithSegmentCustomMarker(testMarkerAlt),
+		WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerAlt)),
 	)
 	require.Error(t, err, "opening with different mode should fail")
 	require.ErrorIs(t, err, errTestMarkerMismatch)
 }
 
-func TestSegmentMarkerMismatch_RaftMarker(t *testing.T) {
+func TestSegmentMarkerMismatch_AltMarker(t *testing.T) {
 	dir := t.TempDir()
 
 	seg, err := OpenSegmentFile(
 		dir,
 		".wal",
 		1,
-		WithSegmentCustomMarker(testMarkerRaft),
-		WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerRaft)),
+		WithSegmentCustomMarker(testMarkerAlt),
+		WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerAlt)),
 	)
 	require.NoError(t, err, "creating segment should not error")
 
@@ -2531,26 +2531,26 @@ func TestSegmentMarkerAcceptsFreshSegment(t *testing.T) {
 		require.NoError(t, err, "creating segment should not error")
 
 		storedMode := binary.LittleEndian.Uint32(seg.mmapData[52:56])
-		assert.Equal(t, testMarkerStandalone, storedMode, "mode should be standalone")
+		assert.Equal(t, testMarkerStandalone, storedMode, "marker should be the standalone marker")
 
 		err = seg.Close()
 		require.NoError(t, err)
 	})
 
-	t.Run("fresh_segment_accepts_raft_mode", func(t *testing.T) {
+	t.Run("fresh_segment_accepts_alt_marker", func(t *testing.T) {
 		dir := t.TempDir()
 
 		seg, err := OpenSegmentFile(
 			dir,
 			".wal",
 			1,
-			WithSegmentCustomMarker(testMarkerRaft),
-			WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerRaft)),
+			WithSegmentCustomMarker(testMarkerAlt),
+			WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerAlt)),
 		)
 		require.NoError(t, err, "creating segment should not error")
 
 		storedMode := binary.LittleEndian.Uint32(seg.mmapData[52:56])
-		assert.Equal(t, testMarkerRaft, storedMode, "mode should be raft")
+		assert.Equal(t, testMarkerAlt, storedMode, "marker should be the alternate marker")
 
 		err = seg.Close()
 		require.NoError(t, err)
@@ -2584,15 +2584,15 @@ func TestSegmentMarkerReopensWithSameMode(t *testing.T) {
 		require.NoError(t, err)
 	})
 
-	t.Run("raft_reopens_raft", func(t *testing.T) {
+	t.Run("alt_reopens_alt", func(t *testing.T) {
 		dir := t.TempDir()
 
 		seg, err := OpenSegmentFile(
 			dir,
 			".wal",
 			1,
-			WithSegmentCustomMarker(testMarkerRaft),
-			WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerRaft)),
+			WithSegmentCustomMarker(testMarkerAlt),
+			WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerAlt)),
 		)
 		require.NoError(t, err)
 		err = seg.Close()
@@ -2602,8 +2602,8 @@ func TestSegmentMarkerReopensWithSameMode(t *testing.T) {
 			dir,
 			".wal",
 			1,
-			WithSegmentCustomMarker(testMarkerRaft),
-			WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerRaft)),
+			WithSegmentCustomMarker(testMarkerAlt),
+			WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerAlt)),
 		)
 		require.NoError(t, err, "reopening with same mode should succeed")
 		err = seg.Close()
@@ -2618,8 +2618,8 @@ func TestSegmentMarkerNoMarkerConfiguredAllowsAnyExisting(t *testing.T) {
 		dir,
 		".wal",
 		1,
-		WithSegmentCustomMarker(testMarkerRaft),
-		WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerRaft)),
+		WithSegmentCustomMarker(testMarkerAlt),
+		WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerAlt)),
 	)
 	require.NoError(t, err)
 	err = seg.Close()
@@ -2647,8 +2647,8 @@ func TestSegmentMarkerZeroStoredAllowsAnyConfig(t *testing.T) {
 		dir,
 		".wal",
 		1,
-		WithSegmentCustomMarker(testMarkerRaft),
-		WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerRaft)),
+		WithSegmentCustomMarker(testMarkerAlt),
+		WithSegmentCustomMarkerValidator(testMarkerValidator(testMarkerAlt)),
 	)
 	require.NoError(t, err, "opening with mode when stored is 0 should succeed")
 	err = seg.Close()

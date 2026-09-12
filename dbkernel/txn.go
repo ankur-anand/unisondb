@@ -53,7 +53,7 @@ type Txn struct {
 	txnEntryType         logrecord.LogEntryType
 }
 
-// Transaction exposes the common operations supported by both local and Raft-backed transactions.
+// Transaction exposes the operations supported by local transactions.
 type Transaction interface {
 	TxnID() []byte
 	AppendKVTxn(key []byte, value []byte) error
@@ -63,12 +63,7 @@ type Transaction interface {
 	ChunkedValueChecksum() uint32
 }
 
-// NewTransaction returns a transaction implementation based on the current engine mode.
-// In Raft mode, it returns a Raft-backed transaction; otherwise it returns a local transaction.
 func (e *Engine) NewTransaction(txnType logrecord.LogOperationType, valueType logrecord.LogEntryType) (Transaction, error) {
-	if e.IsRaftMode() {
-		return e.NewRaftTxn(txnType, valueType)
-	}
 	return e.NewTxn(txnType, valueType)
 }
 
@@ -79,8 +74,6 @@ func (e *Engine) validateTxnStart(txnType logrecord.LogOperationType, valueType 
 	switch {
 	case e.readOnly:
 		return ErrEngineReadOnly
-	case e.raftState.raftMode:
-		return ErrNotSupportedInRaftMode
 	case txnType == logrecord.LogOperationTypeNoOperation:
 		return ErrUnsupportedTxnType
 	case txnType == logrecord.LogOperationTypeDelete && valueType == logrecord.LogEntryTypeChunked:
@@ -90,7 +83,6 @@ func (e *Engine) validateTxnStart(txnType logrecord.LogOperationType, valueType 
 }
 
 // NewTxn returns a new initialized batch Txn.
-// Transactions are not allowed in RaftMode.
 func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.LogEntryType) (*Txn, error) {
 	if err := e.validateTxnStart(txnType, valueType); err != nil {
 		return nil, err

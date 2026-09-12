@@ -13,7 +13,6 @@ import (
 	"github.com/ankur-anand/unisondb/dbkernel"
 	udbinternal "github.com/ankur-anand/unisondb/internal"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
-	"github.com/ankur-anand/unisondb/pkg/raftcluster"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -107,13 +106,6 @@ func (b *BlobStoreStreamerService) Run(ctx context.Context) error {
 		return nil
 	}
 
-	if b.deps.Config.RaftConfig.Enabled {
-		if b.deps.RaftService == nil {
-			return errors.New("blobstore streamer: raft service unavailable")
-		}
-		return b.runWithRaft(ctx)
-	}
-
 	return b.runStandalone(ctx)
 }
 
@@ -130,95 +122,6 @@ func (b *BlobStoreStreamerService) runStandalone(ctx context.Context) error {
 		})
 	}
 	return g.Wait()
-}
-
-func (b *BlobStoreStreamerService) runWithRaft(ctx context.Context) error {
-	g, ctx := errgroup.WithContext(ctx)
-	for _, namespace := range b.sortedNamespaces() {
-		namespace := namespace
-		cluster := b.deps.RaftService.GetCluster(namespace)
-		if cluster == nil {
-			return fmt.Errorf("blobstore streamer: raft cluster missing for namespace %q", namespace)
-		}
-
-		g.Go(func() error {
-			return b.watchLeadership(ctx, namespace, cluster)
-		})
-	}
-	return g.Wait()
-}
-
-// nolint: gocognit
-func (b *BlobStoreStreamerService) watchLeadership(ctx context.Context, namespace string, cluster *raftcluster.Cluster) error {
-	var current *blobStoreStreamerTerm
-	leaderCh := cluster.LeaderCh()
-
-	stopCurrent := func() error {
-		if current == nil {
-			return nil
-		}
-
-		current.cancel()
-		closeErr := current.streamer.Close()
-		doneErr := <-current.done
-		current = nil
-
-		if closeErr != nil {
-			return closeErr
-		}
-		if isBenignBlobStoreStreamerError(doneErr) {
-			return nil
-		}
-		return doneErr
-	}
-
-	if cluster.IsLeader() {
-		term, err := b.startTerm(ctx, namespace)
-		if err != nil {
-			return err
-		}
-		current = term
-	}
-
-	for {
-		var doneCh <-chan error
-		if current != nil {
-			doneCh = current.done
-		}
-
-		select {
-		case isLeader, ok := <-leaderCh:
-			if !ok {
-				return stopCurrent()
-			}
-
-			if err := stopCurrent(); err != nil {
-				return fmt.Errorf("blobstore streamer: stop term for %q: %w", namespace, err)
-			}
-			if !isLeader {
-				continue
-			}
-
-			term, err := b.startTerm(ctx, namespace)
-			if err != nil {
-				return err
-			}
-			current = term
-
-		case err := <-doneCh:
-			current = nil
-			if isBenignBlobStoreStreamerError(err) {
-				continue
-			}
-			return fmt.Errorf("blobstore streamer: term failed for %q: %w", namespace, err)
-
-		case <-ctx.Done():
-			if err := stopCurrent(); err != nil {
-				return err
-			}
-			return ctx.Err()
-		}
-	}
 }
 
 func (b *BlobStoreStreamerService) startTerm(ctx context.Context, namespace string) (*blobStoreStreamerTerm, error) {

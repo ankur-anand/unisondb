@@ -201,9 +201,8 @@ func (e *Engine) BackupBtree(backupPath string) (int64, error) {
 	return written, nil
 }
 
-// OpsReceivedCount returns the last appended WAL LSN in standalone mode,
-// including transaction markers and uncommitted prepares. In Raft mode it
-// reports the applied-operation counter.
+// OpsReceivedCount returns the last appended WAL LSN, including transaction
+// markers and uncommitted prepares.
 func (e *Engine) OpsReceivedCount() uint64 {
 	return e.writeSeenCounter.Load()
 }
@@ -698,18 +697,12 @@ type Reader = wal.Reader
 
 // NewReader return a reader that reads from the beginning, until EOF is encountered.
 // It returns io.EOF when it reaches end of file.
-// In Raft mode, reads from the WAL with RaftWALDecoder.
 func (e *Engine) NewReader() (*Reader, error) {
-	if e.IsRaftMode() {
-		opts := []wal.ReaderOption{wal.WithDecoder(wal.NewRaftWALDecoder(nil))}
-		return e.walIO.NewReader(opts...)
-	}
 	return e.walIO.NewReader()
 }
 
 // NewReaderWithStart return a reader that reads from provided offset, until EOF is encountered.
 // It returns io.EOF when it reaches end of file.
-// In Raft mode, reads from the WAL with RaftWALDecoder.
 func (e *Engine) NewReaderWithStart(startPos *Offset) (r *Reader, err error) {
 	// protect against very bad client
 	defer func() {
@@ -728,11 +721,6 @@ func (e *Engine) NewReaderWithStart(startPos *Offset) (r *Reader, err error) {
 		return e.NewReader()
 	}
 
-	if e.IsRaftMode() {
-		opts := []wal.ReaderOption{wal.WithDecoder(wal.NewRaftWALDecoder(nil))}
-		return e.walIO.NewReaderWithStart(startPos, opts...)
-	}
-
 	curOffset := e.currentOffset.Load()
 	if curOffset == nil && startPos != nil {
 		return nil, ErrInvalidOffset
@@ -749,13 +737,8 @@ func (e *Engine) NewReaderWithStart(startPos *Offset) (r *Reader, err error) {
 // and supports tail-following behavior.
 // It returns ErrNoNewData when no new entries are available *yet*,
 // instead of io.EOF.
-// In Raft mode, reads from the WAL with RaftWALDecoder.
 func (e *Engine) NewReaderWithTail(startPos *Offset) (*Reader, error) {
 	opts := []wal.ReaderOption{wal.WithActiveTail(true)}
-	if e.IsRaftMode() {
-		opts = append(opts, wal.WithDecoder(wal.NewRaftWALDecoder(nil)))
-	}
-
 	if startPos == nil {
 		return e.walIO.NewReader(opts...)
 	}
@@ -765,7 +748,6 @@ func (e *Engine) NewReaderWithTail(startPos *Offset) (*Reader, error) {
 // NewReaderFromLSN creates a WAL reader starting at the given LSN.
 // It finds the segment containing the LSN and positions the reader appropriately.
 // If tail is true, it supports tail-following behavior (returns ErrNoNewData instead of EOF).
-// In Raft mode, reads from the WAL with RaftWALDecoder.
 func (e *Engine) NewReaderFromLSN(startLSN uint64, tail bool) (*Reader, error) {
 	if startLSN == 0 {
 		if tail {
@@ -774,7 +756,7 @@ func (e *Engine) NewReaderFromLSN(startLSN uint64, tail bool) (*Reader, error) {
 		return e.NewReader()
 	}
 
-	walog := e.WAL()
+	walog := e.walIO.WAL()
 
 	pos, err := walog.PositionForIndexWithBounds(startLSN)
 	if err != nil {

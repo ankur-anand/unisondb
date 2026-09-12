@@ -1,11 +1,8 @@
 # UnisonDB Object-Store Replication + MinIO Example
 
-This folder has two live MinIO demos for object-store backed WAL replication:
+This folder has a live MinIO demo for object-store backed WAL replication: 1 producer + 1 consumer.
 
-- standalone: 1 producer + 1 consumer
-- raft: 3 producer nodes + 1 consumer
-
-Both demos use the namespaces `orders` and `inventory`.
+The demo uses the namespaces `orders` and `inventory`.
 Each namespace is written as its own stream under the configured object-store prefix. Producers publish WAL records as immutable segment files plus catalog metadata. Consumers read the finalized history directly from MinIO and apply it to their local read-only engines.
 
 It uses the MinIO defaults from your local command:
@@ -24,7 +21,7 @@ docker run --rm -p 9000:9000 -p 9001:9001 \
   minio/minio server /data --console-address ":9001"
 ```
 
-Then run the standalone demo:
+Then run the demo:
 
 ```bash
 ./cmd/examples/blobstore-minio/run-live.sh
@@ -42,7 +39,7 @@ By default that script writes into `orders`. To target `inventory`:
 NAMESPACE=inventory ./cmd/examples/blobstore-minio/write-10-kv.sh
 ```
 
-What the standalone script does:
+What the script does:
 
 1. Builds `./cmd/unisondb`
 2. Ensures the MinIO bucket exists and clears this example's prefix
@@ -71,47 +68,6 @@ refresh_interval = "250ms"
 
 `base_prefix` on the producer and `prefix` on the consumer must point to the same object-store root. There is no local blob cache directory in this path; the consumer reads catalog and segment data from MinIO.
 
-## Raft Demo
-
-Run the 3-node Raft producer demo:
-
-```bash
-./cmd/examples/blobstore-minio/run-live-raft.sh
-```
-
-In another terminal, write 10 sample keys through the current Raft leader:
-
-```bash
-./cmd/examples/blobstore-minio/write-10-kv-raft.sh
-```
-
-By default that script writes into `orders`. To target `inventory`:
-
-```bash
-NAMESPACE=inventory ./cmd/examples/blobstore-minio/write-10-kv-raft.sh
-```
-
-This demo uses Serf membership for Raft peer discovery:
-
-- `node0` bootstraps the cluster
-- `node1` and `node2` join through Serf on `127.0.0.1:17001`
-- the Raft service adds peers dynamically per namespace after membership converges
-
-What the Raft script does:
-
-1. Builds `./cmd/unisondb`
-2. Ensures the MinIO bucket exists and clears the Raft example prefix
-3. Starts three producer nodes with Serf-enabled Raft config
-4. Starts one consumer with blobstore relaying enabled
-5. Waits until both namespaces see all three Raft peers
-6. Discovers the current leader for each namespace and writes initial values
-7. Verifies both values on the consumer
-8. Stops the current `orders` leader to force failover
-9. Discovers the new `orders` leader, writes again, and verifies replication still works
-10. Keeps the remaining processes running until you press `Ctrl+C`
-
-Because Raft leadership is per namespace, the failover check is pinned to `orders`. `inventory` is still verified during initial replication.
-
 Useful environment overrides:
 
 - `UNISONDB_BIN`: path to an existing `unisondb` binary
@@ -120,4 +76,3 @@ Useful environment overrides:
 - `AWS_REGION`: defaults to `us-east-1`
 - `EXIT_AFTER_VERIFY=1`: exit right after the initial replication check instead of staying attached
 - `PRODUCER_URL`, `CONSUMER_URL`, `NAMESPACE`, `COUNT`, `KEY_PREFIX`, `VALUE_PREFIX`: overrides for `write-10-kv.sh`
-- `PRODUCER_URLS_CSV`, `CONSUMER_URL`, `NAMESPACE`, `COUNT`, `KEY_PREFIX`, `VALUE_PREFIX`: overrides for `write-10-kv-raft.sh`

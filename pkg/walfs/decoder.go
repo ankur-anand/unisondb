@@ -1,6 +1,7 @@
 package walfs
 
-// - Wrapped: WAL bytes contain a wrapper (e.g., Raft log) that must be unwrapped.
+// RecordDecoder transforms raw WAL bytes into the record payload, for callers
+// that store records inside an outer envelope and need it stripped on read.
 type RecordDecoder interface {
 	// Decode transforms raw WAL bytes into the actual record payload.
 	// The returned bytes may reference the input (zero-copy) or be newly allocated.

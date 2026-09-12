@@ -9,14 +9,6 @@ import (
 var (
 	SysKeyWalCheckPoint = []byte("sys.kv.unisondb.key.wal.checkpoint")
 	SysKeyBloomFilter   = []byte("sys.kv.unisondb.key.bloom-filter")
-	SysKeyEngineMode    = []byte("sys.kv.unisondb.key.engine.mode")
-)
-
-const (
-	// EngineModeStandalone indicates the engine is running in standalone (non-Raft) mode.
-	EngineModeStandalone byte = 0x01
-	// EngineModeRaft indicates the engine is running in Raft mode.
-	EngineModeRaft byte = 0x02
 )
 
 // Metadata represents a checkpoint in the Write-Ahead Log (WAL).
@@ -28,14 +20,9 @@ type Metadata struct {
 	RecordProcessed uint64
 	// Position of the last written chunk in WAL
 	Pos *wal.Offset
-	// Raft mode fields (only used when engine is in raft mode)
-	// Last raft log index flushed to B-tree
-	RaftIndex uint64
-	// Last raft log term flushed to B-tree
-	RaftTerm uint64
 }
 
-// SaveMetadata saves the WAL checkpoint to BTreeStore (standalone mode).
+// SaveMetadata saves the WAL checkpoint to BTreeStore.
 func SaveMetadata(db BTreeStore, pos *wal.Offset, index uint64) error {
 	metaData := Metadata{
 		RecordProcessed: index,
@@ -46,57 +33,32 @@ func SaveMetadata(db BTreeStore, pos *wal.Offset, index uint64) error {
 	return db.StoreMetadata(SysKeyWalCheckPoint, value)
 }
 
-// SaveMetadataWithRaft saves the WAL checkpoint to BTreeStore with raft position (raft mode).
-func SaveMetadataWithRaft(db BTreeStore, pos *wal.Offset, index uint64, raftIndex, raftTerm uint64) error {
-	metaData := Metadata{
-		RecordProcessed: index,
-		Pos:             pos,
-		RaftIndex:       raftIndex,
-		RaftTerm:        raftTerm,
-	}
-	value := metaData.MarshalBinary()
-
-	return db.StoreMetadata(SysKeyWalCheckPoint, value)
-}
-
 const posEncodedSize = 12
 
-// Format: [RecordProcessed:8][Pos:12][RaftIndex:8][RaftTerm:8] = 36 bytes.
-func (m *Metadata) MarshalBinary() []byte {
-	encodedPos := make([]byte, posEncodedSize)
-	if m.Pos != nil {
-		copy(encodedPos, m.Pos.Encode())
-	}
+// encodedMetadataSize is the on-disk checkpoint size: [RecordProcessed:8][Pos:12].
+const encodedMetadataSize = 8 + posEncodedSize
 
-	result := make([]byte, 8+posEncodedSize+16)
+// Format: [RecordProcessed:8][Pos:12] = 20 bytes.
+func (m *Metadata) MarshalBinary() []byte {
+	result := make([]byte, encodedMetadataSize)
 	binary.LittleEndian.PutUint64(result[0:8], m.RecordProcessed)
-	copy(result[8:20], encodedPos)
-	binary.LittleEndian.PutUint64(result[20:28], m.RaftIndex)
-	binary.LittleEndian.PutUint64(result[28:36], m.RaftTerm)
+	if m.Pos != nil {
+		copy(result[8:20], m.Pos.Encode())
+	}
 
 	return result
 }
 
-// Format: [RecordProcessed:8][Pos:12][RaftIndex:8][RaftTerm:8] = 36 bytes.
+// Format: [RecordProcessed:8][Pos:12] = 20 bytes.
 func UnmarshalMetadata(data []byte) Metadata {
-	// min size check: 8 (RecordProcessed) + 12 (Pos) = 20 bytes
-	if len(data) < 20 {
+	if len(data) < encodedMetadataSize {
 		return Metadata{}
 	}
 	index := binary.LittleEndian.Uint64(data[:8])
 	pos := wal.DecodeOffset(data[8:20])
 
-	var raftIndex, raftTerm uint64
-	// Check for raft fields (36 bytes total: 8 + 12 + 8 + 8)
-	if len(data) >= 36 {
-		raftIndex = binary.LittleEndian.Uint64(data[20:28])
-		raftTerm = binary.LittleEndian.Uint64(data[28:36])
-	}
-
 	return Metadata{
 		RecordProcessed: index,
 		Pos:             pos,
-		RaftIndex:       raftIndex,
-		RaftTerm:        raftTerm,
 	}
 }

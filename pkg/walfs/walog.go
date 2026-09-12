@@ -142,7 +142,7 @@ func WithClearIndexOnFlush() WALogOptions {
 // If the reader's current position is at or beyond the committed position,
 // Next() returns ErrNoNewData without advancing.
 // Use Commit() to advance the committed position.
-// This is used in Raft mode where writes are not visible until committed.
+// Use this when writes must not be visible to readers until they are committed.
 func WithReaderCommitCheck() WALogOptions {
 	return func(sm *WALog) {
 		sm.readerCommitCheck = true
@@ -191,10 +191,10 @@ type WALog struct {
 
 	// committedPos is the logical boundary for readers when readerCommitCheck is enabled.
 	// Readers cannot advance beyond this position.
-	// In Raft mode, FSM.Apply() updates this via Commit() after Raft consensus.
+	// The writer advances it via Commit() once an entry is durable/committed.
 	committedPos atomic.Pointer[RecordPosition]
 	// readerCommitCheck when true, readers check committed position before advancing.
-	// Set to true for Raft mode where writes are not visible until committed.
+	// Set to true when writes must not be visible to readers until committed.
 	readerCommitCheck bool
 
 	segmentMaxAge       time.Duration
@@ -398,7 +398,7 @@ func (wl *WALog) Sync() error {
 
 // Commit advances the committed position to the given position.
 // When readerCommitCheck is enabled, readers cannot advance beyond this position.
-// In Raft mode, call this after Raft consensus confirms the log entry.
+// Call this once the log entry is confirmed committed.
 // This method is safe for concurrent use.
 func (wl *WALog) Commit(pos RecordPosition) {
 	wl.committedPos.Store(&pos)
@@ -1097,7 +1097,7 @@ func (wl *WALog) CleanupStalePendingSegments() {
 
 // Selection only queues candidates. Perform deletion under the WAL lock, after
 // checking the predicate and references, so no deferred deletion can later remove
-// a segment that Raft has unsealed and reused as a truncation target.
+// a segment that has since been unsealed and reused as a truncation target.
 func (wl *WALog) cleanPendingSegments(canDeleteFn func(SegmentID) bool) {
 	wl.deletionMu.Lock()
 	defer wl.deletionMu.Unlock()

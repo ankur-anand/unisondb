@@ -40,7 +40,6 @@ var ErrSegmentModeMismatch = errors.New("wal segment mode mismatch")
 
 const (
 	segmentModeStandalone uint32 = 0x01
-	segmentModeRaft       uint32 = 0x02
 )
 
 // Offset is a type alias to underlying wal implementation.
@@ -73,7 +72,6 @@ type WalIO struct {
 	namespace        string
 	taggedScope      umetrics.Scope
 	entriesInSegment atomic.Int64
-	recordDecoder    walfs.RecordDecoder
 }
 
 // NewWalIO initializes and returns a new instance of WalIO.
@@ -86,9 +84,6 @@ func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
 	w := &WalIO{
 		namespace:   namespace,
 		taggedScope: taggedScope,
-	}
-	if config.RaftMode {
-		w.recordDecoder = NewRaftWALDecoder(nil)
 	}
 
 	callbackOnRotate := func() {
@@ -105,26 +100,14 @@ func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
 		walfs.WithAutoCleanupPolicy(config.MaxAge, config.MinSegment, config.MaxSegment, config.AutoCleanup),
 	}
 
-	// Set mode marker based on Raft configuration.
 	modeMarker := segmentModeStandalone
-	if config.RaftMode {
-		modeMarker = segmentModeRaft
-	}
 	validator := func(storedMode uint32) error {
 		if storedMode != 0 && storedMode != modeMarker {
-			return fmt.Errorf("%w: segment=%d, config=%d", ErrSegmentModeMismatch, storedMode, modeMarker)
+			return fmt.Errorf("%w: segment=%d, expected=%d", ErrSegmentModeMismatch, storedMode, modeMarker)
 		}
 		return nil
 	}
 	walOpts = append(walOpts, walfs.WithCustomMarker(modeMarker), walfs.WithCustomMarkerValidator(validator))
-
-	// Raft mode
-	if config.RaftMode {
-		walOpts = append(walOpts,
-			walfs.WithClearIndexOnFlush(),
-			walfs.WithReaderCommitCheck(),
-		)
-	}
 
 	wLog, err := walfs.NewWALog(dirname, ".seg", walOpts...)
 
@@ -135,31 +118,9 @@ func NewWalIO(dirname, namespace string, config *Config) (*WalIO, error) {
 	return w, err
 }
 
-// WrapWAL creates a WalIO wrapper around an existing walfs.WALog.
-// This is used to wrap external WALs (like Raft log store's WAL) for reading.
-func WrapWAL(wal *walfs.WALog, namespace string) *WalIO {
-	taggedScope := umetrics.AutoScope().Tagged(map[string]string{
-		"namespace": namespace,
-	})
-	return &WalIO{
-		appendLog:   wal,
-		namespace:   namespace,
-		taggedScope: taggedScope,
-	}
-}
-
 // WAL returns the underlying walfs.WALog.
 func (w *WalIO) WAL() *walfs.WALog {
 	return w.appendLog
-}
-
-// DecodeRecord decodes a WAL entry to its underlying payload.
-// In Raft mode, WAL entries are encoded Raft logs; otherwise the data is returned as-is.
-func (w *WalIO) DecodeRecord(data []byte) ([]byte, error) {
-	if w.recordDecoder == nil {
-		return data, nil
-	}
-	return w.recordDecoder.Decode(data)
 }
 
 // RunWalCleanup starts background cleanup routines for old WAL segments.
@@ -306,13 +267,6 @@ func WithActiveTail(enabled bool) ReaderOption {
 	}
 }
 
-// WithDecoder sets a decoder that transforms raw WAL bytes before returning.
-func WithDecoder(decoder walfs.RecordDecoder) ReaderOption {
-	return func(r *Reader) {
-		r.decoder = decoder
-	}
-}
-
 // Reader provides a forward-only iterator over WAL records and is not concurrent safe.
 type Reader struct {
 	appendReader   *walfs.Reader
@@ -321,7 +275,6 @@ type Reader struct {
 	taggedScope    umetrics.Scope
 	withActiveTail bool
 	readCount      int
-	decoder        walfs.RecordDecoder
 }
 
 // Next returns the next chunk data and its position in the WAL.
@@ -393,12 +346,7 @@ func (w *WalIO) NewReader(options ...ReaderOption) (*Reader, error) {
 		opt(reader)
 	}
 
-	var walfsOpts []walfs.ReaderOption
-	if reader.decoder != nil {
-		walfsOpts = append(walfsOpts, walfs.WithDecoder(reader.decoder))
-	}
-
-	reader.appendReader = w.appendLog.NewReader(walfsOpts...)
+	reader.appendReader = w.appendLog.NewReader()
 
 	w.taggedScope.Counter(metricsReaderCreatedTotal).Inc(1)
 	return reader, nil
@@ -415,12 +363,7 @@ func (w *WalIO) NewReaderWithStart(offset *Offset, options ...ReaderOption) (*Re
 		opt(reader)
 	}
 
-	var walfsOpts []walfs.ReaderOption
-	if reader.decoder != nil {
-		walfsOpts = append(walfsOpts, walfs.WithDecoder(reader.decoder))
-	}
-
-	underlyingReader, err := w.appendLog.NewReaderWithStart(*offset, walfsOpts...)
+	underlyingReader, err := w.appendLog.NewReaderWithStart(*offset)
 	if err != nil {
 		return nil, err
 	}
@@ -482,14 +425,10 @@ func (w *WalIO) readTransactionRecord(index uint64) (*logrecord.LogRecord, error
 	if err != nil {
 		return nil, fmt.Errorf("%w: read index %d: %w", ErrInvalidTxnChain, index, err)
 	}
-	payload, err := w.DecodeRecord(data)
-	if err != nil {
-		return nil, fmt.Errorf("%w: decode index %d: %w", ErrInvalidTxnChain, index, err)
-	}
-	if len(payload) == 0 {
+	if len(data) == 0 {
 		return nil, fmt.Errorf("%w: empty record at index %d", ErrInvalidTxnChain, index)
 	}
-	record := logrecord.GetRootAsLogRecord(payload, 0)
+	record := logrecord.GetRootAsLogRecord(data, 0)
 	if record.Lsn() != index {
 		return nil, fmt.Errorf("%w: index %d points to LSN %d", ErrInvalidTxnChain, index, record.Lsn())
 	}
