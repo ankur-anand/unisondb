@@ -249,8 +249,8 @@ func TestArenaReplacement_Snapshot_And_Recover(t *testing.T) {
 		//assert.True(t, ok, "getEntryTypeForKey should succeed")
 	}
 
-	// 4000 ops, for keys, > As Batch is not Commited, (1 batch start + (not 1 batch commit.) not included)
-	assert.Equal(t, uint64(4000), engine.OpsReceivedCount())
+	// Uncommitted records still consumed LSNs: Begin + 1000 Prepare + 4000 puts.
+	assert.Equal(t, uint64(5001), engine.OpsReceivedCount())
 
 	value, err = engine.GetKV(batchKey)
 	assert.ErrorIs(t, err, ErrKeyNotFound, "GetKV operation should not succeed")

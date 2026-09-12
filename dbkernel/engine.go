@@ -435,8 +435,10 @@ func (e *Engine) loadMetaValues() error {
 	metadata := internal.UnmarshalMetadata(data)
 	e.startMetadata = metadata
 
-	// dataStore the global counter
-	e.writeSeenCounter.Store(metadata.RecordProcessed)
+	// Standalone LSNs are recovered from the WAL, not the flush statistics.
+	if e.config.WalConfig.RaftMode {
+		e.writeSeenCounter.Store(metadata.RecordProcessed)
+	}
 	e.opsFlushedCounter.Store(metadata.RecordProcessed)
 
 	return nil
@@ -477,7 +479,7 @@ func (e *Engine) recoverWAL() error {
 	e.taggedScope.Counter(mKeyWalRecoveryRecordTotal).Inc(int64(walRecovery.RecoveredCount()))
 	e.taggedScope.Histogram(mKeyWalRecoveryDuration, recoveryHistBucket).RecordDuration(time.Since(startTime))
 
-	e.writeSeenCounter.Add(uint64(walRecovery.RecoveredCount()))
+	e.writeSeenCounter.Store(walRecovery.LastSeenLSN())
 	e.recoveredEntriesCount = walRecovery.RecoveredCount()
 	e.opsFlushedCounter.Add(uint64(walRecovery.RecoveredCount()))
 	var offset *wal.Offset
@@ -568,7 +570,7 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	index := e.writeSeenCounter.Add(1)
+	index := e.writeSeenCounter.Load() + 1
 	hlc := HLCNow()
 
 	record := logcodec.LogRecord{
@@ -587,6 +589,7 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 	if err != nil {
 		return err
 	}
+	e.writeSeenCounter.Store(index)
 
 	// store the entire value as single
 
@@ -650,7 +653,7 @@ func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	index := e.writeSeenCounter.Add(1)
+	index := e.writeSeenCounter.Load() + 1
 	hlc := HLCNow()
 
 	record := logcodec.LogRecord{
@@ -670,6 +673,7 @@ func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [
 	if err != nil {
 		return err
 	}
+	e.writeSeenCounter.Store(index)
 
 	for i, entry := range rowEntries {
 		memValue := getValueStruct(byte(op), internal.EntryTypeRow, entry)

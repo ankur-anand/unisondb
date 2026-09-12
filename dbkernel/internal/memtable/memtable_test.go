@@ -203,7 +203,7 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 
 		count, err := memTable.Flush(t.Context())
 		assert.NoError(t, err, "failed to processBatch")
-		assert.Equal(t, recordCount+2, count, "expected records to be flushed")
+		assert.Equal(t, recordCount+1, count, "Begin and prepares plus one Commit")
 
 		chunks, err := db.GetLOBChunks(blobMetaKey)
 		assert.NoError(t, err, "failed to GetKV")
@@ -287,7 +287,7 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 
 		count, err := memTable.Flush(t.Context())
 		assert.NoError(t, err, "failed to processBatch")
-		assert.Equal(t, recordCount+2, count, "expected records to be flushed")
+		assert.Equal(t, recordCount+1, count, "Begin and prepares plus one Commit")
 
 		chunks, err := db.GetLOBChunks(blobMetaKey)
 		assert.NoError(t, err, "failed to GetKV")

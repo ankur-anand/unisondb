@@ -201,7 +201,9 @@ func (e *Engine) BackupBtree(backupPath string) (int64, error) {
 	return written, nil
 }
 
-// OpsReceivedCount returns the total number of Put and Delete operations received.
+// OpsReceivedCount returns the last appended WAL LSN in standalone mode,
+// including transaction markers and uncommitted prepares. In Raft mode it
+// reports the applied-operation counter.
 func (e *Engine) OpsReceivedCount() uint64 {
 	return e.writeSeenCounter.Load()
 }

@@ -205,6 +205,9 @@ func (table *MemTable) GetRowYValue(rowKey []byte) []y.ValueStruct {
 
 // Flush writes all entries from MemTable to BtreeStore.
 func (table *MemTable) Flush(ctx context.Context) (int, error) {
+	// A failed flush may be retried on the same table. Count reconstructed
+	// records once per attempt, rather than accumulating across retries.
+	table.chunkedFlushed = 0
 	slog.Debug("[memtable]", "message", "Flushing MemTable to BtreeStore",
 		"namespace", table.namespace, "start_offset", table.firstOffset,
 		"end_offset", table.lastOffset)
@@ -306,7 +309,8 @@ func (table *MemTable) processEntry(key []byte, entry y.ValueStruct, txn interna
 			if err != nil {
 				return err
 			}
-			table.chunkedFlushed = table.chunkedFlushed + n + 1
+			// n includes Begin and Prepare; offsetCount already includes Commit.
+			table.chunkedFlushed += n
 			return nil
 		}
 	}
