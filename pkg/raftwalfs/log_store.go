@@ -100,6 +100,9 @@ func (l *LogStore) recoverIndex() error {
 
 // FirstIndex returns the first index written.
 func (l *LogStore) FirstIndex() (uint64, error) {
+	if err := l.wal.RecoveryError(); err != nil {
+		return 0, err
+	}
 	if l.closing.Load() {
 		return 0, ErrClosed
 	}
@@ -108,6 +111,9 @@ func (l *LogStore) FirstIndex() (uint64, error) {
 
 // LastIndex returns the last index written.
 func (l *LogStore) LastIndex() (uint64, error) {
+	if err := l.wal.RecoveryError(); err != nil {
+		return 0, err
+	}
 	if l.closing.Load() {
 		return 0, ErrClosed
 	}
@@ -116,6 +122,9 @@ func (l *LogStore) LastIndex() (uint64, error) {
 
 // GetLog returns the *raft.Log at the given Index.
 func (l *LogStore) GetLog(index uint64, out *raft.Log) error {
+	if err := l.wal.RecoveryError(); err != nil {
+		return err
+	}
 	if l.closing.Load() {
 		return ErrClosed
 	}
@@ -174,6 +183,9 @@ func (l *LogStore) StoreLog(log *raft.Log) error {
 // The logs must be contiguous with each other. They may overwrite existing entries
 // if there's a gap or conflict (leader change scenario).
 func (l *LogStore) StoreLogs(logs []*raft.Log) error {
+	if err := l.wal.RecoveryError(); err != nil {
+		return err
+	}
 	if len(logs) == 0 {
 		return nil
 	}
@@ -200,6 +212,17 @@ func (l *LogStore) StoreLogs(logs []*raft.Log) error {
 		return fmt.Errorf("gap in log append: start %d expected %d", start, last+1)
 	}
 
+	records := make([][]byte, len(logs))
+	logIndexes := make([]uint64, len(logs))
+	for i, log := range logs {
+		enc, err := l.codec.Encode(log)
+		if err != nil {
+			return fmt.Errorf("encode log at index %d: %w", log.Index, err)
+		}
+		records[i] = enc
+		logIndexes[i] = log.Index
+	}
+
 	// start <= last: The incoming batch starts at or before our last index (overlap/conflict)
 	// Mostly leader change.
 	if last > 0 && start <= last {
@@ -212,25 +235,16 @@ func (l *LogStore) StoreLogs(logs []*raft.Log) error {
 		}
 		// Remove old entries from index
 		l.index.DeleteRange(start, last)
-	}
-
-	records := make([][]byte, len(logs))
-	logIndexes := make([]uint64, len(logs))
-	for i, log := range logs {
-		enc, err := l.codec.Encode(log)
-		if err != nil {
-			return fmt.Errorf("encode log at index %d: %w", log.Index, err)
-		}
-		records[i] = enc
-		logIndexes[i] = log.Index
+		_ = l.recoverIndex()
 	}
 
 	_, err := l.wal.WriteBatch(records, logIndexes)
 	if err != nil {
+		_ = l.recoverIndex()
 		return fmt.Errorf("wal write batch: %w", err)
 	}
 
-	if first == 0 {
+	if l.firstIndex.Load() == 0 {
 		l.firstIndex.Store(logs[0].Index)
 	}
 	l.lastIndex.Store(logs[len(logs)-1].Index)
@@ -260,6 +274,9 @@ func (l *LogStore) validateBatch(logs []*raft.Log) error {
 // will not be recalculated. This is acceptable because Raft only performs
 // prefix deletions (compaction) and suffix deletions (truncation), never middle.
 func (l *LogStore) DeleteRange(min, max uint64) error {
+	if err := l.wal.RecoveryError(); err != nil {
+		return err
+	}
 	if max < min {
 		return nil
 	}
@@ -278,17 +295,17 @@ func (l *LogStore) DeleteRange(min, max uint64) error {
 		return nil
 	}
 
-	l.index.DeleteRange(min, max)
-
 	// SUFFIX deletion (log truncation on leader change)
 	if max >= last && min > first {
-		l.lastIndex.Store(min - 1)
 		// Truncate WAL
 		if err := l.wal.Truncate(min - 1); err != nil {
 			return fmt.Errorf("truncate wal: %w", err)
 		}
+		l.lastIndex.Store(min - 1)
 		return nil
 	}
+
+	l.index.DeleteRange(min, max)
 
 	// PREFIX deletion (log compaction after snapshot)
 	if min == first {
