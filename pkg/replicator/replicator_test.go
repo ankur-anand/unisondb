@@ -186,7 +186,7 @@ func TestReplicator_SendFuncBlockedCtxDone(t *testing.T) {
 	close(rep.ctxDone)
 
 	err = rep.replicateFromReader(ctx, recvChan)
-	assert.NoError(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
 	assert.Nil(t, rep.reader, "reader should be nil after close")
 }
 
@@ -200,13 +200,14 @@ func TestReplicator_ReleasesBatchWhenCtxDone(t *testing.T) {
 
 	assert.NoError(t, engine.PutKV([]byte("k"), []byte("v")))
 
-	rep := NewReplicator(engine, 1, time.Second, 0, "pool-check")
-	// force sendFunc to hit ReleaseRecords path
+	rep := NewReplicator(engine, 2, time.Second, 0, "pool-check")
+	// Force cancellation while flushing a partial batch at the tail.
 	close(rep.ctxDone)
 
 	recordsChan := make(chan []*v1.WALRecord)
 	err = rep.replicateFromReader(context.Background(), recordsChan)
-	assert.NoError(t, err)
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Nil(t, rep.reader, "reader should be nil after close")
 
 	select {
 	case <-recordsChan:
