@@ -28,7 +28,7 @@ type BoltDBEmbed struct {
 // initializes the namespace bucket and a system metadata bucket,
 // and returns a BoltDBEmbed wrapper.
 func NewBoltdb(path string, conf Config) (*BoltDBEmbed, error) {
-	db, err := bbolt.Open(path, 0600, nil)
+	db, err := bbolt.Open(path, 0600, &bbolt.Options{NoSync: conf.NoSync})
 	if err != nil {
 		return nil, err
 	}
@@ -582,12 +582,10 @@ func (b *BoltDBEmbed) Restore(reader io.Reader) error {
 		return fmt.Errorf("failed to replace old db with restored db: %w", err)
 	}
 
-	db, err := bbolt.Open(b.path, 0600, nil)
+	db, err := bbolt.Open(b.path, 0600, &bbolt.Options{NoSync: b.conf.NoSync})
 	if err != nil {
 		return fmt.Errorf("failed to open new database file: %w", err)
 	}
-	db.NoSync = b.conf.NoSync
-
 	b.db = db
 	return nil
 }

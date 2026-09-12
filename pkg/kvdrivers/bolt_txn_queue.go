@@ -3,7 +3,6 @@ package kvdrivers
 import (
 	"bytes"
 	"encoding/binary"
-	"log/slog"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -330,13 +329,8 @@ func (bq *BoltTxnQueue) flushBatch() error {
 		return err
 	}
 
-	// Make sure the transaction rolls back in the event of a panic.
-	defer func() {
-		if bq.err != nil {
-			err := txn.Rollback()
-			slog.Error("[kvdrivers]", "message", "Transaction rollback failed", "error", err)
-		}
-	}()
+	// Release the writer on every early return or panic. After Commit this is a no-op.
+	defer func() { _ = txn.Rollback() }()
 
 	bucket := txn.Bucket(bq.namespace)
 	if bucket == nil {
@@ -351,7 +345,6 @@ func (bq *BoltTxnQueue) flushBatch() error {
 	}
 
 	if bq.err != nil {
-		_ = txn.Rollback()
 		return bq.err
 	}
 

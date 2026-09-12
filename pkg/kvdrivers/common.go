@@ -26,6 +26,7 @@ var (
 	ErrRecordCorrupted      = errors.New("record corrupted")
 	ErrUseGetColumnAPI      = errors.New("use get column api")
 	ErrInvalidArguments     = errors.New("invalid arguments")
+	ErrDatabaseClosed       = errors.New("database is closed")
 	ErrTxnAlreadyActive     = errors.New("an active transaction already exists; commit or abort it first")
 	ErrTxnClosed            = errors.New("transaction has already been committed or aborted")
 )
