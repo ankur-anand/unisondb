@@ -652,7 +652,7 @@ func (e *Engine) GetRowColumns(rowKey string, predicate func(columnKey string) b
 }
 
 func (e *Engine) reconstructChunkedValue(record *logrecord.LogRecord) ([]byte, error) {
-	records, err := e.walIO.GetTransactionRecords(wal.DecodeOffset(record.PrevTxnWalIndexBytes()))
+	records, err := e.walIO.GetTransactionRecords(record)
 	if err != nil {
 		return nil, fmt.Errorf("failed to reconstruct batch value: %w", err)
 	}

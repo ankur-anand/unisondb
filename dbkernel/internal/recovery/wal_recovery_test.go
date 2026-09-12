@@ -95,7 +95,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 	var lastOffset *wal.Offset
 	for _, value := range values {
 		if lastOffset != nil {
-			value.PrevTxnWalIndex = lastOffset.Encode()
+			value.PrevTxnIndex = lastLSN
 		}
 
 		encoded := value.FBEncode(1024)
@@ -108,15 +108,15 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 	totalRecordCount += recordCount
 	encoded := logcodec.SerializeKVEntry([]byte(key), nil)
 	lastRecord := logcodec.LogRecord{
-		LSN:             0,
-		HLC:             0,
-		OperationType:   logrecord.LogOperationTypeInsert,
-		EntryType:       logrecord.LogEntryTypeChunked,
-		TxnState:        logrecord.TransactionStateCommit,
-		TxnID:           []byte(key),
-		PrevTxnWalIndex: lastOffset.Encode(),
-		CRC32Checksum:   checksum,
-		Entries:         [][]byte{encoded},
+		LSN:           0,
+		HLC:           0,
+		OperationType: logrecord.LogOperationTypeInsert,
+		EntryType:     logrecord.LogEntryTypeChunked,
+		TxnState:      logrecord.TransactionStateCommit,
+		TxnID:         values[0].TxnID,
+		PrevTxnIndex:  lastLSN,
+		CRC32Checksum: checksum,
+		Entries:       [][]byte{encoded},
 	}
 
 	encoded = lastRecord.FBEncode(1024)
@@ -175,7 +175,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		var lastOff *wal.Offset
 		for _, value := range newVal {
 			if lastOff != nil {
-				value.PrevTxnWalIndex = lastOff.Encode()
+				value.PrevTxnIndex = lastLSN
 			}
 
 			encoded := value.FBEncode(1024)
@@ -214,11 +214,11 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		recordCount = 10
 		logRecords, kvDB := generateNTxnKeyValueFBRecord(uint64(recordCount))
 
-		txID := gofakeit.UUID()
+		txID := string(logRecords[0].TxnID)
 		var lastOffset *wal.Offset
 		for _, value := range logRecords {
 			if lastOffset != nil {
-				value.PrevTxnWalIndex = lastOffset.Encode()
+				value.PrevTxnIndex = lastLSN
 			}
 			encoded := value.FBEncode(1024)
 			offset, err := appendRecord(encoded)
@@ -231,15 +231,15 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		}
 
 		lastRecord := logcodec.LogRecord{
-			LSN:             0,
-			HLC:             0,
-			CRC32Checksum:   0,
-			OperationType:   logrecord.LogOperationTypeInsert,
-			TxnState:        logrecord.TransactionStateCommit,
-			EntryType:       logrecord.LogEntryTypeKV,
-			TxnID:           []byte(txID),
-			PrevTxnWalIndex: lastOffset.Encode(),
-			Entries:         nil,
+			LSN:           0,
+			HLC:           0,
+			CRC32Checksum: 0,
+			OperationType: logrecord.LogOperationTypeInsert,
+			TxnState:      logrecord.TransactionStateCommit,
+			EntryType:     logrecord.LogEntryTypeKV,
+			TxnID:         []byte(txID),
+			PrevTxnIndex:  lastLSN,
+			Entries:       nil,
 		}
 
 		encoded := lastRecord.FBEncode(1024)
@@ -282,7 +282,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		var lastOffset *wal.Offset
 		for _, value := range logRecords {
 			if lastOffset != nil {
-				value.PrevTxnWalIndex = lastOffset.Encode()
+				value.PrevTxnIndex = lastLSN
 			}
 			encoded := value.FBEncode(1024)
 			offset, err := appendRecord(encoded)
@@ -373,15 +373,15 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 
 		var lastOffset *wal.Offset
 		startRecord := logcodec.LogRecord{
-			LSN:             0,
-			HLC:             0,
-			CRC32Checksum:   0,
-			OperationType:   logrecord.LogOperationTypeTxnMarker,
-			TxnState:        logrecord.TransactionStateBegin,
-			EntryType:       logrecord.LogEntryTypeKV,
-			TxnID:           []byte(txID),
-			PrevTxnWalIndex: nil,
-			Entries:         nil,
+			LSN:           0,
+			HLC:           0,
+			CRC32Checksum: 0,
+			OperationType: logrecord.LogOperationTypeTxnMarker,
+			TxnState:      logrecord.TransactionStateBegin,
+			EntryType:     logrecord.LogEntryTypeKV,
+			TxnID:         []byte(txID),
+			PrevTxnIndex:  0,
+			Entries:       nil,
 		}
 
 		lastOffset, err = appendRecord(startRecord.FBEncode(1024))
@@ -393,13 +393,14 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 			deleteKeys = append(deleteKeys, key)
 			kvEncoded := logcodec.SerializeKVEntry([]byte(key), nil)
 			record := logcodec.LogRecord{
-				LSN:             uint64(i),
-				HLC:             uint64(i),
-				OperationType:   logrecord.LogOperationTypeDelete,
-				TxnState:        logrecord.TransactionStatePrepare,
-				EntryType:       logrecord.LogEntryTypeKV,
-				Entries:         [][]byte{kvEncoded},
-				PrevTxnWalIndex: lastOffset.Encode(),
+				LSN:           uint64(i),
+				HLC:           uint64(i),
+				OperationType: logrecord.LogOperationTypeDelete,
+				TxnState:      logrecord.TransactionStatePrepare,
+				TxnID:         []byte(txID),
+				EntryType:     logrecord.LogEntryTypeKV,
+				Entries:       [][]byte{kvEncoded},
+				PrevTxnIndex:  lastLSN,
 			}
 			encoded := record.FBEncode(1024)
 			lastOffset, err = appendRecord(encoded)
@@ -407,12 +408,13 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		}
 
 		record := logcodec.LogRecord{
-			LSN:             uint64(11),
-			HLC:             uint64(11),
-			OperationType:   logrecord.LogOperationTypeDelete,
-			TxnState:        logrecord.TransactionStateCommit,
-			EntryType:       logrecord.LogEntryTypeKV,
-			PrevTxnWalIndex: lastOffset.Encode(),
+			LSN:           uint64(11),
+			HLC:           uint64(11),
+			OperationType: logrecord.LogOperationTypeDelete,
+			TxnState:      logrecord.TransactionStateCommit,
+			TxnID:         []byte(txID),
+			EntryType:     logrecord.LogEntryTypeKV,
+			PrevTxnIndex:  lastLSN,
 		}
 
 		encoded = record.FBEncode(1024)
@@ -556,7 +558,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		var lastOffset *wal.Offset
 		for _, record := range logRecords {
 			if lastOffset != nil {
-				record.PrevTxnWalIndex = lastOffset.Encode()
+				record.PrevTxnIndex = lastLSN
 			}
 
 			offset, err := appendRecord(record.FBEncode(1024))
@@ -565,12 +567,13 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		}
 
 		lastRecord := logcodec.LogRecord{
-			LSN:             0,
-			HLC:             0,
-			OperationType:   logrecord.LogOperationTypeInsert,
-			TxnState:        logrecord.TransactionStateCommit,
-			EntryType:       logrecord.LogEntryTypeRow,
-			PrevTxnWalIndex: lastOffset.Encode(),
+			LSN:           0,
+			HLC:           0,
+			OperationType: logrecord.LogOperationTypeInsert,
+			TxnState:      logrecord.TransactionStateCommit,
+			TxnID:         logRecords[0].TxnID,
+			EntryType:     logrecord.LogEntryTypeRow,
+			PrevTxnIndex:  lastLSN,
 		}
 
 		lastOffset, err = appendRecord(lastRecord.FBEncode(1024))
@@ -597,7 +600,7 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		var lastOffset *wal.Offset
 		for _, record := range cleanupLogRecords {
 			if lastOffset != nil {
-				record.PrevTxnWalIndex = lastOffset.Encode()
+				record.PrevTxnIndex = lastLSN
 			}
 
 			record.OperationType = logrecord.LogOperationTypeDelete
@@ -608,12 +611,13 @@ func TestWalRecoveryForKV_Row(t *testing.T) {
 		}
 
 		lastRecord := logcodec.LogRecord{
-			LSN:             0,
-			HLC:             0,
-			OperationType:   logrecord.LogOperationTypeDelete,
-			TxnState:        logrecord.TransactionStateCommit,
-			EntryType:       logrecord.LogEntryTypeRow,
-			PrevTxnWalIndex: lastOffset.Encode(),
+			LSN:           0,
+			HLC:           0,
+			OperationType: logrecord.LogOperationTypeDelete,
+			TxnState:      logrecord.TransactionStateCommit,
+			TxnID:         cleanupLogRecords[0].TxnID,
+			EntryType:     logrecord.LogEntryTypeRow,
+			PrevTxnIndex:  lastLSN,
 		}
 
 		lastOffset, err = appendRecord(lastRecord.FBEncode(1024))
@@ -811,15 +815,15 @@ func generateNKeyValueFBRecord(n uint64) ([][]byte, map[string][]byte) {
 		}
 
 		record := logcodec.LogRecord{
-			LSN:             i,
-			HLC:             i,
-			CRC32Checksum:   0,
-			OperationType:   logrecord.LogOperationTypeInsert,
-			TxnState:        logrecord.TransactionStateNone,
-			EntryType:       logrecord.LogEntryTypeKV,
-			TxnID:           []byte(gofakeit.UUID()),
-			Entries:         encodedVals,
-			PrevTxnWalIndex: nil,
+			LSN:           i,
+			HLC:           i,
+			CRC32Checksum: 0,
+			OperationType: logrecord.LogOperationTypeInsert,
+			TxnState:      logrecord.TransactionStateNone,
+			EntryType:     logrecord.LogEntryTypeKV,
+			TxnID:         []byte(gofakeit.UUID()),
+			Entries:       encodedVals,
+			PrevTxnIndex:  0,
 		}
 
 		encoded := record.FBEncode(1024)
@@ -854,14 +858,14 @@ func generateNRowColumnFBRecord(n uint64) ([][]byte, map[string]map[string][]byt
 			encodedVals = append(encodedVals, enc)
 		}
 		record := logcodec.LogRecord{
-			LSN:             i,
-			HLC:             i,
-			OperationType:   logrecord.LogOperationTypeInsert,
-			TxnState:        logrecord.TransactionStateNone,
-			EntryType:       logrecord.LogEntryTypeRow,
-			Entries:         encodedVals,
-			PrevTxnWalIndex: nil,
-			TxnID:           []byte(gofakeit.UUID()),
+			LSN:           i,
+			HLC:           i,
+			OperationType: logrecord.LogOperationTypeInsert,
+			TxnState:      logrecord.TransactionStateNone,
+			EntryType:     logrecord.LogEntryTypeRow,
+			Entries:       encodedVals,
+			PrevTxnIndex:  0,
+			TxnID:         []byte(gofakeit.UUID()),
 		}
 
 		enc := record.FBEncode(1024)
@@ -872,19 +876,20 @@ func generateNRowColumnFBRecord(n uint64) ([][]byte, map[string]map[string][]byt
 }
 
 func generateNRowColumnFBRecordTxn(n uint64) ([]logcodec.LogRecord, map[string]map[string][]byte) {
+	txnID := []byte(gofakeit.UUID())
 	rowsEntries := make(map[string]map[string][]byte)
 	var rowsEncoded []logcodec.LogRecord
 
 	record := logcodec.LogRecord{
-		LSN:             0,
-		HLC:             0,
-		CRC32Checksum:   0,
-		OperationType:   logrecord.LogOperationTypeTxnMarker,
-		TxnState:        logrecord.TransactionStateBegin,
-		EntryType:       logrecord.LogEntryTypeRow,
-		Entries:         nil,
-		PrevTxnWalIndex: nil,
-		TxnID:           []byte(gofakeit.UUID()),
+		LSN:           0,
+		HLC:           0,
+		CRC32Checksum: 0,
+		OperationType: logrecord.LogOperationTypeTxnMarker,
+		TxnState:      logrecord.TransactionStateBegin,
+		EntryType:     logrecord.LogEntryTypeRow,
+		Entries:       nil,
+		PrevTxnIndex:  0,
+		TxnID:         txnID,
 	}
 
 	rowsEncoded = append(rowsEncoded, record)
@@ -909,14 +914,14 @@ func generateNRowColumnFBRecordTxn(n uint64) ([]logcodec.LogRecord, map[string]m
 			encodedVals = append(encodedVals, enc)
 		}
 		record := logcodec.LogRecord{
-			LSN:             i,
-			HLC:             i,
-			OperationType:   logrecord.LogOperationTypeInsert,
-			TxnState:        logrecord.TransactionStatePrepare,
-			EntryType:       logrecord.LogEntryTypeRow,
-			Entries:         encodedVals,
-			PrevTxnWalIndex: nil,
-			TxnID:           []byte(gofakeit.UUID()),
+			LSN:           i,
+			HLC:           i,
+			OperationType: logrecord.LogOperationTypeInsert,
+			TxnState:      logrecord.TransactionStatePrepare,
+			EntryType:     logrecord.LogEntryTypeRow,
+			Entries:       encodedVals,
+			PrevTxnIndex:  0,
+			TxnID:         txnID,
 		}
 
 		rowsEncoded = append(rowsEncoded, record)

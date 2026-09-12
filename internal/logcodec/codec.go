@@ -20,11 +20,6 @@ func serializeLogRecord(record *LogRecord, builder *flatbuffers.Builder) []byte 
 		txnIDOffset = builder.CreateByteVector(record.TxnID)
 	}
 
-	var prevTxnWalIndexOffset flatbuffers.UOffsetT
-	if len(record.PrevTxnWalIndex) > 0 {
-		prevTxnWalIndexOffset = builder.CreateByteVector(record.PrevTxnWalIndex)
-	}
-
 	payloadOffset := serializeEntries(record, builder)
 
 	logrecord.LogRecordStart(builder)
@@ -39,9 +34,7 @@ func serializeLogRecord(record *LogRecord, builder *flatbuffers.Builder) []byte 
 		logrecord.LogRecordAddTxnId(builder, txnIDOffset)
 	}
 
-	if len(record.PrevTxnWalIndex) > 0 {
-		logrecord.LogRecordAddPrevTxnWalIndex(builder, prevTxnWalIndexOffset)
-	}
+	logrecord.LogRecordAddPrevTxnIndex(builder, record.PrevTxnIndex)
 
 	if payloadOffset != 0 {
 		logrecord.LogRecordAddEntries(builder, payloadOffset)
@@ -84,15 +77,15 @@ func DeserializeFBRootLogRecord(fbRecord *logrecord.LogRecord) *LogRecord {
 	}
 
 	record := &LogRecord{
-		LSN:             fbRecord.Lsn(),
-		HLC:             fbRecord.Hlc(),
-		CRC32Checksum:   fbRecord.Crc32Checksum(),
-		OperationType:   fbRecord.OperationType(),
-		TxnState:        fbRecord.TxnState(),
-		EntryType:       fbRecord.EntryType(),
-		TxnID:           fbRecord.TxnIdBytes(),
-		PrevTxnWalIndex: fbRecord.PrevTxnWalIndexBytes(),
-		Entries:         entries,
+		LSN:           fbRecord.Lsn(),
+		HLC:           fbRecord.Hlc(),
+		CRC32Checksum: fbRecord.Crc32Checksum(),
+		OperationType: fbRecord.OperationType(),
+		TxnState:      fbRecord.TxnState(),
+		EntryType:     fbRecord.EntryType(),
+		TxnID:         fbRecord.TxnIdBytes(),
+		PrevTxnIndex:  fbRecord.PrevTxnIndex(),
+		Entries:       entries,
 	}
 
 	return record

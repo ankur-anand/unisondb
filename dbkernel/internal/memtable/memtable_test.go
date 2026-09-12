@@ -162,31 +162,34 @@ func TestMemTable_Flush_LMDBSuite(t *testing.T) {
 		recordCount := 10
 		key, values, checksum := generateNChunkFBRecord(t, uint64(recordCount))
 		var lastOffset *wal.Offset
+		var lastIndex uint64
 		for _, value := range values {
 			if lastOffset != nil {
-				value.PrevTxnWalIndex = lastOffset.Encode()
+				value.PrevTxnIndex = lastIndex
 			}
+			value.LSN = lastIndex + 1
 			encoded := value.FBEncode(len(value.Entries[0]))
-			offset, err := memTable.wIO.Append(encoded, 0)
+			offset, err := memTable.wIO.Append(encoded, value.LSN)
 			assert.NoError(t, err)
 			lastOffset = offset
+			lastIndex = value.LSN
 		}
 
 		kvEncoded := logcodec.SerializeKVEntry(keycodec.KeyBlobChunk([]byte(key), 0), nil)
 		lastRecord := logcodec.LogRecord{
-			LSN:             0,
-			HLC:             0,
-			CRC32Checksum:   checksum,
-			OperationType:   logrecord.LogOperationTypeTxnMarker,
-			EntryType:       logrecord.LogEntryTypeChunked,
-			TxnState:        logrecord.TransactionStateCommit,
-			TxnID:           []byte(key),
-			PrevTxnWalIndex: lastOffset.Encode(),
-			Entries:         [][]byte{kvEncoded},
+			LSN:           lastIndex + 1,
+			HLC:           0,
+			CRC32Checksum: checksum,
+			OperationType: logrecord.LogOperationTypeInsert,
+			EntryType:     logrecord.LogEntryTypeChunked,
+			TxnState:      logrecord.TransactionStateCommit,
+			TxnID:         []byte(key),
+			PrevTxnIndex:  lastIndex,
+			Entries:       [][]byte{kvEncoded},
 		}
 
 		encoded := lastRecord.FBEncode(2*len(key) + 30)
-		offset, err := memTable.wIO.Append(encoded, 0)
+		offset, err := memTable.wIO.Append(encoded, lastRecord.LSN)
 		assert.NoError(t, err)
 		lastOffset = offset
 
@@ -246,31 +249,34 @@ func TestMemTable_Flush_BoltDBSuite(t *testing.T) {
 		recordCount := 10
 		key, values, checksum := generateNChunkFBRecord(t, uint64(recordCount))
 		var lastOffset *wal.Offset
+		var lastIndex uint64
 		for _, value := range values {
 			if lastOffset != nil {
-				value.PrevTxnWalIndex = lastOffset.Encode()
+				value.PrevTxnIndex = lastIndex
 			}
+			value.LSN = lastIndex + 1
 			encoded := value.FBEncode(len(value.Entries[0]))
-			offset, err := memTable.wIO.Append(encoded, 0)
+			offset, err := memTable.wIO.Append(encoded, value.LSN)
 			assert.NoError(t, err)
 			lastOffset = offset
+			lastIndex = value.LSN
 		}
 
 		kvEncoded := logcodec.SerializeKVEntry(keycodec.KeyBlobChunk([]byte(key), 0), nil)
 		lastRecord := logcodec.LogRecord{
-			LSN:             0,
-			HLC:             0,
-			CRC32Checksum:   checksum,
-			OperationType:   logrecord.LogOperationTypeTxnMarker,
-			EntryType:       logrecord.LogEntryTypeChunked,
-			TxnState:        logrecord.TransactionStateCommit,
-			TxnID:           []byte(key),
-			PrevTxnWalIndex: lastOffset.Encode(),
-			Entries:         [][]byte{kvEncoded},
+			LSN:           lastIndex + 1,
+			HLC:           0,
+			CRC32Checksum: checksum,
+			OperationType: logrecord.LogOperationTypeInsert,
+			EntryType:     logrecord.LogEntryTypeChunked,
+			TxnState:      logrecord.TransactionStateCommit,
+			TxnID:         []byte(key),
+			PrevTxnIndex:  lastIndex,
+			Entries:       [][]byte{kvEncoded},
 		}
 
 		encoded := lastRecord.FBEncode(2*len(key) + 30)
-		offset, err := memTable.wIO.Append(encoded, 0)
+		offset, err := memTable.wIO.Append(encoded, lastRecord.LSN)
 		assert.NoError(t, err)
 		lastOffset = offset
 
@@ -491,7 +497,7 @@ func generateNChunkFBRecord(t *testing.T, n uint64) (string, []logcodec.LogRecor
 		HLC:           0,
 		CRC32Checksum: 0,
 		OperationType: 0,
-		TxnState:      0,
+		TxnState:      logrecord.TransactionStateBegin,
 		EntryType:     logrecord.LogEntryTypeChunked,
 		TxnID:         []byte(key),
 		Entries:       [][]byte{encoded},

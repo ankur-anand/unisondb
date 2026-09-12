@@ -40,6 +40,7 @@ type Txn struct {
 	err        error
 	engine     *Engine
 	prevOffset *wal.Offset
+	prevIndex  uint64
 	// dataStore all the memTableEntries that can be stored on memTable after the commit has been called.
 	memTableEntries      []txMemTableEntry
 	rowKey               []byte
@@ -105,12 +106,12 @@ func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.
 	// start the batch marker in wal
 	index := e.writeSeenCounter.Load() + 1
 	record := logcodec.LogRecord{
-		LSN:             index,
-		HLC:             HLCNow(),
-		TxnID:           uuid,
-		EntryType:       valueType,
-		TxnState:        logrecord.TransactionStateBegin,
-		PrevTxnWalIndex: nil,
+		LSN:          index,
+		HLC:          HLCNow(),
+		TxnID:        uuid,
+		EntryType:    valueType,
+		TxnState:     logrecord.TransactionStateBegin,
+		PrevTxnIndex: 0,
 	}
 
 	encoded := record.FBEncode(512)
@@ -124,6 +125,7 @@ func (e *Engine) NewTxn(txnType logrecord.LogOperationType, valueType logrecord.
 	return &Txn{
 		txnID:           uuid,
 		prevOffset:      offset,
+		prevIndex:       index,
 		err:             err,
 		engine:          e,
 		checksum:        0,
@@ -168,15 +170,15 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 	index := t.engine.writeSeenCounter.Load() + 1
 
 	record := logcodec.LogRecord{
-		LSN:             index,
-		HLC:             HLCNow(),
-		CRC32Checksum:   checksum,
-		OperationType:   t.txnOperation,
-		TxnState:        logrecord.TransactionStatePrepare,
-		EntryType:       t.txnEntryType,
-		TxnID:           t.txnID,
-		PrevTxnWalIndex: t.prevOffset.Encode(),
-		Entries:         [][]byte{kvEncoded},
+		LSN:           index,
+		HLC:           HLCNow(),
+		CRC32Checksum: checksum,
+		OperationType: t.txnOperation,
+		TxnState:      logrecord.TransactionStatePrepare,
+		EntryType:     t.txnEntryType,
+		TxnID:         t.txnID,
+		PrevTxnIndex:  t.prevIndex,
+		Entries:       [][]byte{kvEncoded},
 	}
 
 	encoded := record.FBEncode(len(kvEncoded) + 128)
@@ -190,6 +192,7 @@ func (t *Txn) AppendKVTxn(key []byte, value []byte) error {
 
 	t.engine.writeSeenCounter.Store(index)
 	t.prevOffset = offset
+	t.prevIndex = index
 
 	// for chunked type we just dataStore the last offset.
 	if t.txnEntryType != logrecord.LogEntryTypeChunked {
@@ -232,15 +235,15 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 	index := t.engine.writeSeenCounter.Load() + 1
 
 	record := logcodec.LogRecord{
-		LSN:             index,
-		HLC:             HLCNow(),
-		CRC32Checksum:   checksum,
-		OperationType:   t.txnOperation,
-		TxnState:        logrecord.TransactionStatePrepare,
-		EntryType:       t.txnEntryType,
-		TxnID:           t.txnID,
-		PrevTxnWalIndex: t.prevOffset.Encode(),
-		Entries:         [][]byte{rce},
+		LSN:           index,
+		HLC:           HLCNow(),
+		CRC32Checksum: checksum,
+		OperationType: t.txnOperation,
+		TxnState:      logrecord.TransactionStatePrepare,
+		EntryType:     t.txnEntryType,
+		TxnID:         t.txnID,
+		PrevTxnIndex:  t.prevIndex,
+		Entries:       [][]byte{rce},
 	}
 
 	encoded := record.FBEncode(len(rce) + 128)
@@ -255,6 +258,7 @@ func (t *Txn) AppendColumnTxn(rowKey []byte, columnEntries map[string][]byte) er
 
 	t.engine.writeSeenCounter.Store(index)
 	t.prevOffset = offset
+	t.prevIndex = index
 
 	memValue := getValueStruct(byte(t.txnOperation), byte(t.txnEntryType), rce)
 	t.memTableEntries = append(t.memTableEntries, txMemTableEntry{
@@ -280,15 +284,15 @@ func (t *Txn) Commit() error {
 	index := t.engine.writeSeenCounter.Load() + 1
 
 	record := logcodec.LogRecord{
-		LSN:             index,
-		HLC:             HLCNow(),
-		CRC32Checksum:   t.checksum,
-		OperationType:   t.txnOperation,
-		TxnState:        logrecord.TransactionStateCommit,
-		EntryType:       t.txnEntryType,
-		TxnID:           t.txnID,
-		PrevTxnWalIndex: t.prevOffset.Encode(),
-		Entries:         [][]byte{kv},
+		LSN:           index,
+		HLC:           HLCNow(),
+		CRC32Checksum: t.checksum,
+		OperationType: t.txnOperation,
+		TxnState:      logrecord.TransactionStateCommit,
+		EntryType:     t.txnEntryType,
+		TxnID:         t.txnID,
+		PrevTxnIndex:  t.prevIndex,
+		Entries:       [][]byte{kv},
 	}
 
 	// Encode WAL record
@@ -310,6 +314,7 @@ func (t *Txn) Commit() error {
 
 	// flush all the writes on mem-table
 	t.prevOffset = offset
+	t.prevIndex = index
 
 	var mErr error
 	switch t.txnEntryType {

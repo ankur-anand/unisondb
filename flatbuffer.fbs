@@ -70,7 +70,7 @@ table LogRecord {
   entry_type: LogEntryType;
 
   txn_id: [ubyte];
-  prev_txn_wal_index: [ubyte]; // index of the previous entry in the same transaction
+  prev_txn_index: uint64; // previous transaction record: standalone LSN or Raft index; 0 for Begin
   entries: [EncodedEntry];
 }
 

@@ -1,6 +1,8 @@
 package dbkernel
 
 import (
+	"fmt"
+
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
@@ -95,7 +97,7 @@ func (e *Engine) applyTxnCommit(record *logrecord.LogRecord, offset *Offset) err
 
 // applyKVValuesTxn applies KV transaction entries to the MemTable.
 func (e *Engine) applyKVValuesTxn(record *logrecord.LogRecord, offset *Offset) (int64, error) {
-	records, err := e.walIO.GetTransactionRecords(wal.DecodeOffset(record.PrevTxnWalIndexBytes()))
+	records, err := e.walIO.GetTransactionRecords(record)
 	if err != nil {
 		return 0, err
 	}
@@ -128,7 +130,7 @@ func (e *Engine) applyKVValuesTxn(record *logrecord.LogRecord, offset *Offset) (
 
 // applyRowColumnTxn applies Row transaction entries to the MemTable.
 func (e *Engine) applyRowColumnTxn(record *logrecord.LogRecord, offset *Offset) (int64, error) {
-	records, err := e.walIO.GetTransactionRecords(wal.DecodeOffset(record.PrevTxnWalIndexBytes()))
+	records, err := e.walIO.GetTransactionRecords(record)
 	if err != nil {
 		return 0, err
 	}
@@ -158,7 +160,17 @@ func (e *Engine) applyRowColumnTxn(record *logrecord.LogRecord, offset *Offset) 
 
 // applyChunkedValuesTxn applies chunked value transaction to the MemTable.
 func (e *Engine) applyChunkedValuesTxn(record *logrecord.LogRecord, offset *wal.Offset) error {
+	if _, err := e.walIO.GetTransactionRecords(record); err != nil {
+		return err
+	}
+	if offset == nil {
+		return fmt.Errorf("%w: missing chunked commit position", wal.ErrInvalidTxnChain)
+	}
+
 	logEntry := logcodec.DeserializeFBRootLogRecord(record)
+	if len(logEntry.Entries) == 0 {
+		return nil
+	}
 	kvEntry := logcodec.DeserializeKVEntry(logEntry.Entries[0])
 	chunkedKey := kvEntry.Key
 	memValue := getValueStruct(byte(logrecord.LogOperationTypeInsert), byte(logrecord.LogEntryTypeChunked), offset.Encode())

@@ -17,7 +17,7 @@ func HandleChunkedValuesTxn(record *logrecord.LogRecord, walIO *wal.WalIO, store
 	dr := logcodec.DeserializeFBRootLogRecord(record)
 	kv := logcodec.DeserializeKVEntry(dr.Entries[0])
 	key := kv.Key
-	records, err := walIO.GetTransactionRecords(wal.DecodeOffset(record.PrevTxnWalIndexBytes()))
+	records, err := walIO.GetTransactionRecords(record)
 	if err != nil {
 		return 0, fmt.Errorf("failed to reconstruct batch value: %w", err)
 	}

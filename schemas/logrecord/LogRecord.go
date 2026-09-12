@@ -147,38 +147,16 @@ func (rcv *LogRecord) MutateTxnId(j int, n byte) bool {
 	return false
 }
 
-func (rcv *LogRecord) PrevTxnWalIndex(j int) byte {
+func (rcv *LogRecord) PrevTxnIndex() uint64 {
 	o := flatbuffers.UOffsetT(rcv._tab.Offset(18))
 	if o != 0 {
-		a := rcv._tab.Vector(o)
-		return rcv._tab.GetByte(a + flatbuffers.UOffsetT(j*1))
+		return rcv._tab.GetUint64(o + rcv._tab.Pos)
 	}
 	return 0
 }
 
-func (rcv *LogRecord) PrevTxnWalIndexLength() int {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(18))
-	if o != 0 {
-		return rcv._tab.VectorLen(o)
-	}
-	return 0
-}
-
-func (rcv *LogRecord) PrevTxnWalIndexBytes() []byte {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(18))
-	if o != 0 {
-		return rcv._tab.ByteVector(o + rcv._tab.Pos)
-	}
-	return nil
-}
-
-func (rcv *LogRecord) MutatePrevTxnWalIndex(j int, n byte) bool {
-	o := flatbuffers.UOffsetT(rcv._tab.Offset(18))
-	if o != 0 {
-		a := rcv._tab.Vector(o)
-		return rcv._tab.MutateByte(a+flatbuffers.UOffsetT(j*1), n)
-	}
-	return false
+func (rcv *LogRecord) MutatePrevTxnIndex(n uint64) bool {
+	return rcv._tab.MutateUint64Slot(18, n)
 }
 
 func (rcv *LogRecord) Entries(obj *EncodedEntry, j int) bool {
@@ -228,11 +206,8 @@ func LogRecordAddTxnId(builder *flatbuffers.Builder, txnId flatbuffers.UOffsetT)
 func LogRecordStartTxnIdVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
 	return builder.StartVector(1, numElems, 1)
 }
-func LogRecordAddPrevTxnWalIndex(builder *flatbuffers.Builder, prevTxnWalIndex flatbuffers.UOffsetT) {
-	builder.PrependUOffsetTSlot(7, flatbuffers.UOffsetT(prevTxnWalIndex), 0)
-}
-func LogRecordStartPrevTxnWalIndexVector(builder *flatbuffers.Builder, numElems int) flatbuffers.UOffsetT {
-	return builder.StartVector(1, numElems, 1)
+func LogRecordAddPrevTxnIndex(builder *flatbuffers.Builder, prevTxnIndex uint64) {
+	builder.PrependUint64Slot(7, prevTxnIndex, 0)
 }
 func LogRecordAddEntries(builder *flatbuffers.Builder, entries flatbuffers.UOffsetT) {
 	builder.PrependUOffsetTSlot(8, flatbuffers.UOffsetT(entries), 0)
