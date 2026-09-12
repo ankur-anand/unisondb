@@ -21,7 +21,6 @@ import (
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	kvdrivers2 "github.com/ankur-anand/unisondb/pkg/kvdrivers"
 	"github.com/ankur-anand/unisondb/pkg/umetrics"
-	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/dgraph-io/badger/v4/y"
 	"github.com/dustin/go-humanize"
@@ -103,8 +102,6 @@ var (
 var (
 	// ErrWaitTimeoutExceeded is a sentinel error to denotes sync.cond expired due to timeout.
 	ErrWaitTimeoutExceeded = errors.New("wait timeout exceeded")
-	// ErrEngineModeMismatch indicates the database was created in a different mode (Raft vs non-Raft).
-	ErrEngineModeMismatch = errors.New("engine mode mismatch: database was created in different mode")
 )
 
 // ChangeNotifier is called on successful local writes.
@@ -164,9 +161,6 @@ type Engine struct {
 	taggedScope    umetrics.Scope
 	changeNotifier ChangeNotifier
 
-	// Raft mode fields
-	raftState raftState
-
 	// used only during testing
 	memtableRotateCallback func()
 	fsyncCallback          func()
@@ -224,10 +218,6 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (result *En
 	if err := engine.initStorage(dataDir, namespace, conf); err != nil {
 		return nil, err
 	}
-	if err := engine.validateAndPersistEngineMode(); err != nil {
-		return nil, err
-	}
-
 	if err := engine.loadMetaValues(); err != nil {
 		return nil, err
 	}
@@ -243,13 +233,7 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (result *En
 	engine.syncWalAtInterval(ctx)
 	engine.fsyncBtreeAtInterval(ctx)
 	if conf.WalConfig.AutoCleanup {
-		var predicate walfs.DeletionPredicate
-		if conf.WalConfig.RaftMode {
-			predicate = newRaftWalCleanupPredicate(engine.walIO.WAL(), engine.FlushedIndex)
-		} else {
-			predicate = newWalCleanupPredicate(engine.GetWalCheckPoint)
-		}
-		engine.walIO.RunWalCleanup(ctx, conf.WalConfig.CleanupInterval, predicate)
+		engine.walIO.RunWalCleanup(ctx, conf.WalConfig.CleanupInterval, newWalCleanupPredicate(engine.GetWalCheckPoint))
 	}
 
 	return engine, nil
@@ -287,36 +271,6 @@ func newWalCleanupPredicate(checkpoint func() (*internal.Metadata, error)) func(
 			return false
 		}
 		return checkpointMeta.Pos.SegmentID > segID
-	}
-}
-
-func newRaftWalCleanupPredicate(wlog *walfs.WALog, getFlushedIndex func() uint64) walfs.DeletionPredicate {
-	logIndex := wlog.LogIndex()
-	return func(segID wal.SegID) bool {
-		seg, ok := wlog.Segments()[segID]
-		if !ok {
-			return false
-		}
-
-		if wlog.Current() != nil && wlog.Current().ID() == segID {
-			return false
-		}
-
-		entryCount := seg.GetEntryCount()
-		if entryCount == 0 {
-			return false
-		}
-
-		firstIdx := seg.FirstLogIndex()
-		lastIdx := firstIdx + uint64(entryCount) - 1
-
-		// entries are still in index, raft need this for raft replication.
-		if _, ok := logIndex.Get(lastIdx); ok {
-			return false
-		}
-
-		// every entries present in segment are flushed to B-tree
-		return lastIdx <= getFlushedIndex()
 	}
 }
 
@@ -403,25 +357,6 @@ func tryFileLock(fileLock *flock.Flock) error {
 	return nil
 }
 
-// validateAndPersistEngineMode ensures the database is opened with the same mode (Raft vs non-Raft)
-// it was created with.
-func (e *Engine) validateAndPersistEngineMode() error {
-	expectedMode := internal.EngineModeStandalone
-	if e.config.WalConfig.RaftMode {
-		expectedMode = internal.EngineModeRaft
-	}
-
-	storedMode, err := e.dataStore.RetrieveMetadata(internal.SysKeyEngineMode)
-	if err != nil || len(storedMode) == 0 {
-		return e.dataStore.StoreMetadata(internal.SysKeyEngineMode, []byte{expectedMode})
-	}
-
-	if storedMode[0] != expectedMode {
-		return fmt.Errorf("%w: stored=%d, configured=%d", ErrEngineModeMismatch, storedMode[0], expectedMode)
-	}
-	return nil
-}
-
 // loadMetaValues loads meta value that the engine stores.
 func (e *Engine) loadMetaValues() error {
 	data, err := e.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
@@ -435,10 +370,6 @@ func (e *Engine) loadMetaValues() error {
 	metadata := internal.UnmarshalMetadata(data)
 	e.startMetadata = metadata
 
-	// Standalone LSNs are recovered from the WAL, not the flush statistics.
-	if e.config.WalConfig.RaftMode {
-		e.writeSeenCounter.Store(metadata.RecordProcessed)
-	}
 	e.opsFlushedCounter.Store(metadata.RecordProcessed)
 
 	return nil
@@ -446,14 +377,6 @@ func (e *Engine) loadMetaValues() error {
 
 // recoverWAL recovers the wal if any pending writes are still not visible.
 func (e *Engine) recoverWAL() error {
-	if e.config.WalConfig.RaftMode {
-		slog.Info("[dbkernel]",
-			slog.String("message", "Skipping WAL recovery in Raft mode"),
-			slog.String("namespace", e.namespace),
-		)
-		return nil
-	}
-
 	checkpoint, err := e.dataStore.RetrieveMetadata(internal.SysKeyWalCheckPoint)
 	if err != nil && !errors.Is(err, kvdrivers2.ErrKeyNotFound) {
 		return fmt.Errorf("recover WAL failed %w", err)
@@ -552,22 +475,6 @@ func (e *Engine) persistKeyValue(keys [][]byte, values [][]byte, op logrecord.Lo
 		kvEntries = append(kvEntries, kv)
 	}
 
-	if e.raftState.raftMode {
-		record := logcodec.LogRecord{
-			LSN:           1,
-			HLC:           HLCNow(),
-			OperationType: op,
-			TxnState:      logrecord.TransactionStateNone,
-			EntryType:     logrecord.LogEntryTypeKV,
-			Entries:       kvEntries,
-		}
-		encoded := record.FBEncode(hintSize)
-		// Propose to Raft and return
-		// Memtable write will be handled by the FSM Apply method
-		_, err := e.raftState.applier.Apply(encoded)
-		return err
-	}
-
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	index := e.writeSeenCounter.Load() + 1
@@ -633,23 +540,6 @@ func (e *Engine) persistRowColumnAction(op logrecord.LogOperationType, rowKeys [
 		rowEntries = append(rowEntries, re)
 	}
 
-	if e.raftState.raftMode {
-		record := logcodec.LogRecord{
-			LSN:           1,
-			HLC:           HLCNow(),
-			OperationType: op,
-			CRC32Checksum: checksum,
-			TxnState:      logrecord.TransactionStateNone,
-			EntryType:     logrecord.LogEntryTypeRow,
-			Entries:       rowEntries,
-		}
-		encoded := record.FBEncode(hintSize)
-		// Propose to Raft and return
-		// Memtable write will be handled by the FSM Apply method
-		_, err := e.raftState.applier.Apply(encoded)
-		return err
-	}
-
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -693,12 +583,6 @@ func (e *Engine) writeOffset(offset *wal.Offset) {
 		// Signal all waiting routines that a new append has happened
 		// Atomically update lastChunkPosition
 		e.currentOffset.Store(offset)
-
-		// In Raft mode, update WAL commit boundary so ISR followers
-		// streaming from the WAL only see committed entries.
-		if e.raftState.raftMode && e.raftState.walCommitCallback != nil {
-			e.raftState.walCommitCallback(*offset)
-		}
 
 		e.notifyAppend()
 	}
@@ -895,19 +779,10 @@ func (e *Engine) handleFlush(ctx context.Context) {
 			return
 		}
 
-		// raft position from memtable and update tracking atomics.
-		raftIdx, raftTerm := mt.GetLastRaftPosition()
-		if raftIdx > 0 {
-			e.raftState.flushedIndex.Store(raftIdx)
-			e.raftState.flushedTerm.Store(raftTerm)
-		}
-
 		fm := &flushedMetadata{
 			metadata: &internal.Metadata{
 				RecordProcessed: e.opsFlushedCounter.Add(uint64(recordProcessed)),
 				Pos:             mt.GetLastOffset(),
-				RaftIndex:       raftIdx,
-				RaftTerm:        raftTerm,
 			},
 			recordProcessed: recordProcessed,
 			bytesFlushed:    uint64(mt.GetBytesStored()),
@@ -1042,11 +917,7 @@ func (e *Engine) fSyncStore() {
 	startTime := time.Now()
 	e.taggedScope.Counter(mKeyFSyncTotal).Inc(1)
 
-	// Always save with raft fields - zero values are harmless in non-raft mode
-	err := internal.SaveMetadataWithRaft(e.dataStore, fm.metadata.Pos,
-		fm.metadata.RecordProcessed,
-		fm.metadata.RaftIndex,
-		fm.metadata.RaftTerm)
+	err := internal.SaveMetadata(e.dataStore, fm.metadata.Pos, fm.metadata.RecordProcessed)
 	if err != nil {
 		log.Fatal("[dbkernel] Failed to Create WAL checkpoint:", "namespace", e.namespace, "err", err)
 	}

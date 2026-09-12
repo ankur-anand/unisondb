@@ -31,39 +31,6 @@ type Config struct {
 	FuzzConfig         FuzzConfig                `toml:"fuzz_config"`
 	WriteNotifyConfig  WriteNotifyConfig         `toml:"write_notify_config"`
 	NotifierConfigs    map[string]NotifierConfig `toml:"notifier_config"`
-	RaftConfig         RaftConfig                `toml:"raft_config"`
-}
-
-// RaftConfig holds Raft consensus configuration.
-type RaftConfig struct {
-	Enabled   bool       `toml:"enabled"`
-	NodeID    string     `toml:"node_id"`
-	BindAddr  string     `toml:"bind_addr"`
-	Bootstrap bool       `toml:"bootstrap"`
-	Peers     []RaftPeer `toml:"peers"`
-
-	// Timeouts
-	HeartbeatTimeout string `toml:"heartbeat_timeout"`
-	ElectionTimeout  string `toml:"election_timeout"`
-	CommitTimeout    string `toml:"commit_timeout"`
-	ApplyTimeout     string `toml:"apply_timeout"`
-
-	// Snapshot settings
-	SnapshotInterval  string `toml:"snapshot_interval"`
-	SnapshotThreshold uint64 `toml:"snapshot_threshold"`
-	SnapshotRetain    int    `toml:"snapshot_retain"`
-
-	// Serf membership settings
-	SerfBindAddr  string   `toml:"serf_bind_addr"`
-	SerfBindPort  int      `toml:"serf_bind_port"`
-	SerfPeers     []string `toml:"serf_peers"`
-	SerfSecretKey string   `toml:"serf_secret_key"`
-}
-
-// RaftPeer represents a peer node in the Raft cluster.
-type RaftPeer struct {
-	ID      string `toml:"id"`
-	Address string `toml:"address"`
 }
 
 type GrpcConfig struct {

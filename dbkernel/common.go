@@ -23,13 +23,12 @@ var (
 	ErrRecordCorrupted = kvdrivers.ErrRecordCorrupted
 	ErrUseGetColumnAPI = kvdrivers.ErrUseGetColumnAPI
 
-	ErrInCloseProcess         = errors.New("in-Close process")
-	ErrDatabaseDirInUse       = errors.New("pid.lock is held by another process")
-	ErrInternalError          = errors.New("internal error")
-	ErrMisMatchKeyType        = errors.New("mismatch key type with existing value")
-	ErrNoNewData              = wal.ErrNoNewData
-	ErrEngineReadOnly         = errors.New("engine is in read-only mode (relayer): write operations are not allowed")
-	ErrNotSupportedInRaftMode = errors.New("operation not supported in raft mode")
+	ErrInCloseProcess   = errors.New("in-Close process")
+	ErrDatabaseDirInUse = errors.New("pid.lock is held by another process")
+	ErrInternalError    = errors.New("internal error")
+	ErrMisMatchKeyType  = errors.New("mismatch key type with existing value")
+	ErrNoNewData        = wal.ErrNoNewData
+	ErrEngineReadOnly   = errors.New("engine is in read-only mode (relayer): write operations are not allowed")
 )
 
 var (

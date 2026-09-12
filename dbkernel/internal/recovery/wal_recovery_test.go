@@ -1015,9 +1015,9 @@ func TestWalRecovery_Events_Mixed(t *testing.T) {
 	assert.Equal(t, *lastOffset, *recoveryInstance.LastRecoveredOffset(), "Last recovered position should match last appended offset")
 }
 
-func TestWalRecovery_RaftInternalRecords(t *testing.T) {
+func TestWalRecovery_InternalRecords(t *testing.T) {
 	tdir := t.TempDir()
-	walDir := filepath.Join(tdir, "wal_raft_internal")
+	walDir := filepath.Join(tdir, "wal_internal")
 	assert.NoError(t, os.MkdirAll(walDir, 0777))
 
 	walConfig := wal.NewDefaultConfig()
@@ -1028,7 +1028,7 @@ func TestWalRecovery_RaftInternalRecords(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	dbFile := filepath.Join(tdir, "raft_internal.db")
+	dbFile := filepath.Join(tdir, "internal.db")
 	db, err := kvdrivers2.NewLmdb(dbFile, kvdrivers2.Config{
 		Namespace: testNamespace,
 		NoSync:    true,
@@ -1040,15 +1040,15 @@ func TestWalRecovery_RaftInternalRecords(t *testing.T) {
 		assert.NoError(t, err)
 	})
 
-	t.Run("raft_internal_records_increment_count_and_update_position", func(t *testing.T) {
+	t.Run("internal_records_increment_count_and_update_position", func(t *testing.T) {
 		var lastOffset *wal.Offset
-		raftInternalCount := 5
+		internalCount := 5
 
-		for i := 1; i <= raftInternalCount; i++ {
+		for i := 1; i <= internalCount; i++ {
 			record := logcodec.LogRecord{
 				LSN:           uint64(i),
 				HLC:           uint64(i),
-				OperationType: logrecord.LogOperationTypeRaftInternal,
+				OperationType: logrecord.LogOperationTypeInternal,
 				EntryType:     logrecord.LogEntryTypeKV,
 				TxnState:      logrecord.TransactionStateNone,
 			}
@@ -1062,22 +1062,22 @@ func TestWalRecovery_RaftInternalRecords(t *testing.T) {
 		err := recoveryInstance.Recover(nil)
 		assert.NoError(t, err)
 
-		assert.Equal(t, raftInternalCount, recoveryInstance.RecoveredCount(),
-			"RaftInternal records should increment recoveredCount")
+		assert.Equal(t, internalCount, recoveryInstance.RecoveredCount(),
+			"Internal records should increment recoveredCount")
 
 		assert.NotNil(t, recoveryInstance.LastRecoveredOffset())
 		assert.Equal(t, *lastOffset, *recoveryInstance.LastRecoveredOffset(),
-			"lastRecoveredPos should point to the last RaftInternal record")
+			"lastRecoveredPos should point to the last Internal record")
 	})
 
-	t.Run("raft_internal_mixed_with_kv_records", func(t *testing.T) {
-		walDir2 := filepath.Join(tdir, "wal_raft_internal_mixed")
+	t.Run("internal_mixed_with_kv_records", func(t *testing.T) {
+		walDir2 := filepath.Join(tdir, "wal_internal_mixed")
 		assert.NoError(t, os.MkdirAll(walDir2, 0777))
 		walInstance2, err := wal.NewWalIO(walDir2, testNamespace, walConfig)
 		assert.NoError(t, err)
 		defer walInstance2.Close()
 
-		dbFile2 := filepath.Join(tdir, "raft_internal_mixed.db")
+		dbFile2 := filepath.Join(tdir, "internal_mixed.db")
 		db2, err := kvdrivers2.NewLmdb(dbFile2, kvdrivers2.Config{
 			Namespace: testNamespace,
 			NoSync:    true,
@@ -1092,7 +1092,7 @@ func TestWalRecovery_RaftInternalRecords(t *testing.T) {
 		record := logcodec.LogRecord{
 			LSN:           1,
 			HLC:           1,
-			OperationType: logrecord.LogOperationTypeRaftInternal,
+			OperationType: logrecord.LogOperationTypeInternal,
 			EntryType:     logrecord.LogEntryTypeKV,
 			TxnState:      logrecord.TransactionStateNone,
 		}
@@ -1118,7 +1118,7 @@ func TestWalRecovery_RaftInternalRecords(t *testing.T) {
 		record = logcodec.LogRecord{
 			LSN:           3,
 			HLC:           3,
-			OperationType: logrecord.LogOperationTypeRaftInternal,
+			OperationType: logrecord.LogOperationTypeInternal,
 			EntryType:     logrecord.LogEntryTypeKV,
 			TxnState:      logrecord.TransactionStateNone,
 		}
@@ -1144,7 +1144,7 @@ func TestWalRecovery_RaftInternalRecords(t *testing.T) {
 		record = logcodec.LogRecord{
 			LSN:           5,
 			HLC:           5,
-			OperationType: logrecord.LogOperationTypeRaftInternal,
+			OperationType: logrecord.LogOperationTypeInternal,
 			EntryType:     logrecord.LogEntryTypeKV,
 			TxnState:      logrecord.TransactionStateNone,
 		}
@@ -1157,10 +1157,10 @@ func TestWalRecovery_RaftInternalRecords(t *testing.T) {
 		assert.NoError(t, err)
 
 		assert.Equal(t, expectedCount, recoveryInstance.RecoveredCount(),
-			"recoveredCount should include both RaftInternal and KV records")
+			"recoveredCount should include both Internal and KV records")
 
 		assert.Equal(t, *lastOffset, *recoveryInstance.LastRecoveredOffset(),
-			"lastRecoveredPos should point to the last record (RaftInternal)")
+			"lastRecoveredPos should point to the last record (Internal)")
 
 		value1, err := db2.GetKV([]byte(key1))
 		assert.NoError(t, err)
@@ -1171,14 +1171,14 @@ func TestWalRecovery_RaftInternalRecords(t *testing.T) {
 		assert.Equal(t, []byte(val2), value2)
 	})
 
-	t.Run("raft_internal_does_not_modify_store", func(t *testing.T) {
-		walDir3 := filepath.Join(tdir, "wal_raft_internal_no_store")
+	t.Run("internal_does_not_modify_store", func(t *testing.T) {
+		walDir3 := filepath.Join(tdir, "wal_internal_no_store")
 		assert.NoError(t, os.MkdirAll(walDir3, 0777))
 		walInstance3, err := wal.NewWalIO(walDir3, testNamespace, walConfig)
 		assert.NoError(t, err)
 		defer walInstance3.Close()
 
-		dbFile3 := filepath.Join(tdir, "raft_internal_no_store.db")
+		dbFile3 := filepath.Join(tdir, "internal_no_store.db")
 		db3, err := kvdrivers2.NewLmdb(dbFile3, kvdrivers2.Config{
 			Namespace: testNamespace,
 			NoSync:    true,
@@ -1191,7 +1191,7 @@ func TestWalRecovery_RaftInternalRecords(t *testing.T) {
 			record := logcodec.LogRecord{
 				LSN:           uint64(i),
 				HLC:           uint64(i),
-				OperationType: logrecord.LogOperationTypeRaftInternal,
+				OperationType: logrecord.LogOperationTypeInternal,
 				EntryType:     logrecord.LogEntryTypeKV,
 				TxnState:      logrecord.TransactionStateNone,
 			}
@@ -1204,10 +1204,10 @@ func TestWalRecovery_RaftInternalRecords(t *testing.T) {
 		assert.NoError(t, err)
 
 		assert.Equal(t, 10, recoveryInstance.RecoveredCount(),
-			"RaftInternal records should be counted")
+			"Internal records should be counted")
 
 		_, err = db3.GetKV([]byte("any-key"))
 		assert.ErrorIs(t, err, kvdrivers2.ErrKeyNotFound,
-			"RaftInternal records should not write any data to store")
+			"Internal records should not write any data to store")
 	})
 }

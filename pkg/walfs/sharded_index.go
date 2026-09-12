@@ -9,7 +9,7 @@ const (
 	defaultShardCount = 64
 )
 
-// ShardedIndex is a concurrent-safe sharded map for Raft index → WAL position.
+// ShardedIndex is a concurrent-safe sharded map for log index → WAL position.
 type ShardedIndex struct {
 	shards    []*indexShard
 	shardMask uint64

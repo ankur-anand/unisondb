@@ -768,9 +768,9 @@ func requireSegmentFirstIndex(t *testing.T, walog *walfs.WALog, expected uint64)
 	t.Fatalf("no segment persisted FirstLogIndex %d", expected)
 }
 
-func TestReplicaWALHandler_RaftInternalRecords(t *testing.T) {
+func TestReplicaWALHandler_InternalRecords(t *testing.T) {
 	baseDir := t.TempDir()
-	replicatorNameSpace := "test_raft_internal_replicator"
+	replicatorNameSpace := "test_internal_replicator"
 	replicaDir := filepath.Join(baseDir, "replica")
 
 	replicaEngine, err := dbkernel.NewStorageEngine(replicaDir, replicatorNameSpace, dbkernel.NewDefaultEngineConfig())
@@ -784,11 +784,11 @@ func TestReplicaWALHandler_RaftInternalRecords(t *testing.T) {
 
 	replicator := dbkernel.NewReplicaWALHandler(replicaEngine)
 
-	t.Run("raft_internal_record_applies_without_error", func(t *testing.T) {
+	t.Run("internal_record_applies_without_error", func(t *testing.T) {
 		record := logcodec.LogRecord{
 			LSN:           1,
 			HLC:           uint64(dbkernel.HLCNow()),
-			OperationType: logrecord.LogOperationTypeRaftInternal,
+			OperationType: logrecord.LogOperationTypeInternal,
 			EntryType:     logrecord.LogEntryTypeKV,
 			TxnState:      logrecord.TransactionStateNone,
 		}
@@ -800,20 +800,20 @@ func TestReplicaWALHandler_RaftInternalRecords(t *testing.T) {
 		}
 
 		err := replicator.ApplyRecord(encoded, expectedOffset)
-		require.NoError(t, err, "RaftInternal record should apply without error")
+		require.NoError(t, err, "Internal record should apply without error")
 		assert.Equal(t, uint64(1), replicaEngine.OpsReceivedCount(),
-			"OpsReceivedCount should be incremented for RaftInternal")
+			"OpsReceivedCount should be incremented for Internal")
 	})
 
-	t.Run("raft_internal_does_not_write_data_to_store", func(t *testing.T) {
+	t.Run("internal_does_not_write_data_to_store", func(t *testing.T) {
 		_, err := replicaEngine.GetKV([]byte("any-key"))
 		assert.ErrorIs(t, err, dbkernel.ErrKeyNotFound,
-			"RaftInternal should not write any KV data")
+			"Internal should not write any KV data")
 	})
 
-	t.Run("raft_internal_via_leader_follower_pattern", func(t *testing.T) {
-		leaderDir := filepath.Join(baseDir, "leader_raft_internal")
-		followerDir := filepath.Join(baseDir, "follower_raft_internal")
+	t.Run("internal_via_leader_follower_pattern", func(t *testing.T) {
+		leaderDir := filepath.Join(baseDir, "leader_internal")
+		followerDir := filepath.Join(baseDir, "follower_internal")
 
 		leader, err := dbkernel.NewStorageEngine(leaderDir, "leader", dbkernel.NewDefaultEngineConfig())
 		require.NoError(t, err)
@@ -862,7 +862,7 @@ func TestReplicaWALHandler_RaftInternalRecords(t *testing.T) {
 		assert.Equal(t, []byte(val2), gotVal2)
 	})
 
-	t.Run("replica_wal_has_no_holes_with_raft_internal", func(t *testing.T) {
+	t.Run("replica_wal_has_no_holes_with_internal", func(t *testing.T) {
 		leaderDir := filepath.Join(baseDir, "leader_no_holes")
 		followerDir := filepath.Join(baseDir, "follower_no_holes")
 
@@ -933,7 +933,7 @@ func TestReplicaWALHandler_RaftInternalRecords(t *testing.T) {
 		}
 	})
 
-	t.Run("raft_internal_then_kv_maintains_lsn_sequence", func(t *testing.T) {
+	t.Run("internal_then_kv_maintains_lsn_sequence", func(t *testing.T) {
 		reader, err := replicaEngine.NewReader()
 		require.NoError(t, err)
 		defer reader.Close()
@@ -955,8 +955,8 @@ func TestReplicaWALHandler_RaftInternalRecords(t *testing.T) {
 		require.GreaterOrEqual(t, len(lsns), 1, "should have at least 1 record")
 
 		assert.Equal(t, uint64(1), lsns[0], "first record should have LSN 1")
-		assert.Equal(t, logrecord.LogOperationTypeRaftInternal, opTypes[0],
-			"first record should be RaftInternal")
+		assert.Equal(t, logrecord.LogOperationTypeInternal, opTypes[0],
+			"first record should be Internal")
 
 		for i, lsn := range lsns {
 			expectedLSN := uint64(i + 1)
@@ -1254,7 +1254,7 @@ func TestReplicaWALHandler_ApplyRecordsLSNOnly(t *testing.T) {
 		assert.Equal(t, leader.OpsReceivedCount(), replica.OpsReceivedCount())
 	})
 
-	t.Run("raft_internal_records_apply", func(t *testing.T) {
+	t.Run("internal_records_apply", func(t *testing.T) {
 		baseDir := t.TempDir()
 		replicaDir := filepath.Join(baseDir, "replica")
 
@@ -1266,10 +1266,10 @@ func TestReplicaWALHandler_ApplyRecordsLSNOnly(t *testing.T) {
 
 		replicator := dbkernel.NewReplicaWALHandler(replica)
 
-		raftInternal := logcodec.LogRecord{
+		internalRecord := logcodec.LogRecord{
 			LSN:           1,
 			HLC:           uint64(dbkernel.HLCNow()),
-			OperationType: logrecord.LogOperationTypeRaftInternal,
+			OperationType: logrecord.LogOperationTypeInternal,
 			EntryType:     logrecord.LogEntryTypeKV,
 			TxnState:      logrecord.TransactionStateNone,
 		}
@@ -1283,12 +1283,12 @@ func TestReplicaWALHandler_ApplyRecordsLSNOnly(t *testing.T) {
 		}
 
 		batch := [][]byte{
-			raftInternal.FBEncode(64),
+			internalRecord.FBEncode(64),
 			kvRecord.FBEncode(64),
 		}
 
 		err = replicator.ApplyRecordsLSNOnly(batch)
-		require.NoError(t, err, "should apply batch with RaftInternal record")
+		require.NoError(t, err, "should apply batch with Internal record")
 
 		assert.Equal(t, uint64(2), replica.OpsReceivedCount(),
 			"both records should be counted")

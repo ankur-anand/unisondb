@@ -43,9 +43,5 @@ func GetWalRecord(entry y.ValueStruct, wIO *wal.WalIO) (*logrecord.LogRecord, er
 		return nil, fmt.Errorf("failed to read WAL for chunk position: %w", err)
 	}
 
-	decoded, err := wIO.DecodeRecord(walValue)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode WAL record: %w", err)
-	}
-	return logrecord.GetRootAsLogRecord(decoded, 0), nil
+	return logrecord.GetRootAsLogRecord(walValue, 0), nil
 }
