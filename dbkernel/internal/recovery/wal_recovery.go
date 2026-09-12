@@ -64,6 +64,7 @@ func (wr *walRecovery) recoverWAL(checkPoint []byte) error {
 	if err != nil {
 		return fmt.Errorf("recover WAL failed %w", err)
 	}
+	defer reader.Close()
 
 	if len(checkPoint) != 0 {
 		// first value will be duplicate, so we can ignore it.
