@@ -2,7 +2,6 @@ package dbkernel
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/ankur-anand/unisondb/pkg/umetrics"
@@ -13,56 +12,63 @@ const (
 	driftReportThreshold = 5 * time.Millisecond
 )
 
-var (
-	startDriftOnce sync.Once
-)
-
-// wall clock can jump forward or backward by the ntp.
-// monotonic time don't.
-// the process get monotonic time at the start of the process, so during it's life-time
-// https://github.com/golang/go/blob/889abb17e125bb0f5d8de61bb80ef15fbe2a130d/src/runtime/time_nofake.go#L19
+// Keep both the initial wall-clock and monotonic readings for this process.
 var startTime = time.Now()
 
 // StartClockDriftMonitor starts a goroutine that calculates the
 // drift between wall time and monotonic time every `interval`.
-func StartClockDriftMonitor(ctx context.Context, interval time.Duration) {
+// Start it once at application startup with the application's context, not an
+// individual engine's context. The returned function stops and waits for the
+// monitor; it is safe to call more than once. The interval must be positive.
+func StartClockDriftMonitor(ctx context.Context, interval time.Duration) func() {
+	return startClockDriftMonitor(ctx, interval, measureClockDrift,
+		umetrics.AutoScope().Gauge(mClockDriftSeconds).Update)
+}
+
+func startClockDriftMonitor(ctx context.Context, interval time.Duration, measure func() time.Duration, report func(float64)) func() {
+	ticker := time.NewTicker(interval)
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(interval)
+		defer close(done)
 		defer ticker.Stop()
 
 		for {
 			select {
 			case <-ticker.C:
-				drift := measureClockDrift()
+				drift := measure()
 				if drift < 0 {
 					drift = -drift
 				}
-				if drift > driftReportThreshold {
-					umetrics.AutoScope().Gauge(mClockDriftSeconds).Update(drift.Seconds())
+				if drift <= driftReportThreshold {
+					drift = 0
 				}
+				report(drift.Seconds())
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
+	return func() {
+		cancel()
+		<-done
+	}
 }
 
 // measureClockDrift returns how far time.Now() deviates from the
 // monotonic baseline established at process start.
 func measureClockDrift() time.Duration {
 	now := time.Now()
-	monotonicElapsed := now.Sub(startTime)
-	expected := startTime.Add(monotonicElapsed)
-	return now.Sub(expected)
+	return clockDrift(startTime, now, now.Sub(startTime))
+}
+
+func clockDrift(start, now time.Time, monotonicElapsed time.Duration) time.Duration {
+	// Round(0) removes monotonic readings, forcing Sub to compare wall time.
+	wallElapsed := now.Round(0).Sub(start.Round(0))
+	return wallElapsed - monotonicElapsed
 }
 
 // HLCNow returns the current time in milliseconds since the Unix epoch.
 func HLCNow() uint64 {
 	return uint64(time.Now().UnixMilli())
-}
-
-func initMonotonic(ctx context.Context) {
-	startDriftOnce.Do(func() {
-		StartClockDriftMonitor(ctx, time.Second)
-	})
 }
