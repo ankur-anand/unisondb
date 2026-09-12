@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"runtime"
 	"time"
 
 	"github.com/PowerDNS/lmdb-go/lmdb"
@@ -20,7 +19,7 @@ var _ txnWriter = (*LMDBTxnQueue)(nil)
 type LMDBTxnQueue struct {
 	mt              *MetricsTracker
 	db              lmdb.DBI
-	env             *lmdb.Env
+	store           *LmdbEmbed
 	err             error
 	opsQueue        []func(*lmdb.Txn) error
 	maxBatchSize    int
@@ -33,8 +32,7 @@ type LMDBTxnQueue struct {
 // NewTxnQueue returns an initialized LMDBTxnQueue for Batch API queuing and commit.
 func (l *LmdbEmbed) NewTxnQueue(maxBatchSize int) *LMDBTxnQueue {
 	return &LMDBTxnQueue{
-		env:          l.env,
-		db:           l.dataDB,
+		store:        l,
 		maxBatchSize: maxBatchSize,
 		mt:           l.mt,
 		opsQueue:     make([]func(*lmdb.Txn) error, 0, maxBatchSize),
@@ -344,30 +342,19 @@ func (lq *LMDBTxnQueue) flushBatch() error {
 		return lq.err
 	}
 
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	startTime := time.Now()
 
-	txn, err := lq.env.BeginTxn(nil, 0)
-	if err != nil {
-		return err
-	}
-
-	for _, op := range lq.opsQueue {
-		if err := op(txn); err != nil {
-			lq.err = err
-			break
+	err := lq.store.update(func(txn *lmdb.Txn) error {
+		// Queues can outlive a restore; resolve the DBI while the current env is locked.
+		lq.db = lq.store.dataDB
+		for _, op := range lq.opsQueue {
+			if err := op(txn); err != nil {
+				return err
+			}
 		}
-	}
-
-	if lq.err != nil {
-		txn.Abort()
-		return lq.err
-	}
-
-	// no errors occurred commit txn
-	err = txn.Commit()
+		return nil
+	})
+	lq.err = err
 
 	if lq.err == nil {
 		lq.mt.RecordFlush(len(lq.opsQueue), startTime)

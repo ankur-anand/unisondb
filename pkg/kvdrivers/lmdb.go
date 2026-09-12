@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/PowerDNS/lmdb-go/lmdb"
@@ -20,6 +21,8 @@ var _ unifiedStorage = (*LmdbEmbed)(nil)
 // LmdbEmbed stores an initialized lmdb environment.
 // http://www.lmdb.tech/doc/group__mdb.html
 type LmdbEmbed struct {
+	// mu keeps the environment and its DBIs alive for the duration of each operation.
+	mu        sync.RWMutex
 	env       *lmdb.Env
 	namespace []byte
 	dataDB    lmdb.DBI
@@ -105,19 +108,43 @@ func NewLmdb(path string, conf Config) (*LmdbEmbed, error) {
 		namespace: []byte(conf.Namespace), mt: mt}, nil
 }
 
+func (l *LmdbEmbed) withEnv(fn func(*lmdb.Env) error) error {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	if l.env == nil {
+		return ErrDatabaseClosed
+	}
+	return fn(l.env)
+}
+
+func (l *LmdbEmbed) update(fn lmdb.TxnOp) error {
+	return l.withEnv(func(env *lmdb.Env) error { return env.Update(fn) })
+}
+
+func (l *LmdbEmbed) view(fn lmdb.TxnOp) error {
+	return l.withEnv(func(env *lmdb.Env) error { return env.View(fn) })
+}
+
 // FSync Call the underlying Fsync.
 func (l *LmdbEmbed) FSync() error {
-	return l.env.Sync(true)
+	return l.withEnv(func(env *lmdb.Env) error { return env.Sync(true) })
 }
 
 // Close the underlying lmdb env.
 func (l *LmdbEmbed) Close() error {
-	return l.env.Close()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.env == nil {
+		return nil
+	}
+	err := l.env.Close()
+	l.env = nil
+	return err
 }
 
 // SetKV associates a value with a key within a specific namespace.
 func (l *LmdbEmbed) SetKV(key []byte, value []byte) error {
-	return l.env.Update(func(txn *lmdb.Txn) error {
+	return l.update(func(txn *lmdb.Txn) error {
 		typedKey := KeyKV(key)
 		err := txn.Put(l.dataDB, typedKey, value, 0)
 		if err != nil {
@@ -133,7 +160,7 @@ func (l *LmdbEmbed) BatchSetKV(keys [][]byte, values [][]byte) error {
 		return ErrInvalidArguments
 	}
 
-	return l.env.Update(func(txn *lmdb.Txn) error {
+	return l.update(func(txn *lmdb.Txn) error {
 		for i, key := range keys {
 			typedKey := KeyKV(key)
 			if err := txn.Put(l.dataDB, typedKey, values[i], 0); err != nil {
@@ -157,7 +184,7 @@ func (l *LmdbEmbed) SetLobChunks(key []byte, chunks [][]byte, checksum uint32) e
 	binary.LittleEndian.PutUint32(metaData[1:], uint32(len(chunks)))
 	binary.LittleEndian.PutUint32(metaData[5:], checksum)
 
-	return l.env.Update(func(txn *lmdb.Txn) error {
+	return l.update(func(txn *lmdb.Txn) error {
 		// existing chunks and delete them
 		storedValue, err := txn.Get(l.dataDB, typedKey)
 		if err == nil && len(storedValue) > 0 && storedValue[0] == chunkedValue {
@@ -199,7 +226,7 @@ func (l *LmdbEmbed) BatchSetCells(rowKeys [][]byte, columnEntriesPerRow []map[st
 		return ErrInvalidArguments
 	}
 
-	err := l.env.Update(func(tx *lmdb.Txn) error {
+	err := l.update(func(tx *lmdb.Txn) error {
 		for i, rowKey := range rowKeys {
 			columnEntries := columnEntriesPerRow[i]
 			if len(columnEntries) == 0 {
@@ -224,7 +251,7 @@ func (l *LmdbEmbed) BatchDeleteCells(rowKeys [][]byte, columnEntriesPerRow []map
 		return ErrInvalidArguments
 	}
 
-	err := l.env.Update(func(tx *lmdb.Txn) error {
+	err := l.update(func(tx *lmdb.Txn) error {
 		for i, rowKey := range rowKeys {
 			columnEntries := columnEntriesPerRow[i]
 			if len(columnEntries) == 0 {
@@ -254,7 +281,7 @@ func (l *LmdbEmbed) BatchDeleteRows(rowKeys [][]byte) (int, error) {
 
 	columnsDeleted := 0
 
-	err := l.env.Update(func(tx *lmdb.Txn) error {
+	err := l.update(func(tx *lmdb.Txn) error {
 		c, err := tx.OpenCursor(l.dataDB)
 		if err != nil {
 			return err
@@ -283,7 +310,7 @@ func (l *LmdbEmbed) BatchDeleteRows(rowKeys [][]byte) (int, error) {
 
 			if err != nil {
 				if lmdb.IsNotFound(err) {
-					return nil
+					continue
 				}
 				return err
 			}
@@ -298,7 +325,7 @@ func (l *LmdbEmbed) BatchDeleteRows(rowKeys [][]byte) (int, error) {
 func (l *LmdbEmbed) DeleteKV(key []byte) error {
 	typedKey := KeyKV(key)
 
-	return l.env.Update(func(txn *lmdb.Txn) error {
+	return l.update(func(txn *lmdb.Txn) error {
 		err := txn.Del(l.dataDB, typedKey, nil)
 		if err != nil {
 			if lmdb.IsNotFound(err) {
@@ -316,7 +343,7 @@ func (l *LmdbEmbed) BatchDeleteKV(keys [][]byte) error {
 		return nil
 	}
 
-	return l.env.Update(func(txn *lmdb.Txn) error {
+	return l.update(func(txn *lmdb.Txn) error {
 		for _, key := range keys {
 			typedKey := KeyKV(key)
 			err := txn.Del(l.dataDB, typedKey, nil)
@@ -338,7 +365,7 @@ func (l *LmdbEmbed) BatchDeleteLobChunks(keys [][]byte) error {
 		return nil
 	}
 
-	return l.env.Update(func(txn *lmdb.Txn) error {
+	return l.update(func(txn *lmdb.Txn) error {
 		for _, key := range keys {
 			typedKey := KeyBlobChunk(key, 0)
 			storedValue, err := txn.Get(l.dataDB, typedKey)
@@ -386,7 +413,7 @@ func (l *LmdbEmbed) GetKV(key []byte) ([]byte, error) {
 	typedKey := KeyKV(key)
 	startTime := time.Now()
 	var value []byte
-	err := l.env.View(func(txn *lmdb.Txn) error {
+	err := l.view(func(txn *lmdb.Txn) error {
 		storedValue, err := txn.Get(l.dataDB, typedKey)
 		if err != nil {
 			if lmdb.IsNotFound(err) {
@@ -410,7 +437,7 @@ func (l *LmdbEmbed) GetLOBChunks(key []byte) ([][]byte, error) {
 	startTime := time.Now()
 	var value [][]byte
 
-	err := l.env.View(func(txn *lmdb.Txn) error {
+	err := l.view(func(txn *lmdb.Txn) error {
 		storedValue, err := txn.Get(l.dataDB, typedKey)
 		if err != nil {
 			if lmdb.IsNotFound(err) {
@@ -449,7 +476,7 @@ func (l *LmdbEmbed) GetLOBChunks(key []byte) ([][]byte, error) {
 // GetCell retrieves the value of a single cell (row, column) from the wide-column store.
 func (l *LmdbEmbed) GetCell(rowKey []byte, columnName string) ([]byte, error) {
 	var value []byte
-	err := l.env.View(func(txn *lmdb.Txn) error {
+	err := l.view(func(txn *lmdb.Txn) error {
 		key := KeyColumn(rowKey, unsafeStringToBytes(columnName))
 		gotValue, err := txn.Get(l.dataDB, key)
 		if err != nil {
@@ -468,7 +495,7 @@ func (l *LmdbEmbed) GetCell(rowKey []byte, columnName string) ([]byte, error) {
 // GetCells fetches the values of multiple columns (cells) from a given row.
 func (l *LmdbEmbed) GetCells(rowKey []byte, columns []string) (map[string][]byte, error) {
 	result := make(map[string][]byte, len(columns))
-	err := l.env.View(func(txn *lmdb.Txn) error {
+	err := l.view(func(txn *lmdb.Txn) error {
 		for _, column := range columns {
 			key := KeyColumn(rowKey, unsafeStringToBytes(column))
 			gotValue, err := txn.Get(l.dataDB, key)
@@ -500,7 +527,7 @@ func (l *LmdbEmbed) ScanRowCells(rowKey []byte, filter func(columnKey []byte) bo
 
 	var entries map[string][]byte
 
-	err := l.env.View(func(txn *lmdb.Txn) error {
+	err := l.view(func(txn *lmdb.Txn) error {
 		tmp := make(map[string][]byte)
 		if err := l.getColumns(txn, prefix, filter, tmp); err != nil {
 			return err
@@ -584,7 +611,7 @@ func (l *LmdbEmbed) Snapshot(w io.Writer) error {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	if err := l.env.Copy(tmpDir); err != nil {
+	if err := l.withEnv(func(env *lmdb.Env) error { return env.Copy(tmpDir) }); err != nil {
 		return fmt.Errorf("lmdb env copy: %w", err)
 	}
 
@@ -636,6 +663,12 @@ func (l *LmdbEmbed) Restore(r io.Reader) error {
 	}
 	defer os.Remove(tmpPath)
 
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.env == nil {
+		return ErrDatabaseClosed
+	}
+
 	if err := l.swapInSnapshot(tmpPath); err != nil {
 		return err
 	}
@@ -685,7 +718,9 @@ func (l *LmdbEmbed) writeSnapshotToTemp(r io.Reader) (string, error) {
 }
 
 func (l *LmdbEmbed) swapInSnapshot(tmpPath string) error {
-	if err := l.env.Close(); err != nil {
+	env := l.env
+	l.env = nil
+	if err := env.Close(); err != nil {
 		return fmt.Errorf("restore: close env: %w", err)
 	}
 
@@ -744,14 +779,14 @@ func (l *LmdbEmbed) reopenEnvAndDBIs() (*lmdb.Env, lmdb.DBI, lmdb.DBI, error) {
 }
 
 func (l *LmdbEmbed) StoreMetadata(key []byte, value []byte) error {
-	return l.env.Update(func(txn *lmdb.Txn) error {
+	return l.update(func(txn *lmdb.Txn) error {
 		return txn.Put(l.metaDB, key, value, 0)
 	})
 }
 
 func (l *LmdbEmbed) RetrieveMetadata(key []byte) ([]byte, error) {
 	var value []byte
-	err := l.env.View(func(txn *lmdb.Txn) error {
+	err := l.view(func(txn *lmdb.Txn) error {
 		data, err := txn.Get(l.metaDB, key)
 		if lmdb.IsNotFound(err) {
 			return ErrKeyNotFound
