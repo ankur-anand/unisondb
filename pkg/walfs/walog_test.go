@@ -633,6 +633,7 @@ func TestReader_NextClosesOlderSegmentReaders(t *testing.T) {
 		walfs.WithBytesPerSync(512),
 	)
 	assert.NoError(t, err)
+	defer walog.Close()
 
 	for i := 0; i < 100; i++ {
 		data := []byte(fmt.Sprintf("entry-%03d", i))
@@ -794,6 +795,9 @@ func TestWALog_CleanupStalePendingSegments(t *testing.T) {
 	wal.MarkSegmentsForDeletion()
 
 	deletionQueued := wal.QueuedSegmentsForDeletion()
+	for _, seg := range deletionQueued {
+		require.NoError(t, seg.Remove())
+	}
 	wal.CleanupStalePendingSegments()
 
 	for segID := range deletionQueued {
@@ -3389,6 +3393,9 @@ func TestWALog_Bounds_UpdateOnPendingDeletionCleanup(t *testing.T) {
 
 	wal.MarkSegmentsForDeletion()
 	require.NotEmpty(t, wal.QueuedSegmentsForDeletion())
+	for _, seg := range wal.QueuedSegmentsForDeletion() {
+		require.NoError(t, seg.Remove())
+	}
 	wal.CleanupStalePendingSegments()
 
 	first, last := wal.GetBounds()

@@ -239,6 +239,7 @@ type Segment struct {
 
 	isSealed       atomic.Bool
 	inMemorySealed atomic.Bool
+	lifecycleMu    sync.Mutex // serializes sealing, truncation and close with index flushes
 	writeMu        sync.RWMutex
 	syncOption     MsyncOption
 	dirSyncer      DirectorySyncer
@@ -336,13 +337,23 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 	if s.mmapSize > maxSegmentSize {
 		return nil, fmt.Errorf("segment size exceeds 4 GiB limit: %d bytes", s.mmapSize)
 	}
+	if s.mmapSize < segmentHeaderSize {
+		return nil, fmt.Errorf("segment size is smaller than header: %d bytes", s.mmapSize)
+	}
 
-	fd, mmapData, err := s.prepareSegmentFile(path)
+	fd, mmapData, err := s.prepareSegmentFile(path, isNew)
 	if err != nil {
 		return nil, err
 	}
 	s.fd = fd
 	s.mmapData = mmapData
+	opened := false
+	defer func() {
+		if !opened {
+			_ = mmapData.Unmap()
+			_ = fd.Close()
+		}
+	}()
 
 	offset := int64(segmentHeaderSize)
 	if isNew {
@@ -353,6 +364,10 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		meta, err := decodeSegmentHeader(mmapData[:segmentHeaderSize])
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode metadata: %w", err)
+		}
+
+		if IsSealed(meta.Flags) && (meta.WriteOffset < segmentHeaderSize || meta.WriteOffset > s.mmapSize) {
+			return nil, fmt.Errorf("segment write offset %d outside file size %d", meta.WriteOffset, s.mmapSize)
 		}
 
 		storedMarker := binary.LittleEndian.Uint32(mmapData[52:56])
@@ -381,11 +396,10 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 	}
 
 	if err := s.setupIndexFile(dirPath, extName, isNew); err != nil {
-		_ = mmapData.Unmap()
-		_ = fd.Close()
 		return nil, err
 	}
 
+	opened = true
 	return s, nil
 }
 
@@ -410,47 +424,38 @@ func (seg *Segment) setupIndexFile(dirPath, extName string, isNew bool) error {
 }
 
 func (seg *Segment) loadIndexFromFile() error {
-	file, err := os.Open(seg.indexPath)
+	data, err := os.ReadFile(seg.indexPath)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
-
-	info, err := file.Stat()
-	if err != nil {
-		return fmt.Errorf("stat index: %w", err)
+	count := int64(len(data) / indexEntrySize)
+	if len(data)%indexEntrySize != 0 || count != int64(binary.LittleEndian.Uint64(seg.mmapData[32:40])) {
+		return fmt.Errorf("corrupt index file size: %d", len(data))
 	}
-	if info.Size()%indexEntrySize != 0 {
-		return fmt.Errorf("corrupt index file size: %d", info.Size())
+	entries := make([]segmentIndexEntry, 0, count)
+	offset := int64(segmentHeaderSize)
+	for i := int64(0); i < count; i++ {
+		buf := data[i*indexEntrySize : (i+1)*indexEntrySize]
+		entry := segmentIndexEntry{Offset: binary.LittleEndian.Uint64(buf[:8]), Length: binary.LittleEndian.Uint32(buf[8:12])}
+		end := offset + recordOverhead(int64(entry.Length))
+		if entry.Offset != uint64(offset) || end > seg.writeOffset.Load() || end > seg.mmapSize || binary.LittleEndian.Uint32(seg.mmapData[offset+4:offset+8]) != entry.Length {
+			return fmt.Errorf("invalid index entry %d", i)
+		}
+		entries = append(entries, entry)
+		offset = end
 	}
-
-	count := int(info.Size() / indexEntrySize)
-	seg.indexEntries = make([]segmentIndexEntry, 0, count)
-	buf := make([]byte, indexEntrySize)
-	firstIdx := seg.firstLogIndex
-	indexBuild := seg.logIndex != nil && firstIdx > 0
-	var idx uint64
-	for i := 0; i < count; i++ {
-		if _, err := io.ReadFull(file, buf); err != nil {
-			return fmt.Errorf("read index: %w", err)
+	if offset != seg.writeOffset.Load() {
+		return errors.New("index does not cover segment contents")
+	}
+	// Publish only a fully validated sidecar; failed loads must not leave stale
+	// positions in the shared index before the fallback scan rebuilds it.
+	if seg.logIndex != nil && seg.firstLogIndex > 0 {
+		for i, entry := range entries {
+			seg.logIndex.Set(seg.firstLogIndex+uint64(i), RecordPosition{SegmentID: seg.id, Offset: int64(entry.Offset)})
 		}
-		offset := binary.LittleEndian.Uint64(buf[0:8])
-
-		if !seg.clearIndexOnFlush {
-			entry := segmentIndexEntry{
-				Offset: offset,
-				Length: binary.LittleEndian.Uint32(buf[8:12]),
-			}
-			seg.indexEntries = append(seg.indexEntries, entry)
-		}
-
-		if indexBuild {
-			seg.logIndex.Set(firstIdx+idx, RecordPosition{
-				SegmentID: seg.id,
-				Offset:    int64(offset),
-			})
-			idx++
-		}
+	}
+	if !seg.clearIndexOnFlush {
+		seg.indexEntries = entries
 	}
 	return nil
 }
@@ -543,6 +548,8 @@ func (seg *Segment) appendIndexEntry(offset int64, length uint32) {
 
 // IndexEntries returns a copy of the index metadata for this segment.
 func (seg *Segment) IndexEntries() []SegmentIndexEntry {
+	seg.writeMu.RLock()
+	defer seg.writeMu.RUnlock()
 	entries := make([]SegmentIndexEntry, len(seg.indexEntries))
 	for i, entry := range seg.indexEntries {
 		entries[i] = SegmentIndexEntry{
@@ -559,6 +566,8 @@ func (seg *Segment) IndexEntries() []SegmentIndexEntry {
 // Note: After calling this, IndexEntries() will return an empty slice.
 // Only sealed segments can be cleared; active segments are ignored.
 func (seg *Segment) ClearIndexFromMemory() {
+	seg.writeMu.Lock()
+	defer seg.writeMu.Unlock()
 	if !seg.isSealed.Load() {
 		return
 	}
@@ -580,7 +589,7 @@ func (seg *Segment) flushIndexAsync() {
 		}
 		// clear in-memory index after successful flush if option is enabled
 		if clearOnFlush {
-			seg.indexEntries = nil
+			seg.ClearIndexFromMemory()
 		}
 	}(seg.indexPath)
 }
@@ -601,11 +610,17 @@ func IsActive(flags uint32) bool {
 
 // SealSegment seals the given segment.
 func (seg *Segment) SealSegment() error {
+	seg.lifecycleMu.Lock()
+	defer seg.lifecycleMu.Unlock()
 	seg.writeMu.Lock()
 	defer seg.writeMu.Unlock()
 
 	if seg.closed.Load() {
 		return ErrClosed
+	}
+
+	if seg.isSealed.Load() {
+		return nil
 	}
 
 	mmapData := seg.mmapData
@@ -652,18 +667,36 @@ func isNewSegment(path string) (bool, error) {
 	return false, nil
 }
 
-func (seg *Segment) prepareSegmentFile(path string) (*os.File, mmap.MMap, error) {
-	fd, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, fileModePerm)
+func (seg *Segment) prepareSegmentFile(path string, isNew bool) (*os.File, mmap.MMap, error) {
+	flags := os.O_RDWR
+	if isNew {
+		flags |= os.O_CREATE | os.O_EXCL
+	}
+	fd, err := os.OpenFile(path, flags, fileModePerm)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := fd.Truncate(seg.mmapSize); err != nil {
-		fd.Close()
-		return nil, nil, fmt.Errorf("truncate error: %w", err)
+	if isNew {
+		if err := fd.Truncate(seg.mmapSize); err != nil {
+			_ = fd.Close()
+			return nil, nil, fmt.Errorf("allocate segment: %w", err)
+		}
+	} else {
+		info, err := fd.Stat()
+		if err != nil {
+			_ = fd.Close()
+			return nil, nil, err
+		}
+		if info.Size() < segmentHeaderSize || info.Size() > maxSegmentSize {
+			_ = fd.Close()
+			return nil, nil, fmt.Errorf("invalid existing segment size: %d", info.Size())
+		}
+		// Configuration determines the capacity of NEW segments only.
+		seg.mmapSize = info.Size()
 	}
 	mmapData, err := mmap.Map(fd, mmap.RDWR, 0)
 	if err != nil {
-		fd.Close()
+		_ = fd.Close()
 		return nil, nil, fmt.Errorf("mmap error: %w", err)
 	}
 	return fd, mmapData, nil
@@ -1063,6 +1096,8 @@ func (seg *Segment) WillExceed(dataSize int) bool {
 // Close gracefully shuts down the segment by waiting for all active readers to complete.
 // It unmap the segment file and closes file descriptor.
 func (seg *Segment) Close() error {
+	seg.lifecycleMu.Lock()
+	defer seg.lifecycleMu.Unlock()
 	if !seg.state.CompareAndSwap(StateOpen, StateClosing) {
 		return nil
 	}
@@ -1336,68 +1371,80 @@ func SegmentIndexFileName(dirPath string, extName string, id SegmentID) string {
 // All entries after the given log index will be discarded.
 // If the log index is not found in this segment, it returns an error.
 func (seg *Segment) TruncateTo(logIndex uint64) error {
+	seg.lifecycleMu.Lock()
+	defer seg.lifecycleMu.Unlock()
+	seg.WaitForIndexFlush()
 	seg.writeMu.Lock()
 	defer seg.writeMu.Unlock()
 
+	entries, err := seg.prepareTruncateLocked(logIndex)
+	if err != nil {
+		return err
+	}
+	return seg.applyTruncate(entries)
+}
+
+// prepareTruncateLocked validates the retained prefix without mutating storage or
+// the shared LSN index. The segment bytes are authoritative; the index is a cache.
+func (seg *Segment) prepareTruncateLocked(logIndex uint64) ([]segmentIndexEntry, error) {
 	if seg.closed.Load() {
-		return ErrClosed
+		return nil, ErrClosed
 	}
-
-	if len(seg.indexEntries) == 0 && seg.writeOffset.Load() <= int64(segmentHeaderSize) {
-		return fmt.Errorf("segment is empty, cannot truncate to %d", logIndex)
+	if seg.writeOffset.Load() <= segmentHeaderSize {
+		return nil, fmt.Errorf("segment is empty, cannot truncate to %d", logIndex)
 	}
-
 	if logIndex < seg.firstLogIndex {
-		return fmt.Errorf("log index %d is before segment start %d", logIndex, seg.firstLogIndex)
+		return nil, fmt.Errorf("log index %d is before segment start %d", logIndex, seg.firstLogIndex)
 	}
-
-	relativeIndex := int(logIndex - seg.firstLogIndex)
-	if relativeIndex >= len(seg.indexEntries) {
-		return fmt.Errorf("log index %d not found in segment index (max relative %d)", logIndex, len(seg.indexEntries)-1)
+	count := logIndex - seg.firstLogIndex + 1
+	if count == 0 || count > uint64((seg.writeOffset.Load()-segmentHeaderSize)/recordOverhead(0)) {
+		return nil, fmt.Errorf("log index %d not found in segment index", logIndex)
 	}
+	// Truncation is a cold path. Scanning the retained prefix also detects stale
+	// or corrupt sidecars, and works when the sealed segment's cache was cleared.
+	var entries []segmentIndexEntry
+	seg.iterateValidEntries(func(offset int64, length uint32) bool {
+		if offset+recordOverhead(int64(length)) > seg.writeOffset.Load() {
+			return false
+		}
+		entries = append(entries, segmentIndexEntry{Offset: uint64(offset), Length: length})
+		return uint64(len(entries)) < count
+	})
+	if uint64(len(entries)) != count {
+		return nil, fmt.Errorf("log index %d not found in segment index: invalid retained prefix", logIndex)
+	}
+	return entries, nil
+}
 
-	targetEntry := seg.indexEntries[relativeIndex]
-
-	rawSize := int64(recordHeaderSize) + int64(targetEntry.Length) + int64(recordTrailerMarkerSize)
-	entrySize := alignUp(rawSize)
-
-	oldWriteOffset := seg.writeOffset.Load()
-	newWriteOffset := int64(targetEntry.Offset) + entrySize
-	seg.writeOffset.Store(newWriteOffset)
-	seg.indexEntries = seg.indexEntries[:relativeIndex+1]
-
-	newEntryCount := int64(relativeIndex + 1)
-
-	seg.applyTruncateHeader(newWriteOffset, newEntryCount)
-	seg.zeroDiscardedTail(newWriteOffset, oldWriteOffset)
-
-	if err := seg.MSync(); err != nil {
+func (seg *Segment) applyTruncate(entries []segmentIndexEntry) error {
+	last := entries[len(entries)-1]
+	end := int64(last.Offset) + recordOverhead(int64(last.Length))
+	// Clear the entire unused tail, including bytes beyond a stale write offset.
+	seg.zeroDiscardedTail(end, seg.mmapSize)
+	seg.applyTruncateHeader(end, int64(len(entries)))
+	seg.writeOffset.Store(end)
+	seg.indexEntries = entries
+	if err := seg.Sync(); err != nil {
 		return fmt.Errorf("failed to sync truncated segment: %w", err)
 	}
-
-	if err := seg.flushIndexToFile(seg.indexEntries); err != nil {
-		return fmt.Errorf("failed to flush truncated index: %w", err)
-	}
-
-	return nil
+	return seg.flushIndexToFile(entries)
 }
 
 func (seg *Segment) applyTruncateHeader(newWriteOffset int64, newEntryCount int64) {
-	binary.LittleEndian.PutUint64(seg.mmapData[24:32], uint64(newWriteOffset))
-	binary.LittleEndian.PutUint64(seg.mmapData[32:40], uint64(newEntryCount))
-	binary.LittleEndian.PutUint64(seg.mmapData[16:24], uint64(time.Now().UnixNano()))
+	setTruncateHeader(seg.mmapData, newWriteOffset, newEntryCount)
+	seg.isSealed.Store(false)
+	seg.inMemorySealed.Store(false)
+}
 
-	flags := binary.LittleEndian.Uint32(seg.mmapData[40:44])
-	if IsSealed(flags) {
-		flags &^= FlagSealed
-		flags |= FlagActive
-		binary.LittleEndian.PutUint32(seg.mmapData[40:44], flags)
-		seg.isSealed.Store(false)
-		seg.inMemorySealed.Store(false)
-	}
-
-	crc := crc32.Checksum(seg.mmapData[0:56], crcTable)
-	binary.LittleEndian.PutUint32(seg.mmapData[56:60], crc)
+func setTruncateHeader(data []byte, end, count int64) {
+	binary.LittleEndian.PutUint64(data[24:32], uint64(end))
+	binary.LittleEndian.PutUint64(data[32:40], uint64(count))
+	binary.LittleEndian.PutUint64(data[16:24], uint64(time.Now().UnixNano()))
+	flags := binary.LittleEndian.Uint32(data[40:44])
+	flags &^= FlagSealed
+	flags |= FlagActive
+	binary.LittleEndian.PutUint32(data[40:44], flags)
+	binary.LittleEndian.PutUint32(data[56:60], crc32.Checksum(data[0:56], crcTable))
 }
 
 func (seg *Segment) zeroDiscardedTail(from, to int64) {
