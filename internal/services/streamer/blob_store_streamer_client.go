@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ankur-anand/unijord/partitionlog"
+	"github.com/ankur-anand/objlog"
 	"github.com/ankur-anand/unisondb/internal/services"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 )
@@ -24,9 +24,9 @@ const (
 )
 
 // BlobStoreStreamerClient implements the relayer.Streamer interface by reading
-// committed WAL records from a partitionlog stream on object storage.
+// committed WAL records from an objlog stream on object storage.
 type BlobStoreStreamerClient struct {
-	log       *partitionlog.Log
+	log       *objlog.Log
 	namespace string
 	wIO       WalIO
 
@@ -41,7 +41,7 @@ type BlobStoreStreamerClient struct {
 // startLSN is the LSN of the last record already applied; tailing resumes
 // from the next record after this LSN — exactly like GrpcStreamerClient.
 func NewBlobStoreStreamerClient(
-	log *partitionlog.Log,
+	log *objlog.Log,
 	namespace string,
 	wIO WalIO,
 	startLSN uint64,
@@ -60,15 +60,15 @@ func NewBlobStoreStreamerClient(
 	}
 }
 
-// GetLatestLSN reads the latest committed LSN from partitionlog catalog head.
+// GetLatestLSN reads the latest committed LSN from objlog catalog head.
 func (c *BlobStoreStreamerClient) GetLatestLSN(ctx context.Context) (uint64, error) {
 	if c.log == nil {
-		return 0, errors.New("blobstore client: nil partitionlog")
+		return 0, errors.New("blobstore client: nil objlog")
 	}
-	result, err := c.log.Reader().Partition(blobStorePartition).Read(ctx, partitionlog.ReadRequest{
+	result, err := c.log.Reader().Partition(blobStorePartition).Read(ctx, objlog.ReadRequest{
 		StartLSN:  math.MaxUint64,
 		Limit:     1,
-		Freshness: partitionlog.FreshnessLatest,
+		Freshness: objlog.FreshnessLatest,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("blobstore client: read head: %w", err)
@@ -76,7 +76,7 @@ func (c *BlobStoreStreamerClient) GetLatestLSN(ctx context.Context) (uint64, err
 	return previousLSN(result.Head.NextLSN), nil
 }
 
-// StreamWAL periodically checks the partitionlog head, reads newly committed
+// StreamWAL periodically checks the objlog head, reads newly committed
 // WAL records, and applies them via the configured WalIO.
 func (c *BlobStoreStreamerClient) StreamWAL(ctx context.Context) error {
 	var retryCount int
@@ -106,7 +106,7 @@ func (c *BlobStoreStreamerClient) StreamWAL(ctx context.Context) error {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
-		var expired partitionlog.LSNExpiredError
+		var expired objlog.LSNExpiredError
 		if errors.As(err, &expired) {
 			clientWalStreamErrTotal.WithLabelValues(c.namespace, blobStoreLabel, "lsn_truncated").Inc()
 			return fmt.Errorf("LSN %d truncated, resync required: %w", c.currentLSN(), err)
@@ -162,10 +162,10 @@ func (c *BlobStoreStreamerClient) applyCommittedRange(ctx context.Context, lates
 	partition := c.log.Reader().Partition(blobStorePartition)
 	for c.currentLSN() < latestLSN {
 		startLSN := c.currentLSN() + 1
-		result, err := partition.Read(ctx, partitionlog.ReadRequest{
+		result, err := partition.Read(ctx, objlog.ReadRequest{
 			StartLSN:  startLSN,
 			Limit:     batchSize,
-			Freshness: partitionlog.FreshnessCached,
+			Freshness: objlog.FreshnessCached,
 		})
 		if err != nil {
 			return fmt.Errorf("blobstore client: read committed range: %w", err)

@@ -6,7 +6,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1
 	github.com/PowerDNS/lmdb-go v1.9.3
 	github.com/anishathalye/porcupine v1.0.3
-	github.com/ankur-anand/unijord v0.0.0-20260622125045-3c106ca832c4
+	github.com/ankur-anand/objlog v0.0.0-20260831033720-0eb164c2159b
 	github.com/ankur-anand/unisondb/plugin/notifier/zeromq v0.0.0-00010101000000-000000000000
 	github.com/aws/aws-sdk-go-v2/config v1.32.2
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.2

@@ -120,7 +120,7 @@ type StreamerType string
 const (
 	// StreamerTypeGRPC uses gRPC streaming (default).
 	StreamerTypeGRPC StreamerType = "grpc"
-	// StreamerTypeBlobStore uses partitionlog-backed object-store streaming.
+	// StreamerTypeBlobStore uses objlog-backed object-store streaming.
 	StreamerTypeBlobStore StreamerType = "blobstore"
 )
 

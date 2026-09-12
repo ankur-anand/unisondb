@@ -181,9 +181,9 @@ func (r *RelayerService) setupBlobStoreRelayer(
 		return nil, fmt.Errorf("blobstore bucket_url not configured for namespace %s", ns)
 	}
 
-	log, err := streamer.OpenNamespacePartitionLog(ctx, bsCfg.BucketURL, bsCfg.Prefix, ns)
+	log, err := streamer.OpenNamespaceObjLog(ctx, bsCfg.BucketURL, bsCfg.Prefix, ns)
 	if err != nil {
-		return nil, fmt.Errorf("open partitionlog: %w", err)
+		return nil, fmt.Errorf("open objlog: %w", err)
 	}
 
 	handler := dbkernel.NewReplicaWALHandler(engine)

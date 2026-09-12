@@ -10,13 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ankur-anand/unijord/partitionlog"
-	segmentsink "github.com/ankur-anand/unijord/partitionlog/blob/sink"
-	"github.com/ankur-anand/unijord/partitionlog/blob/sink/multipart"
-	"github.com/ankur-anand/unijord/partitionlog/catalog"
-	plwriter "github.com/ankur-anand/unijord/partitionlog/writer"
+	"github.com/ankur-anand/objlog"
 	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
+	"github.com/ankur-anand/unisondb/internal/testutil/objlogtest"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	v1 "github.com/ankur-anand/unisondb/schemas/proto/gen/go/unisondb/streamer/v1"
 	"github.com/brianvoe/gofakeit/v7"
@@ -43,7 +40,7 @@ func TestBlobStoreStreamer_StreamAndConsume(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	logs := map[string]*partitionlog.Log{namespace: newMemoryPartitionLog(t)}
+	logs := map[string]*objlog.Log{namespace: objlogtest.NewLog(t, nil)}
 	errGrp, gCtx := errgroup.WithContext(ctx)
 
 	cfg := streamer.DefaultBlobStoreStreamerConfig()
@@ -78,7 +75,7 @@ func TestBlobStoreStreamer_NamespaceNotFound(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srv, err := streamer.NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{}, map[string]*partitionlog.Log{}, streamer.DefaultBlobStoreStreamerConfig())
+	srv, err := streamer.NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{}, map[string]*objlog.Log{}, streamer.DefaultBlobStoreStreamerConfig())
 	require.NoError(t, err)
 	defer srv.Close()
 
@@ -88,7 +85,7 @@ func TestBlobStoreStreamer_NamespaceNotFound(t *testing.T) {
 }
 
 func TestBlobStoreStreamerClient_EmptyStore_GetLatestLSN(t *testing.T) {
-	client := streamer.NewBlobStoreStreamerClient(newMemoryPartitionLog(t), "ns", &noopWalIO{}, 0, 0)
+	client := streamer.NewBlobStoreStreamerClient(objlogtest.NewLog(t, nil), "ns", &noopWalIO{}, 0, 0)
 
 	lsn, err := client.GetLatestLSN(context.Background())
 	assert.NoError(t, err)
@@ -121,7 +118,7 @@ func TestBlobStoreStreamer_E2E_Replication(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	logs := map[string]*partitionlog.Log{namespace: newMemoryPartitionLog(t)}
+	logs := map[string]*objlog.Log{namespace: objlogtest.NewLog(t, nil)}
 	errGrp, gCtx := errgroup.WithContext(ctx)
 
 	cfg := streamer.DefaultBlobStoreStreamerConfig()
@@ -171,11 +168,11 @@ func TestBlobStoreStreamer_NamespaceIsolation(t *testing.T) {
 	recordCounts := map[string]int{"alpha": 7, "beta": 11}
 
 	engines := make(map[string]*dbkernel.Engine, len(namespaces))
-	logs := make(map[string]*partitionlog.Log, len(namespaces))
+	logs := make(map[string]*objlog.Log, len(namespaces))
 	for _, namespace := range namespaces {
 		engine := createNamedEngine(t, namespace)
 		engines[namespace] = engine
-		logs[namespace] = newMemoryPartitionLog(t)
+		logs[namespace] = objlogtest.NewLog(t, nil)
 		for i := 0; i < recordCounts[namespace]; i++ {
 			require.NoError(t, engine.PutKV([]byte(gofakeit.UUID()), []byte(gofakeit.Sentence(3))))
 		}
@@ -222,8 +219,8 @@ func TestBlobStoreStreamer_CheckpointBootstrap(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	log := newMemoryPartitionLog(t)
-	logs := map[string]*partitionlog.Log{namespace: log}
+	log := objlogtest.NewLog(t, nil)
+	logs := map[string]*objlog.Log{namespace: log}
 	errGrp, gCtx := errgroup.WithContext(ctx)
 
 	cfg := streamer.DefaultBlobStoreStreamerConfig()
@@ -254,12 +251,12 @@ func TestBlobStoreStreamer_CheckpointBootstrap(t *testing.T) {
 	_ = client.StreamWAL(streamCtx)
 	require.Equal(t, 5, rw.count())
 
-	_, err = log.Reader().Partition(0).Read(context.Background(), partitionlog.ReadRequest{
+	_, err = log.Reader().Partition(0).Read(context.Background(), objlog.ReadRequest{
 		StartLSN:  0,
 		Limit:     1,
-		Freshness: partitionlog.FreshnessLatest,
+		Freshness: objlog.FreshnessLatest,
 	})
-	var expired partitionlog.LSNExpiredError
+	var expired objlog.LSNExpiredError
 	assert.ErrorAs(t, err, &expired)
 
 	cancel()
@@ -275,12 +272,12 @@ func TestBlobStoreStreamer_LSNOrdering(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	log := newMemoryPartitionLog(t)
+	log := objlogtest.NewLog(t, nil)
 	errGrp, gCtx := errgroup.WithContext(ctx)
 	cfg := streamer.DefaultBlobStoreStreamerConfig()
 	cfg.FlushInterval = 50 * time.Millisecond
 
-	srv, err := streamer.NewBlobStoreStreamer(gCtx, errGrp, map[string]*dbkernel.Engine{namespace: engine}, map[string]*partitionlog.Log{namespace: log}, cfg)
+	srv, err := streamer.NewBlobStoreStreamer(gCtx, errGrp, map[string]*dbkernel.Engine{namespace: engine}, map[string]*objlog.Log{namespace: log}, cfg)
 	require.NoError(t, err)
 	defer srv.Close()
 
@@ -369,52 +366,4 @@ func createNamedEngine(t *testing.T, namespace string) *dbkernel.Engine {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = engine.Close(context.Background()) })
 	return engine
-}
-
-func newMemoryPartitionLog(t *testing.T) *partitionlog.Log {
-	t.Helper()
-	objects := multipart.NewMemoryStore()
-	sinkFactory, err := segmentsink.New(objects, segmentsink.Options{})
-	require.NoError(t, err)
-	store := &testPartitionLogStore{
-		catalog: catalog.NewMemory(),
-		sink:    sinkFactory,
-		source:  &testSegmentStore{objects: objects},
-	}
-	log, err := partitionlog.Open(partitionlog.Options{Store: store})
-	require.NoError(t, err)
-	return log
-}
-
-type testPartitionLogStore struct {
-	catalog *catalog.MemoryCatalog
-	sink    *segmentsink.Factory
-	source  *testSegmentStore
-}
-
-func (s *testPartitionLogStore) WriterManager() catalog.WriterManager { return s.catalog }
-func (s *testPartitionLogStore) ReaderCatalog() catalog.Reader        { return s.catalog }
-func (s *testPartitionLogStore) SinkFactory() plwriter.SinkFactory    { return s.sink }
-func (s *testPartitionLogStore) SegmentStore() partitionlog.SegmentStore {
-	return s.source
-}
-
-type testSegmentStore struct {
-	objects *multipart.MemoryStore
-}
-
-func (s *testSegmentStore) ReadAt(ctx context.Context, uri string, off uint64, n uint64) ([]byte, error) {
-	body, _, err := s.objects.Read(ctx, uri)
-	if err != nil {
-		return nil, err
-	}
-	if off > uint64(len(body)) {
-		return nil, fmt.Errorf("offset=%d beyond object size=%d", off, len(body))
-	}
-	if n > uint64(len(body))-off {
-		return nil, fmt.Errorf("range offset=%d length=%d beyond object size=%d", off, n, len(body))
-	}
-	start := int(off)
-	end := start + int(n)
-	return append([]byte(nil), body[start:end]...), nil
 }

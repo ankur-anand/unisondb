@@ -2,7 +2,6 @@ package streamer
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -18,10 +17,10 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/container"
-	"github.com/ankur-anand/unijord/partitionlog"
-	plazure "github.com/ankur-anand/unijord/partitionlog/azure"
-	plgcs "github.com/ankur-anand/unijord/partitionlog/gcs"
-	pls3 "github.com/ankur-anand/unijord/partitionlog/s3"
+	"github.com/ankur-anand/objlog"
+	objazure "github.com/ankur-anand/objlog/azure"
+	objgcs "github.com/ankur-anand/objlog/gcs"
+	objs3 "github.com/ankur-anand/objlog/s3"
 	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal"
 	"github.com/ankur-anand/unisondb/pkg/replicator"
@@ -30,6 +29,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/option"
 )
@@ -43,11 +43,11 @@ const (
 )
 
 // BlobStoreStreamer reads WAL records from storage engines and writes them to
-// partitionlog segments on object storage. One namespace maps to one
-// partitionlog stream and partition 0.
+// objlog segments on object storage. One namespace maps to one
+// objlog stream and partition 0.
 type BlobStoreStreamer struct {
 	storageEngines map[string]*dbkernel.Engine
-	namespaceLogs  map[string]*partitionlog.Log
+	namespaceLogs  map[string]*objlog.Log
 	cfg            BlobStoreStreamerConfig
 	errGrp         *errgroup.Group
 	shutdown       chan struct{}
@@ -59,7 +59,7 @@ type BlobStoreStreamer struct {
 // BlobStoreStreamerConfig holds configuration for a BlobStoreStreamer.
 type BlobStoreStreamerConfig struct {
 	// FlushInterval cuts and publishes a non-empty segment after this duration.
-	// Zero uses the default partitionlog batch age.
+	// Zero uses the default objlog batch age.
 	FlushInterval time.Duration
 
 	// BootstrapAfterLSN initializes an empty namespace at LSN+1. Existing object
@@ -67,28 +67,28 @@ type BlobStoreStreamerConfig struct {
 	// is rejected to avoid skipping committed history.
 	BootstrapAfterLSN map[string]uint64
 
-	Batch        partitionlog.BatchPolicy
-	Backpressure partitionlog.BackpressurePolicy
-	Pipeline     partitionlog.WriterPipelineOptions
+	Batch        objlog.BatchPolicy
+	Backpressure objlog.BackpressurePolicy
+	Pipeline     objlog.WriterPipelineOptions
 }
 
-// DefaultBlobStoreStreamerConfig returns defaults for partitionlog-backed blob streaming.
+// DefaultBlobStoreStreamerConfig returns defaults for objlog-backed blob streaming.
 func DefaultBlobStoreStreamerConfig() BlobStoreStreamerConfig {
 	return BlobStoreStreamerConfig{
 		FlushInterval: defaultBlobStoreFlushInterval,
-		Batch: partitionlog.BatchPolicy{
+		Batch: objlog.BatchPolicy{
 			MaxRecords: defaultBlobStoreMaxRecords,
 		},
 	}
 }
 
 // NewBlobStoreStreamer returns an initialised BlobStoreStreamer.
-// namespaceLogs must contain one partitionlog log per namespace.
+// namespaceLogs must contain one objlog log per namespace.
 func NewBlobStoreStreamer(
 	ctx context.Context,
 	errGrp *errgroup.Group,
 	storageEngines map[string]*dbkernel.Engine,
-	namespaceLogs map[string]*partitionlog.Log,
+	namespaceLogs map[string]*objlog.Log,
 	cfg BlobStoreStreamerConfig,
 ) (*BlobStoreStreamer, error) {
 	if ctx != nil {
@@ -109,7 +109,7 @@ func NewBlobStoreStreamer(
 	for namespace := range storageEngines {
 		log, ok := namespaceLogs[namespace]
 		if !ok || log == nil {
-			return nil, fmt.Errorf("blobstore streamer: partitionlog for namespace %q not configured", namespace)
+			return nil, fmt.Errorf("blobstore streamer: objlog for namespace %q not configured", namespace)
 		}
 	}
 
@@ -232,7 +232,7 @@ func (s *BlobStoreStreamer) consumeAndWrite(
 func (s *BlobStoreStreamer) appendRecord(ctx context.Context, nsState *blobStoreNamespaceState, decoded *logrecord.LogRecord, record []byte) error {
 	lsn := decoded.Lsn()
 	timestampMS := nsState.timestampMS(decoded.Hlc())
-	result, err := nsState.writer.Append(ctx, partitionlog.Record{
+	result, err := nsState.writer.Append(ctx, objlog.Record{
 		TimestampMS: timestampMS,
 		Value:       record,
 	})
@@ -241,12 +241,12 @@ func (s *BlobStoreStreamer) appendRecord(ctx context.Context, nsState *blobStore
 	}
 	if result.LSN != lsn {
 		return s.failNamespace(nsState.namespace, nsState,
-			fmt.Errorf("partitionlog assigned lsn=%d for wal lsn=%d", result.LSN, lsn))
+			fmt.Errorf("objlog assigned lsn=%d for wal lsn=%d", result.LSN, lsn))
 	}
 	return nil
 }
 
-// Close shuts down the streamer and flushes active partitionlog writers.
+// Close shuts down the streamer and flushes active objlog writers.
 func (s *BlobStoreStreamer) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -315,7 +315,7 @@ func (s *BlobStoreStreamer) namespaceState(ctx context.Context, namespace string
 func (s *BlobStoreStreamer) openNamespaceState(ctx context.Context, namespace string) (*blobStoreNamespaceState, error) {
 	log, ok := s.namespaceLogs[namespace]
 	if !ok || log == nil {
-		return nil, fmt.Errorf("blobstore streamer: partitionlog for namespace %q not configured", namespace)
+		return nil, fmt.Errorf("blobstore streamer: objlog for namespace %q not configured", namespace)
 	}
 
 	bootstrapAfter := s.bootstrapAfterLSN(namespace)
@@ -323,7 +323,7 @@ func (s *BlobStoreStreamer) openNamespaceState(ctx context.Context, namespace st
 		return nil, fmt.Errorf("blobstore streamer: bootstrap_after_lsn exhausted for %q", namespace)
 	}
 	bootstrapNext := bootstrapAfter + 1
-	init, err := log.InitializePartition(ctx, partitionlog.InitializePartition{
+	init, err := log.InitializePartition(ctx, objlog.InitializePartition{
 		Partition: blobStorePartition,
 		NextLSN:   bootstrapNext,
 	})
@@ -335,9 +335,9 @@ func (s *BlobStoreStreamer) openNamespaceState(ctx context.Context, namespace st
 			namespace, init.Head.NextLSN, bootstrapNext)
 	}
 
-	writer, err := log.OpenWriter(ctx, partitionlog.WriterOptions{
+	writer, err := log.OpenWriter(ctx, objlog.WriterOptions{
 		Partition:    blobStorePartition,
-		WriterID:     writerIDForNamespace(namespace),
+		WriterID:     uuid.New(), // Each restart or leadership term needs a fresh writer identity.
 		Batch:        s.cfg.Batch,
 		Backpressure: s.cfg.Backpressure,
 		Pipeline:     s.cfg.Pipeline,
@@ -364,8 +364,8 @@ func (s *BlobStoreStreamer) bootstrapAfterLSN(namespace string) uint64 {
 
 type blobStoreNamespaceState struct {
 	namespace string
-	log       *partitionlog.Log
-	writer    *partitionlog.Writer
+	log       *objlog.Log
+	writer    *objlog.Writer
 	startLSN  uint64
 
 	mu              sync.Mutex
@@ -427,18 +427,11 @@ func previousLSN(nextLSN uint64) uint64 {
 	return nextLSN - 1
 }
 
-func lastTimestampMS(head partitionlog.PartitionHead) int64 {
+func lastTimestampMS(head objlog.PartitionHead) int64 {
 	if last, ok := head.Last(); ok {
 		return last.MaxTimestampMS
 	}
 	return 0
-}
-
-func writerIDForNamespace(namespace string) [16]byte {
-	sum := sha256.Sum256([]byte("unisondb/blobstore/" + namespace))
-	var id [16]byte
-	copy(id[:], sum[:16])
-	return id
 }
 
 func NamespaceBlobStorePrefix(basePrefix, namespace string) string {
@@ -448,50 +441,50 @@ func NamespaceBlobStorePrefix(basePrefix, namespace string) string {
 	return path.Join(basePrefix, namespace)
 }
 
-func OpenNamespacePartitionLog(ctx context.Context, bucketURL, basePrefix, namespace string) (*partitionlog.Log, error) {
-	factory, err := newPartitionLogStoreFactory(ctx, bucketURL, basePrefix)
+func OpenNamespaceObjLog(ctx context.Context, bucketURL, basePrefix, namespace string) (*objlog.Log, error) {
+	factory, err := newObjLogStoreFactory(ctx, bucketURL, basePrefix)
 	if err != nil {
 		return nil, err
 	}
 	return factory.openLog(namespace)
 }
 
-func OpenNamespacePartitionLogStore(ctx context.Context, bucketURL, basePrefix, namespace string) (partitionlog.Store, error) {
-	factory, err := newPartitionLogStoreFactory(ctx, bucketURL, basePrefix)
+func OpenNamespaceObjLogStore(ctx context.Context, bucketURL, basePrefix, namespace string) (objlog.Store, error) {
+	factory, err := newObjLogStoreFactory(ctx, bucketURL, basePrefix)
 	if err != nil {
 		return nil, err
 	}
 	return factory.openStore(namespace)
 }
 
-func OpenNamespacePartitionLogs(ctx context.Context, bucketURL, basePrefix string, namespaces []string) (map[string]*partitionlog.Log, error) {
-	factory, err := newPartitionLogStoreFactory(ctx, bucketURL, basePrefix)
+func OpenNamespaceObjLogs(ctx context.Context, bucketURL, basePrefix string, namespaces []string) (map[string]*objlog.Log, error) {
+	factory, err := newObjLogStoreFactory(ctx, bucketURL, basePrefix)
 	if err != nil {
 		return nil, err
 	}
-	logs := make(map[string]*partitionlog.Log, len(namespaces))
+	logs := make(map[string]*objlog.Log, len(namespaces))
 	for _, namespace := range namespaces {
 		log, err := factory.openLog(namespace)
 		if err != nil {
-			return nil, fmt.Errorf("open namespace partitionlog for %q: %w", namespace, err)
+			return nil, fmt.Errorf("open namespace objlog for %q: %w", namespace, err)
 		}
 		logs[namespace] = log
 	}
 	return logs, nil
 }
 
-type partitionLogStoreFactory struct {
-	openStore func(namespace string) (partitionlog.Store, error)
+type objLogStoreFactory struct {
+	openStore func(namespace string) (objlog.Store, error)
 }
 
-func (f partitionLogStoreFactory) openLog(namespace string) (*partitionlog.Log, error) {
+func (f objLogStoreFactory) openLog(namespace string) (*objlog.Log, error) {
 	store, err := f.openStore(namespace)
 	if err != nil {
 		return nil, err
 	}
-	log, err := partitionlog.Open(partitionlog.Options{
+	log, err := objlog.Open(objlog.Options{
 		Store: store,
-		Reader: partitionlog.ReaderOptions{
+		Reader: objlog.ReaderOptions{
 			MaxRecordsPerBatch: batchSize,
 			OpenSegmentReaders: 16,
 		},
@@ -502,26 +495,26 @@ func (f partitionLogStoreFactory) openLog(namespace string) (*partitionlog.Log, 
 	return log, nil
 }
 
-func newPartitionLogStoreFactory(ctx context.Context, bucketURL, basePrefix string) (partitionLogStoreFactory, error) {
+func newObjLogStoreFactory(ctx context.Context, bucketURL, basePrefix string) (objLogStoreFactory, error) {
 	u, err := url.Parse(bucketURL)
 	if err != nil {
-		return partitionLogStoreFactory{}, fmt.Errorf("parse bucket url: %w", err)
+		return objLogStoreFactory{}, fmt.Errorf("parse bucket url: %w", err)
 	}
 	switch strings.ToLower(u.Scheme) {
 	case "s3":
-		return newS3PartitionLogStoreFactory(ctx, u, basePrefix)
+		return newS3ObjLogStoreFactory(ctx, u, basePrefix)
 	case "gcs", "gs":
-		return newGCSPartitionLogStoreFactory(ctx, u, basePrefix)
+		return newGCSObjLogStoreFactory(ctx, u, basePrefix)
 	case "azblob", "azure":
-		return newAzurePartitionLogStoreFactory(ctx, u, basePrefix)
+		return newAzureObjLogStoreFactory(ctx, u, basePrefix)
 	default:
-		return partitionLogStoreFactory{}, fmt.Errorf("unsupported partitionlog bucket scheme %q", u.Scheme)
+		return objLogStoreFactory{}, fmt.Errorf("unsupported objlog bucket scheme %q", u.Scheme)
 	}
 }
 
-func newS3PartitionLogStoreFactory(ctx context.Context, u *url.URL, basePrefix string) (partitionLogStoreFactory, error) {
+func newS3ObjLogStoreFactory(ctx context.Context, u *url.URL, basePrefix string) (objLogStoreFactory, error) {
 	if u.Host == "" {
-		return partitionLogStoreFactory{}, fmt.Errorf("s3 bucket missing in url %q", u.String())
+		return objLogStoreFactory{}, fmt.Errorf("s3 bucket missing in url %q", u.String())
 	}
 	query := u.Query()
 	region := query.Get("region")
@@ -541,7 +534,7 @@ func newS3PartitionLogStoreFactory(ctx context.Context, u *url.URL, basePrefix s
 
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
-		return partitionLogStoreFactory{}, fmt.Errorf("load aws config: %w", err)
+		return objLogStoreFactory{}, fmt.Errorf("load aws config: %w", err)
 	}
 
 	endpoint := query.Get("endpoint")
@@ -553,8 +546,8 @@ func newS3PartitionLogStoreFactory(ctx context.Context, u *url.URL, basePrefix s
 		o.UsePathStyle = usePathStyle
 	})
 
-	return partitionLogStoreFactory{openStore: func(namespace string) (partitionlog.Store, error) {
-		return pls3.New(pls3.Options{
+	return objLogStoreFactory{openStore: func(namespace string) (objlog.Store, error) {
+		return objs3.New(objs3.Options{
 			Client:   client,
 			Bucket:   u.Host,
 			Prefix:   strings.Trim(basePrefix, "/"),
@@ -563,9 +556,9 @@ func newS3PartitionLogStoreFactory(ctx context.Context, u *url.URL, basePrefix s
 	}}, nil
 }
 
-func newGCSPartitionLogStoreFactory(ctx context.Context, u *url.URL, basePrefix string) (partitionLogStoreFactory, error) {
+func newGCSObjLogStoreFactory(ctx context.Context, u *url.URL, basePrefix string) (objLogStoreFactory, error) {
 	if u.Host == "" {
-		return partitionLogStoreFactory{}, fmt.Errorf("gcs bucket missing in url %q", u.String())
+		return objLogStoreFactory{}, fmt.Errorf("gcs bucket missing in url %q", u.String())
 	}
 	query := u.Query()
 	var opts []option.ClientOption
@@ -577,10 +570,10 @@ func newGCSPartitionLogStoreFactory(ctx context.Context, u *url.URL, basePrefix 
 	}
 	client, err := storage.NewClient(ctx, opts...)
 	if err != nil {
-		return partitionLogStoreFactory{}, fmt.Errorf("create gcs client: %w", err)
+		return objLogStoreFactory{}, fmt.Errorf("create gcs client: %w", err)
 	}
-	return partitionLogStoreFactory{openStore: func(namespace string) (partitionlog.Store, error) {
-		return plgcs.New(plgcs.Options{
+	return objLogStoreFactory{openStore: func(namespace string) (objlog.Store, error) {
+		return objgcs.New(objgcs.Options{
 			Client:   client,
 			Bucket:   u.Host,
 			Prefix:   strings.Trim(basePrefix, "/"),
@@ -589,13 +582,13 @@ func newGCSPartitionLogStoreFactory(ctx context.Context, u *url.URL, basePrefix 
 	}}, nil
 }
 
-func newAzurePartitionLogStoreFactory(_ context.Context, u *url.URL, basePrefix string) (partitionLogStoreFactory, error) {
+func newAzureObjLogStoreFactory(_ context.Context, u *url.URL, basePrefix string) (objLogStoreFactory, error) {
 	containerName := strings.Trim(strings.TrimPrefix(path.Join(u.Host, u.Path), "/"), "/")
 	if strings.Contains(containerName, "/") {
-		return partitionLogStoreFactory{}, fmt.Errorf("azblob container url must identify exactly one container, got %q", containerName)
+		return objLogStoreFactory{}, fmt.Errorf("azblob container url must identify exactly one container, got %q", containerName)
 	}
 	if containerName == "" {
-		return partitionLogStoreFactory{}, fmt.Errorf("azblob container missing in url %q", u.String())
+		return objLogStoreFactory{}, fmt.Errorf("azblob container missing in url %q", u.String())
 	}
 
 	query := u.Query()
@@ -624,7 +617,7 @@ func newAzurePartitionLogStoreFactory(_ context.Context, u *url.URL, basePrefix 
 			}
 		}
 		if containerURL == "" {
-			return partitionLogStoreFactory{}, errors.New("azblob bucket_url requires connection_string, AZURE_STORAGE_CONNECTION_STRING, url, endpoint, or account")
+			return objLogStoreFactory{}, errors.New("azblob bucket_url requires connection_string, AZURE_STORAGE_CONNECTION_STRING, url, endpoint, or account")
 		}
 		if sas := strings.TrimPrefix(query.Get("sas"), "?"); sas != "" && !strings.Contains(containerURL, "?") {
 			containerURL += "?" + sas
@@ -633,21 +626,21 @@ func newAzurePartitionLogStoreFactory(_ context.Context, u *url.URL, basePrefix 
 		case "default":
 			cred, credErr := azidentity.NewDefaultAzureCredential(nil)
 			if credErr != nil {
-				return partitionLogStoreFactory{}, fmt.Errorf("create azure default credential: %w", credErr)
+				return objLogStoreFactory{}, fmt.Errorf("create azure default credential: %w", credErr)
 			}
 			client, err = container.NewClient(containerURL, cred, nil)
 		case "", "none", "sas":
 			client, err = container.NewClientWithNoCredential(containerURL, nil)
 		default:
-			return partitionLogStoreFactory{}, fmt.Errorf("unsupported azblob auth mode %q", query.Get("auth"))
+			return objLogStoreFactory{}, fmt.Errorf("unsupported azblob auth mode %q", query.Get("auth"))
 		}
 	}
 	if err != nil {
-		return partitionLogStoreFactory{}, fmt.Errorf("create azure container client: %w", err)
+		return objLogStoreFactory{}, fmt.Errorf("create azure container client: %w", err)
 	}
 
-	return partitionLogStoreFactory{openStore: func(namespace string) (partitionlog.Store, error) {
-		return plazure.New(plazure.Options{
+	return objLogStoreFactory{openStore: func(namespace string) (objlog.Store, error) {
+		return objazure.New(objazure.Options{
 			Container: client,
 			Prefix:    strings.Trim(basePrefix, "/"),
 			StreamID:  namespace,

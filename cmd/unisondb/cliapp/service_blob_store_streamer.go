@@ -8,7 +8,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/ankur-anand/unijord/partitionlog"
+	"github.com/ankur-anand/objlog"
 	"github.com/ankur-anand/unisondb/cmd/unisondb/config"
 	"github.com/ankur-anand/unisondb/dbkernel"
 	udbinternal "github.com/ankur-anand/unisondb/internal"
@@ -22,7 +22,7 @@ type BlobStoreStreamerService struct {
 	cfg           config.BlobStoreStreamingConfig
 	enabled       bool
 	flushInterval time.Duration
-	logs          map[string]*partitionlog.Log
+	logs          map[string]*objlog.Log
 }
 
 type blobStoreStreamerTerm struct {
@@ -39,7 +39,7 @@ func (b *BlobStoreStreamerService) Setup(ctx context.Context, deps *Dependencies
 	b.deps = deps
 	b.cfg = deps.Config.BlobStoreStreaming
 	if b.logs == nil {
-		b.logs = make(map[string]*partitionlog.Log)
+		b.logs = make(map[string]*objlog.Log)
 	}
 
 	if !b.cfg.Enabled {
@@ -89,9 +89,9 @@ func (b *BlobStoreStreamerService) Setup(ctx context.Context, deps *Dependencies
 
 	for key, namespaces := range logGroups {
 		slices.Sort(namespaces)
-		logs, err := streamer.OpenNamespacePartitionLogs(ctx, key.bucketURL, key.basePrefix, namespaces)
+		logs, err := streamer.OpenNamespaceObjLogs(ctx, key.bucketURL, key.basePrefix, namespaces)
 		if err != nil {
-			return fmt.Errorf("blobstore streamer: open partitionlogs for bucket_url %q base_prefix %q: %w", key.bucketURL, key.basePrefix, err)
+			return fmt.Errorf("blobstore streamer: open objlogs for bucket_url %q base_prefix %q: %w", key.bucketURL, key.basePrefix, err)
 		}
 		for namespace, log := range logs {
 			b.logs[namespace] = log
@@ -233,7 +233,7 @@ func (b *BlobStoreStreamerService) startTerm(ctx context.Context, namespace stri
 		streamCtx,
 		errGrp,
 		map[string]*dbkernel.Engine{namespace: engine},
-		map[string]*partitionlog.Log{namespace: b.logs[namespace]},
+		map[string]*objlog.Log{namespace: b.logs[namespace]},
 		streamer.BlobStoreStreamerConfig{
 			FlushInterval:     b.flushInterval,
 			BootstrapAfterLSN: map[string]uint64{namespace: b.cfg.Namespaces[namespace].BootstrapAfterLSN},
@@ -281,12 +281,12 @@ func (b *BlobStoreStreamerService) streamNamespace(ctx context.Context, namespac
 func (b *BlobStoreStreamerService) lastWrittenLSN(ctx context.Context, namespace string) (uint64, error) {
 	log, ok := b.logs[namespace]
 	if !ok || log == nil {
-		return 0, fmt.Errorf("partitionlog not configured for namespace %q", namespace)
+		return 0, fmt.Errorf("objlog not configured for namespace %q", namespace)
 	}
-	result, err := log.Reader().Partition(0).Read(ctx, partitionlog.ReadRequest{
+	result, err := log.Reader().Partition(0).Read(ctx, objlog.ReadRequest{
 		StartLSN:  ^uint64(0),
 		Limit:     1,
-		Freshness: partitionlog.FreshnessLatest,
+		Freshness: objlog.FreshnessLatest,
 	})
 	if err != nil {
 		return 0, err

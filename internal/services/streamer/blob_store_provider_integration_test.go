@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ankur-anand/unijord/partitionlog"
-	plgcs "github.com/ankur-anand/unijord/partitionlog/gcs"
-	pls3 "github.com/ankur-anand/unijord/partitionlog/s3"
+	"github.com/ankur-anand/objlog"
+	objgcs "github.com/ankur-anand/objlog/gcs"
+	objs3 "github.com/ankur-anand/objlog/s3"
 	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/ankur-anand/unisondb/internal/services/streamer"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -28,7 +28,7 @@ import (
 func TestBlobStoreStreamer_ProviderBackedIntegration(t *testing.T) {
 	tests := []struct {
 		name    string
-		openLog func(t *testing.T) func(namespace string) *partitionlog.Log
+		openLog func(t *testing.T) func(namespace string) *objlog.Log
 	}{
 		{
 			name:    "s3",
@@ -47,7 +47,7 @@ func TestBlobStoreStreamer_ProviderBackedIntegration(t *testing.T) {
 	}
 }
 
-func runProviderBackedStreamerIntegration(t *testing.T, openLog func(namespace string) *partitionlog.Log) {
+func runProviderBackedStreamerIntegration(t *testing.T, openLog func(namespace string) *objlog.Log) {
 	t.Helper()
 
 	namespace := "provider-" + safeTestPath(t.Name())
@@ -80,14 +80,14 @@ func runProviderBackedStreamerIntegration(t *testing.T, openLog func(namespace s
 	require.Equal(t, 20, records.count())
 }
 
-func streamProviderUntilLatest(t *testing.T, namespace string, engine *dbkernel.Engine, log *partitionlog.Log, want uint64) {
+func streamProviderUntilLatest(t *testing.T, namespace string, engine *dbkernel.Engine, log *objlog.Log, want uint64) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cfg := streamer.DefaultBlobStoreStreamerConfig()
 	cfg.FlushInterval = 25 * time.Millisecond
 
-	srv, err := streamer.NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*partitionlog.Log{namespace: log}, cfg)
+	srv, err := streamer.NewBlobStoreStreamer(ctx, nil, map[string]*dbkernel.Engine{namespace: engine}, map[string]*objlog.Log{namespace: log}, cfg)
 	require.NoError(t, err)
 	defer func() {
 		cancel()
@@ -117,7 +117,7 @@ func streamProviderUntilLatest(t *testing.T, namespace string, engine *dbkernel.
 	assert.True(t, err == nil || errors.Is(err, context.Canceled), "unexpected stream error: %v", err)
 }
 
-func requireLatestLSN(t *testing.T, log *partitionlog.Log, want uint64) {
+func requireLatestLSN(t *testing.T, log *objlog.Log, want uint64) {
 	t.Helper()
 
 	require.Eventually(t, func() bool {
@@ -126,7 +126,7 @@ func requireLatestLSN(t *testing.T, log *partitionlog.Log, want uint64) {
 	}, 5*time.Second, 25*time.Millisecond)
 }
 
-func latestLSN(log *partitionlog.Log) (uint64, error) {
+func latestLSN(log *objlog.Log) (uint64, error) {
 	client := streamer.NewBlobStoreStreamerClient(log, "provider-reader", &noopWalIO{}, 0, 10*time.Millisecond)
 	return client.GetLatestLSN(context.Background())
 }
@@ -143,7 +143,7 @@ func putProviderRecords(t *testing.T, engine *dbkernel.Engine, start, count int)
 	}
 }
 
-func newFakeS3LogOpener(t *testing.T) func(namespace string) *partitionlog.Log {
+func newFakeS3LogOpener(t *testing.T) func(namespace string) *objlog.Log {
 	t.Helper()
 
 	bucket := "unisondb-provider-s3"
@@ -168,21 +168,21 @@ func newFakeS3LogOpener(t *testing.T) func(namespace string) *partitionlog.Log {
 	})
 	prefix := "provider-tests/" + safeTestPath(t.Name())
 
-	return func(namespace string) *partitionlog.Log {
-		store, err := pls3.New(pls3.Options{
+	return func(namespace string) *objlog.Log {
+		store, err := objs3.New(objs3.Options{
 			Client:   client,
 			Bucket:   bucket,
 			Prefix:   prefix,
 			StreamID: namespace,
 		})
 		require.NoError(t, err)
-		log, err := partitionlog.Open(partitionlog.Options{Store: store})
+		log, err := objlog.Open(objlog.Options{Store: store})
 		require.NoError(t, err)
 		return log
 	}
 }
 
-func newFakeGCSLogOpener(t *testing.T) func(namespace string) *partitionlog.Log {
+func newFakeGCSLogOpener(t *testing.T) func(namespace string) *objlog.Log {
 	t.Helper()
 
 	bucket := "unisondb-provider-gcs"
@@ -195,15 +195,15 @@ func newFakeGCSLogOpener(t *testing.T) func(namespace string) *partitionlog.Log 
 	t.Cleanup(func() { _ = client.Close() })
 	prefix := "provider-tests/" + safeTestPath(t.Name())
 
-	return func(namespace string) *partitionlog.Log {
-		store, err := plgcs.New(plgcs.Options{
+	return func(namespace string) *objlog.Log {
+		store, err := objgcs.New(objgcs.Options{
 			Client:   client,
 			Bucket:   bucket,
 			Prefix:   prefix,
 			StreamID: namespace,
 		})
 		require.NoError(t, err)
-		log, err := partitionlog.Open(partitionlog.Options{Store: store})
+		log, err := objlog.Open(objlog.Options{Store: store})
 		require.NoError(t, err)
 		return log
 	}
