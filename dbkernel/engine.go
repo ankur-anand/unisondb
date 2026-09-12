@@ -239,7 +239,6 @@ func NewStorageEngine(dataDir, namespace string, conf *EngineConfig) (result *En
 	engine.appendNotify = make(chan struct{})
 	// Start workers only after initialization succeeds. Recovery can queue a
 	// metadata sync request in fsyncReqSignal before the workers start.
-	initMonotonic(ctx)
 	engine.asyncMemTableFlusher(ctx)
 	engine.syncWalAtInterval(ctx)
 	engine.fsyncBtreeAtInterval(ctx)

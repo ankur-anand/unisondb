@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ankur-anand/unisondb/cmd/unisondb/cliapp"
+	"github.com/ankur-anand/unisondb/dbkernel"
 	"github.com/urfave/cli/v2"
 )
 
@@ -92,6 +93,9 @@ func Run(_ context.Context, configPath, env, mode, portsFile string) error {
 		}
 	}
 
+	stopClockDrift := dbkernel.StartClockDriftMonitor(ctx, time.Second)
+	defer stopClockDrift()
+
 	srv.BuildDeps()
 
 	srv.Register(&cliapp.RaftService{})
@@ -121,6 +125,7 @@ func Run(_ context.Context, configPath, env, mode, portsFile string) error {
 	)
 
 	err := srv.RunServices(ctx)
+	stopClockDrift()
 	shutdownReason := "context.cancelled.signal"
 	if err != nil && !errors.Is(err, context.Canceled) {
 		shutdownReason = "errored"
