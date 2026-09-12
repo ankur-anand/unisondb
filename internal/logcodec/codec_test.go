@@ -1,6 +1,7 @@
 package logcodec
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -9,6 +10,17 @@ import (
 	flatbuffers "github.com/google/flatbuffers/go"
 	"github.com/stretchr/testify/assert"
 )
+
+func TestTransactionIndexScalarRoundTrip(t *testing.T) {
+	for _, index := range []uint64{0, 1, 1<<48 + 7, ^uint64(0)} {
+		t.Run(fmt.Sprint(index), func(t *testing.T) {
+			record := LogRecord{LSN: 1, TxnID: []byte("txn"), PrevTxnIndex: index}
+			encoded := record.FBEncode(128)
+			assert.Equal(t, index, logrecord.GetRootAsLogRecord(encoded, 0).PrevTxnIndex())
+			assert.Equal(t, index, DeserializeLogRecord(encoded).PrevTxnIndex)
+		})
+	}
+}
 
 func TestKeyValueSerialization(t *testing.T) {
 
@@ -89,14 +101,14 @@ func TestRowBatchSerialization(t *testing.T) {
 	}
 
 	record := &LogRecord{
-		LSN:             123456789,
-		HLC:             987654321,
-		OperationType:   logrecord.LogOperationTypeInsert,
-		TxnState:        logrecord.TransactionStateNone,
-		EntryType:       logrecord.LogEntryTypeRow,
-		TxnID:           []byte("transaction-batch-001"),
-		PrevTxnWalIndex: nil,
-		Entries:         serializedEntries,
+		LSN:           123456789,
+		HLC:           987654321,
+		OperationType: logrecord.LogOperationTypeInsert,
+		TxnState:      logrecord.TransactionStateNone,
+		EntryType:     logrecord.LogEntryTypeRow,
+		TxnID:         []byte("transaction-batch-001"),
+		PrevTxnIndex:  0,
+		Entries:       serializedEntries,
 	}
 
 	data := serializeLogRecord(record, flatbuffers.NewBuilder(1024))
@@ -149,14 +161,14 @@ func BenchmarkLogSerialization(b *testing.B) {
 	}
 
 	record := &LogRecord{
-		LSN:             123456789,
-		HLC:             987654321,
-		OperationType:   logrecord.LogOperationTypeInsert,
-		TxnState:        logrecord.TransactionStateNone,
-		EntryType:       logrecord.LogEntryTypeRow,
-		TxnID:           []byte("transaction-batch-001"),
-		PrevTxnWalIndex: nil,
-		Entries:         serializedEntries,
+		LSN:           123456789,
+		HLC:           987654321,
+		OperationType: logrecord.LogOperationTypeInsert,
+		TxnState:      logrecord.TransactionStateNone,
+		EntryType:     logrecord.LogEntryTypeRow,
+		TxnID:         []byte("transaction-batch-001"),
+		PrevTxnIndex:  0,
+		Entries:       serializedEntries,
 	}
 	b.ResetTimer()
 	var encoded []byte
@@ -209,14 +221,14 @@ func BenchmarkLogDeserialization(b *testing.B) {
 	}
 
 	record := &LogRecord{
-		LSN:             123456789,
-		HLC:             987654321,
-		OperationType:   logrecord.LogOperationTypeInsert,
-		TxnState:        logrecord.TransactionStateNone,
-		EntryType:       logrecord.LogEntryTypeRow,
-		TxnID:           []byte("transaction-batch-001"),
-		PrevTxnWalIndex: nil,
-		Entries:         serializedEntries,
+		LSN:           123456789,
+		HLC:           987654321,
+		OperationType: logrecord.LogOperationTypeInsert,
+		TxnState:      logrecord.TransactionStateNone,
+		EntryType:     logrecord.LogEntryTypeRow,
+		TxnID:         []byte("transaction-batch-001"),
+		PrevTxnIndex:  0,
+		Entries:       serializedEntries,
 	}
 	data := serializeLogRecord(record, flatbuffers.NewBuilder(sizeHint))
 	b.ResetTimer()

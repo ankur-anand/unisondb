@@ -1,17 +1,14 @@
 package dbkernel
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"slices"
 	"sync"
 	"sync/atomic"
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
-	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/hashicorp/raft"
@@ -164,141 +161,10 @@ func (e *Engine) recordRaftApplied(log *raft.Log) {
 
 // applyRaftTxnCommit applies a transaction commit in Raft mode.
 func (e *Engine) applyRaftTxnCommit(record *logrecord.LogRecord, offset *wal.Offset, commitIndex uint64) error {
-	switch record.EntryType() {
-	case logrecord.LogEntryTypeKV:
-		return e.applyRaftKVTxnCommit(record, offset)
-	case logrecord.LogEntryTypeRow:
-		return e.applyRaftRowTxnCommit(record, offset)
-	case logrecord.LogEntryTypeChunked:
-		return e.applyRaftChunkedTxnCommit(record, offset)
+	if record.Lsn() != commitIndex {
+		return fmt.Errorf("%w: commit LSN %d does not match Raft index %d", wal.ErrInvalidTxnChain, record.Lsn(), commitIndex)
 	}
-	return nil
-}
-
-// getRaftTransactionRecords retrieves transaction records from the WAL in Raft mode.
-// In Raft mode, WAL entries are encoded Raft logs, so we need to decode them first
-// to extract the actual LogRecord data.
-func (e *Engine) getRaftTransactionRecords(startOffset *wal.Offset) ([][]byte, error) {
-	if startOffset == nil {
-		return nil, nil
-	}
-
-	var records [][]byte
-	nextOffset := startOffset
-
-	for {
-		walEntry, err := e.walIO.Read(nextOffset)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read WAL at offset %+v: %w", nextOffset, err)
-		}
-
-		logData, err := e.walIO.DecodeRecord(walEntry)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode Raft WAL entry: %w", err)
-		}
-
-		record := logrecord.GetRootAsLogRecord(logData, 0)
-		records = append(records, logData)
-		if record.PrevTxnWalIndexLength() == 0 {
-			break
-		}
-
-		nextOffset = wal.DecodeOffset(record.PrevTxnWalIndexBytes())
-		if nextOffset == nil {
-			break
-		}
-	}
-
-	slices.Reverse(records)
-	return records, nil
-}
-
-// applyRaftKVTxnCommit applies a KV transaction commit in Raft mode.
-func (e *Engine) applyRaftKVTxnCommit(record *logrecord.LogRecord, offset *wal.Offset) error {
-	walOffset := wal.DecodeOffset(record.PrevTxnWalIndexBytes())
-	if walOffset == nil {
-		return errors.New("invalid WAL offset in commit record")
-	}
-
-	records, err := e.getRaftTransactionRecords(walOffset)
-	if err != nil {
-		return err
-	}
-
-	if len(records) < 2 {
-		return fmt.Errorf("insufficient transaction records: got %d", len(records))
-	}
-
-	preparedRecords := records[1:]
-	e.writeNilOffset()
-
-	for _, pRecordData := range preparedRecords {
-		pRecord := logrecord.GetRootAsLogRecord(pRecordData, 0)
-		logEntry := logcodec.DeserializeFBRootLogRecord(pRecord)
-		for _, entry := range logEntry.Entries {
-			kvEntry := logcodec.DeserializeKVEntry(entry)
-			memValue := getValueStruct(byte(record.OperationType()), internal.EntryTypeKV, kvEntry.Value)
-			if err := e.memTableWrite(kvEntry.Key, memValue); err != nil {
-				return err
-			}
-			e.writeNilOffset()
-		}
-	}
-
-	e.writeOffset(offset)
-	return nil
-}
-
-// applyRaftRowTxnCommit applies a Row transaction commit in Raft mode.
-func (e *Engine) applyRaftRowTxnCommit(record *logrecord.LogRecord, offset *wal.Offset) error {
-	walOffset := wal.DecodeOffset(record.PrevTxnWalIndexBytes())
-	if walOffset == nil {
-		return errors.New("invalid WAL offset in commit record")
-	}
-
-	records, err := e.getRaftTransactionRecords(walOffset)
-	if err != nil {
-		return err
-	}
-
-	if len(records) < 2 {
-		return fmt.Errorf("insufficient transaction records: got %d", len(records))
-	}
-
-	preparedRecords := records[1:]
-	e.writeNilOffset()
-
-	for _, pRecordData := range preparedRecords {
-		pRecord := logrecord.GetRootAsLogRecord(pRecordData, 0)
-		logEntry := logcodec.DeserializeFBRootLogRecord(pRecord)
-		for _, entry := range logEntry.Entries {
-			rowEntry := logcodec.DeserializeRowUpdateEntry(entry)
-			memValue := getValueStruct(byte(record.OperationType()), internal.EntryTypeRow, entry)
-			if err := e.memTableWrite(rowEntry.Key, memValue); err != nil {
-				return err
-			}
-			e.writeNilOffset()
-		}
-	}
-
-	e.writeOffset(offset)
-	return nil
-}
-
-// applyRaftChunkedTxnCommit applies a Chunked transaction commit in Raft mode.
-func (e *Engine) applyRaftChunkedTxnCommit(record *logrecord.LogRecord, offset *wal.Offset) error {
-	logEntry := logcodec.DeserializeFBRootLogRecord(record)
-	if len(logEntry.Entries) == 0 {
-		return nil
-	}
-	kvEntry := logcodec.DeserializeKVEntry(logEntry.Entries[0])
-	chunkedKey := kvEntry.Key
-	memValue := getValueStruct(byte(logrecord.LogOperationTypeInsert), byte(logrecord.LogEntryTypeChunked), offset.Encode())
-	if err := e.memTableWrite(chunkedKey, memValue); err != nil {
-		return err
-	}
-	e.writeOffset(offset)
-	return nil
+	return e.applyTxnCommit(record, offset)
 }
 
 // ApplyBatch implements raft.BatchingFSM.

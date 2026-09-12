@@ -480,15 +480,15 @@ func TestReplicaWALHandler_ApplyRecord_Invalid(t *testing.T) {
 	replicator := dbkernel.NewReplicaWALHandler(replicaEngine)
 
 	record := logcodec.LogRecord{
-		LSN:             0,
-		HLC:             0,
-		CRC32Checksum:   0,
-		OperationType:   0,
-		TxnState:        0,
-		EntryType:       0,
-		TxnID:           nil,
-		PrevTxnWalIndex: nil,
-		Entries:         nil,
+		LSN:           0,
+		HLC:           0,
+		CRC32Checksum: 0,
+		OperationType: 0,
+		TxnState:      0,
+		EntryType:     0,
+		TxnID:         nil,
+		PrevTxnIndex:  0,
+		Entries:       nil,
 	}
 
 	encoded := record.FBEncode(1024)
@@ -500,15 +500,15 @@ func TestReplicaWALHandler_ApplyRecord_Invalid(t *testing.T) {
 	assert.Equal(t, uint64(0), replicaEngine.OpsReceivedCount(), "ops received should be equal")
 
 	record = logcodec.LogRecord{
-		LSN:             1,
-		HLC:             0,
-		CRC32Checksum:   0,
-		OperationType:   0,
-		TxnState:        0,
-		EntryType:       0,
-		TxnID:           nil,
-		PrevTxnWalIndex: nil,
-		Entries:         nil,
+		LSN:           1,
+		HLC:           0,
+		CRC32Checksum: 0,
+		OperationType: 0,
+		TxnState:      0,
+		EntryType:     0,
+		TxnID:         nil,
+		PrevTxnIndex:  0,
+		Entries:       nil,
 	}
 
 	encoded = record.FBEncode(1024)

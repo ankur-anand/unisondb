@@ -107,7 +107,7 @@ func setupSingleNodeRaftWithEngineWAL(t *testing.T, engine *Engine) (*raft.Raft,
 	engineWAL := engine.WAL()
 	require.NotNil(t, engineWAL, "engine WAL should not be nil")
 
-	logStore, err := raftwalfs.NewLogStore(engineWAL, 0)
+	logStore, err := raftwalfs.NewLogStore(engineWAL, 0, raftwalfs.WithCodec(raftwalfs.BinaryCodecV1{DataMutator: raftwalfs.LogRecordMutator{}}))
 	require.NoError(t, err)
 
 	stableStore := raft.NewInmemStore()
@@ -168,7 +168,7 @@ func setupSingleNodeRaftWithEngineWALCodec(t *testing.T, engine *Engine, codec r
 		err      error
 	)
 	if codec == nil {
-		logStore, err = raftwalfs.NewLogStore(engineWAL, 0)
+		logStore, err = raftwalfs.NewLogStore(engineWAL, 0, raftwalfs.WithCodec(raftwalfs.BinaryCodecV1{DataMutator: raftwalfs.LogRecordMutator{}}))
 	} else {
 		logStore, err = raftwalfs.NewLogStore(engineWAL, 0, raftwalfs.WithCodec(codec))
 	}
@@ -250,6 +250,7 @@ func encodeLogRecord(record logcodec.LogRecord) []byte {
 }
 
 func makeRaftLog(index uint64, record logcodec.LogRecord) *raft.Log {
+	record.LSN = index
 	return &raft.Log{
 		Index: index,
 		Term:  1,
@@ -1605,27 +1606,27 @@ func TestEngine_ApplyRaftTxnStateCommitKV_ReplaysChain(t *testing.T) {
 		TxnState:  logrecord.TransactionStateBegin,
 		EntryType: logrecord.LogEntryTypeKV,
 	}
-	beginOffset := appendRaftLogRecord(t, engine, 1, begin)
+	appendRaftLogRecord(t, engine, 1, begin)
 
 	prepareEntry := logcodec.SerializeKVEntry(keycodec.KeyKV([]byte("key1")), []byte("value1"))
 	prepare := logcodec.LogRecord{
-		HLC:             HLCNow(),
-		TxnID:           txnID,
-		OperationType:   logrecord.LogOperationTypeInsert,
-		TxnState:        logrecord.TransactionStatePrepare,
-		EntryType:       logrecord.LogEntryTypeKV,
-		PrevTxnWalIndex: beginOffset.Encode(),
-		Entries:         [][]byte{prepareEntry},
+		HLC:           HLCNow(),
+		TxnID:         txnID,
+		OperationType: logrecord.LogOperationTypeInsert,
+		TxnState:      logrecord.TransactionStatePrepare,
+		EntryType:     logrecord.LogEntryTypeKV,
+		PrevTxnIndex:  1,
+		Entries:       [][]byte{prepareEntry},
 	}
-	prepareOffset := appendRaftLogRecord(t, engine, 2, prepare)
+	appendRaftLogRecord(t, engine, 2, prepare)
 
 	commit := logcodec.LogRecord{
-		HLC:             HLCNow(),
-		TxnID:           txnID,
-		OperationType:   logrecord.LogOperationTypeInsert,
-		TxnState:        logrecord.TransactionStateCommit,
-		EntryType:       logrecord.LogEntryTypeKV,
-		PrevTxnWalIndex: prepareOffset.Encode(),
+		HLC:           HLCNow(),
+		TxnID:         txnID,
+		OperationType: logrecord.LogOperationTypeInsert,
+		TxnState:      logrecord.TransactionStateCommit,
+		EntryType:     logrecord.LogEntryTypeKV,
+		PrevTxnIndex:  2,
 	}
 
 	result := engine.Apply(makeRaftLog(3, commit))
@@ -1646,30 +1647,30 @@ func TestEngine_ApplyRaftTxnStateCommitRow_ReplaysChain(t *testing.T) {
 		TxnState:  logrecord.TransactionStateBegin,
 		EntryType: logrecord.LogEntryTypeRow,
 	}
-	beginOffset := appendRaftLogRecord(t, engine, 1, begin)
+	appendRaftLogRecord(t, engine, 1, begin)
 
 	rowKey := keycodec.RowKey([]byte("row1"))
 	rowEntry := logcodec.SerializeRowUpdateEntry(rowKey, map[string][]byte{
 		"col1": []byte("val1"),
 	})
 	prepare := logcodec.LogRecord{
-		HLC:             HLCNow(),
-		TxnID:           txnID,
-		OperationType:   logrecord.LogOperationTypeInsert,
-		TxnState:        logrecord.TransactionStatePrepare,
-		EntryType:       logrecord.LogEntryTypeRow,
-		PrevTxnWalIndex: beginOffset.Encode(),
-		Entries:         [][]byte{rowEntry},
+		HLC:           HLCNow(),
+		TxnID:         txnID,
+		OperationType: logrecord.LogOperationTypeInsert,
+		TxnState:      logrecord.TransactionStatePrepare,
+		EntryType:     logrecord.LogEntryTypeRow,
+		PrevTxnIndex:  1,
+		Entries:       [][]byte{rowEntry},
 	}
-	prepareOffset := appendRaftLogRecord(t, engine, 2, prepare)
+	appendRaftLogRecord(t, engine, 2, prepare)
 
 	commit := logcodec.LogRecord{
-		HLC:             HLCNow(),
-		TxnID:           txnID,
-		OperationType:   logrecord.LogOperationTypeInsert,
-		TxnState:        logrecord.TransactionStateCommit,
-		EntryType:       logrecord.LogEntryTypeRow,
-		PrevTxnWalIndex: prepareOffset.Encode(),
+		HLC:           HLCNow(),
+		TxnID:         txnID,
+		OperationType: logrecord.LogOperationTypeInsert,
+		TxnState:      logrecord.TransactionStateCommit,
+		EntryType:     logrecord.LogEntryTypeRow,
+		PrevTxnIndex:  2,
 	}
 
 	result := engine.Apply(makeRaftLog(3, commit))
@@ -1685,7 +1686,18 @@ func TestEngine_ApplyRaftTxnStateCommitChunked_UsesCommitOffset(t *testing.T) {
 
 	chunkKey := keycodec.KeyBlobChunk([]byte("blob"), 0)
 	commitEntry := logcodec.SerializeKVEntry(chunkKey, nil)
+	txnID := []byte("chunked-commit-offset")
+	appendRaftLogRecord(t, engine, 1, logcodec.LogRecord{
+		TxnID: txnID, TxnState: logrecord.TransactionStateBegin, EntryType: logrecord.LogEntryTypeChunked,
+	})
+	appendRaftLogRecord(t, engine, 2, logcodec.LogRecord{
+		TxnID: txnID, TxnState: logrecord.TransactionStatePrepare, EntryType: logrecord.LogEntryTypeChunked,
+		OperationType: logrecord.LogOperationTypeInsert, PrevTxnIndex: 1,
+		Entries: [][]byte{logcodec.SerializeKVEntry(chunkKey, []byte("value"))},
+	})
 	commit := logcodec.LogRecord{
+		TxnID:         txnID,
+		PrevTxnIndex:  2,
 		HLC:           HLCNow(),
 		OperationType: logrecord.LogOperationTypeInsert,
 		TxnState:      logrecord.TransactionStateCommit,
@@ -1693,7 +1705,7 @@ func TestEngine_ApplyRaftTxnStateCommitChunked_UsesCommitOffset(t *testing.T) {
 		Entries:       [][]byte{commitEntry},
 	}
 
-	commitLog := makeRaftLog(1, commit)
+	commitLog := makeRaftLog(3, commit)
 	encoded, err := raftwalfs.BinaryCodecV1{}.Encode(commitLog)
 	require.NoError(t, err)
 

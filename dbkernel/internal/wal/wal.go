@@ -1,6 +1,7 @@
 package wal
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -429,42 +430,70 @@ func (w *WalIO) NewReaderWithStart(offset *Offset, options ...ReaderOption) (*Re
 	return reader, nil
 }
 
-// GetTransactionRecords returns all the WalRecord that is part of the particular Txn.
-func (w *WalIO) GetTransactionRecords(startOffset *Offset) ([]*logrecord.LogRecord, error) {
-	if startOffset == nil {
-		return nil, nil
-	}
+// ErrInvalidTxnChain indicates a missing, corrupt or unrelated transaction record.
+var ErrInvalidTxnChain = errors.New("invalid transaction chain")
 
+// GetTransactionRecords resolves the commit's logical references through this
+// WAL's local index. It returns Begin followed by Prepare records, excluding the
+// commit, only after validating the entire chain. Returned records borrow WAL memory.
+func (w *WalIO) GetTransactionRecords(commit *logrecord.LogRecord) ([]*logrecord.LogRecord, error) {
+	if commit == nil || commit.TxnState() != logrecord.TransactionStateCommit || commit.Lsn() == 0 || len(commit.TxnIdBytes()) == 0 {
+		return nil, fmt.Errorf("%w: invalid commit record", ErrInvalidTxnChain)
+	}
+	index := commit.PrevTxnIndex()
+	before := commit.Lsn()
 	var records []*logrecord.LogRecord
-	nextOffset := startOffset
-
 	for {
-		walEntry, err := w.Read(nextOffset)
-
+		if index == 0 || index >= before {
+			return nil, fmt.Errorf("%w: previous index %d must be between 1 and %d", ErrInvalidTxnChain, index, before-1)
+		}
+		record, err := w.readTransactionRecord(index)
 		if err != nil {
-			return nil, fmt.Errorf("%w: failed to read WAL at offset %+v: %v", ErrWalNextOffset, nextOffset, err)
+			return nil, err
 		}
-
-		payload, err := w.DecodeRecord(walEntry)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode WAL record at offset %+v: %w", nextOffset, err)
+		if !bytes.Equal(record.TxnIdBytes(), commit.TxnIdBytes()) || record.EntryType() != commit.EntryType() {
+			return nil, fmt.Errorf("%w: transaction identity or entry type mismatch at index %d", ErrInvalidTxnChain, index)
 		}
-		if len(payload) == 0 {
-			break
-		}
-
-		record := logrecord.GetRootAsLogRecord(payload, 0)
 		records = append(records, record)
-
-		if record.PrevTxnWalIndexLength() == 0 {
-			break
+		switch record.TxnState() {
+		case logrecord.TransactionStateBegin:
+			if record.PrevTxnIndex() != 0 {
+				return nil, fmt.Errorf("%w: Begin at index %d has a previous record", ErrInvalidTxnChain, index)
+			}
+			slices.Reverse(records)
+			return records, nil
+		case logrecord.TransactionStatePrepare:
+			if record.OperationType() != commit.OperationType() || record.EntriesLength() == 0 {
+				return nil, fmt.Errorf("%w: invalid Prepare at index %d", ErrInvalidTxnChain, index)
+			}
+		default:
+			return nil, fmt.Errorf("%w: expected Begin or Prepare at index %d, got %s", ErrInvalidTxnChain, index, record.TxnState())
 		}
-
-		nextOffset = DecodeOffset(record.PrevTxnWalIndexBytes())
+		before, index = index, record.PrevTxnIndex()
 	}
+}
 
-	slices.Reverse(records)
-	return records, nil
+func (w *WalIO) readTransactionRecord(index uint64) (*logrecord.LogRecord, error) {
+	pos, err := w.appendLog.PositionForIndex(index)
+	if err != nil {
+		return nil, fmt.Errorf("%w: lookup index %d: %w", ErrInvalidTxnChain, index, err)
+	}
+	data, err := w.Read(&pos)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read index %d: %w", ErrInvalidTxnChain, index, err)
+	}
+	payload, err := w.DecodeRecord(data)
+	if err != nil {
+		return nil, fmt.Errorf("%w: decode index %d: %w", ErrInvalidTxnChain, index, err)
+	}
+	if len(payload) == 0 {
+		return nil, fmt.Errorf("%w: empty record at index %d", ErrInvalidTxnChain, index)
+	}
+	record := logrecord.GetRootAsLogRecord(payload, 0)
+	if record.Lsn() != index {
+		return nil, fmt.Errorf("%w: index %d points to LSN %d", ErrInvalidTxnChain, index, record.Lsn())
+	}
+	return record, nil
 }
 
 // CurrentSegmentInfo returns the last LSN and offset from the current segment's metadata.

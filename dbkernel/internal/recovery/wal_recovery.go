@@ -239,7 +239,7 @@ func (wr *walRecovery) handleTxnCommited(record *logrecord.LogRecord) error {
 // handleKVValuesTxn Handles the insert and delete operation of Txn and updates
 // the same to the underlying btree bases store.
 func (wr *walRecovery) handleKVValuesTxn(record *logrecord.LogRecord) error {
-	records, err := wr.walIO.GetTransactionRecords(wal.DecodeOffset(record.PrevTxnWalIndexBytes()))
+	records, err := wr.walIO.GetTransactionRecords(record)
 	if err != nil {
 		return err
 	}
@@ -271,7 +271,7 @@ func (wr *walRecovery) handleKVValuesTxn(record *logrecord.LogRecord) error {
 // handleRowColumnTxn Handles the insert and delete operation of Txn for RowUpdate and updates
 // the same to the underlying btree bases store.
 func (wr *walRecovery) handleRowColumnTxn(record *logrecord.LogRecord) error {
-	records, err := wr.walIO.GetTransactionRecords(wal.DecodeOffset(record.PrevTxnWalIndexBytes()))
+	records, err := wr.walIO.GetTransactionRecords(record)
 	if err != nil {
 		return err
 	}
@@ -311,7 +311,7 @@ func (wr *walRecovery) handleChunkedValuesTxn(record *logrecord.LogRecord) error
 	dr := logcodec.DeserializeFBRootLogRecord(record)
 	kv := logcodec.DeserializeKVEntry(dr.Entries[0])
 	key := kv.Key
-	records, err := wr.walIO.GetTransactionRecords(wal.DecodeOffset(record.PrevTxnWalIndexBytes()))
+	records, err := wr.walIO.GetTransactionRecords(record)
 	if err != nil {
 		return fmt.Errorf("failed to reconstruct batch value: %w", err)
 	}

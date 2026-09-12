@@ -24,15 +24,15 @@ type EventEntry struct {
 }
 
 type LogRecord struct {
-	LSN             uint64
-	HLC             uint64
-	CRC32Checksum   uint32
-	OperationType   logrecord.LogOperationType
-	TxnState        logrecord.TransactionState
-	EntryType       logrecord.LogEntryType
-	TxnID           []byte
-	PrevTxnWalIndex []byte
-	Entries         [][]byte
+	LSN           uint64
+	HLC           uint64
+	CRC32Checksum uint32
+	OperationType logrecord.LogOperationType
+	TxnState      logrecord.TransactionState
+	EntryType     logrecord.LogEntryType
+	TxnID         []byte
+	PrevTxnIndex  uint64
+	Entries       [][]byte
 }
 
 // FBEncode encodes the provided record into flat-buffer format.

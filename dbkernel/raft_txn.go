@@ -8,7 +8,6 @@ import (
 
 	"github.com/ankur-anand/unisondb/internal/keycodec"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
-	"github.com/ankur-anand/unisondb/pkg/walfs"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/segmentio/ksuid"
 )
@@ -26,7 +25,7 @@ type RaftTxn struct {
 	txnID           []byte
 	engine          *Engine
 	beginRaftIndex  uint64
-	prevWalOffset   []byte
+	prevIndex       uint64
 	rowKey          []byte
 	operation       logrecord.LogOperationType
 	entryType       logrecord.LogEntryType
@@ -67,12 +66,12 @@ func (e *Engine) NewRaftTxn(op logrecord.LogOperationType, entryType logrecord.L
 	}
 
 	beginRecord := logcodec.LogRecord{
-		LSN:             1,
-		HLC:             HLCNow(),
-		TxnID:           uuid,
-		EntryType:       entryType,
-		TxnState:        logrecord.TransactionStateBegin,
-		PrevTxnWalIndex: nil,
+		LSN:          1,
+		HLC:          HLCNow(),
+		TxnID:        uuid,
+		EntryType:    entryType,
+		TxnState:     logrecord.TransactionStateBegin,
+		PrevTxnIndex: 0,
 	}
 
 	encoded := beginRecord.FBEncode(512)
@@ -81,18 +80,11 @@ func (e *Engine) NewRaftTxn(op logrecord.LogOperationType, entryType logrecord.L
 		return nil, wrapRaftError(err)
 	}
 
-	var prevWalOffset []byte
-	if e.raftState.positionLookup != nil {
-		if pos, ok := e.raftState.positionLookup(raftIndex); ok {
-			prevWalOffset = walfs.RecordPosition{SegmentID: pos.SegmentID, Offset: pos.Offset}.Encode()
-		}
-	}
-
 	return &RaftTxn{
 		txnID:          uuid,
 		engine:         e,
 		beginRaftIndex: raftIndex,
-		prevWalOffset:  prevWalOffset,
+		prevIndex:      raftIndex,
 		operation:      op,
 		entryType:      entryType,
 		startTime:      time.Now(),
@@ -164,15 +156,15 @@ func (t *RaftTxn) appendEntry(key, value []byte) error {
 	t.checksum = crc32.Update(t.checksum, crc32.IEEETable, kvEncoded)
 
 	prepareRecord := logcodec.LogRecord{
-		LSN:             1,
-		HLC:             HLCNow(),
-		CRC32Checksum:   checksum,
-		OperationType:   t.operation,
-		TxnState:        logrecord.TransactionStatePrepare,
-		EntryType:       t.entryType,
-		TxnID:           t.txnID,
-		PrevTxnWalIndex: t.prevWalOffset,
-		Entries:         [][]byte{kvEncoded},
+		LSN:           1,
+		HLC:           HLCNow(),
+		CRC32Checksum: checksum,
+		OperationType: t.operation,
+		TxnState:      logrecord.TransactionStatePrepare,
+		EntryType:     t.entryType,
+		TxnID:         t.txnID,
+		PrevTxnIndex:  t.prevIndex,
+		Entries:       [][]byte{kvEncoded},
 	}
 
 	encoded := prepareRecord.FBEncode(len(kvEncoded) + 128)
@@ -182,11 +174,7 @@ func (t *RaftTxn) appendEntry(key, value []byte) error {
 		return wrapRaftError(err)
 	}
 
-	if t.engine.raftState.positionLookup != nil {
-		if pos, ok := t.engine.raftState.positionLookup(raftIndex); ok {
-			t.prevWalOffset = walfs.RecordPosition{SegmentID: pos.SegmentID, Offset: pos.Offset}.Encode()
-		}
-	}
+	t.prevIndex = raftIndex
 
 	t.valuesCount++
 	return nil
@@ -203,15 +191,15 @@ func (t *RaftTxn) Commit() error {
 	}
 
 	commitRecord := logcodec.LogRecord{
-		LSN:             1,
-		HLC:             HLCNow(),
-		CRC32Checksum:   t.checksum,
-		OperationType:   t.operation,
-		TxnState:        logrecord.TransactionStateCommit,
-		EntryType:       t.entryType,
-		TxnID:           t.txnID,
-		PrevTxnWalIndex: t.prevWalOffset,
-		Entries:         entries,
+		LSN:           1,
+		HLC:           HLCNow(),
+		CRC32Checksum: t.checksum,
+		OperationType: t.operation,
+		TxnState:      logrecord.TransactionStateCommit,
+		EntryType:     t.entryType,
+		TxnID:         t.txnID,
+		PrevTxnIndex:  t.prevIndex,
+		Entries:       entries,
 	}
 
 	encoded := commitRecord.FBEncode(256)
