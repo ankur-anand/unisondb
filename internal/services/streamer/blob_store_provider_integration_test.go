@@ -178,6 +178,7 @@ func newFakeS3LogOpener(t *testing.T) func(namespace string) *objlog.Log {
 		require.NoError(t, err)
 		log, err := objlog.Open(objlog.Options{Store: store})
 		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, log.Close()) })
 		return log
 	}
 }
@@ -205,6 +206,7 @@ func newFakeGCSLogOpener(t *testing.T) func(namespace string) *objlog.Log {
 		require.NoError(t, err)
 		log, err := objlog.Open(objlog.Options{Store: store})
 		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, log.Close()) })
 		return log
 	}
 }
