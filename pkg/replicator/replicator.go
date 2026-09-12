@@ -114,21 +114,24 @@ func (r *Replicator) Replicate(ctx context.Context, recordsChan chan<- []*v1.WAL
 // replicateFromReader reads the underlying wal until an err is encountered.
 func (r *Replicator) replicateFromReader(_ context.Context, recordsChan chan<- []*v1.WALRecord) error {
 	batch := make([]*v1.WALRecord, 0, r.batchSize)
-	sendFunc := func() {
+	sendFunc := func() error {
 		if len(batch) > 0 {
-			mKeyReplicatorRecordsTotal.WithLabelValues(r.namespace, r.replicatorEngine).Add(float64(len(batch)))
 			out := batch
 			select {
 			case recordsChan <- out:
+				mKeyReplicatorRecordsTotal.WithLabelValues(r.namespace, r.replicatorEngine).Add(float64(len(out)))
 				batch = make([]*v1.WALRecord, 0, r.batchSize)
 			case <-r.ctxDone:
 				ReleaseRecords(out)
+				batch = nil
 				if r.reader != nil {
 					r.reader.Close()
+					r.reader = nil
 				}
-				return
+				return context.Canceled
 			}
 		}
+		return nil
 	}
 
 	reader, err := r.getReader()
@@ -141,7 +144,9 @@ func (r *Replicator) replicateFromReader(_ context.Context, recordsChan chan<- [
 		value, pos, err := reader.Next()
 		if err != nil {
 			// irrespective of the error clear the batch
-			sendFunc()
+			if sendErr := sendFunc(); sendErr != nil {
+				return sendErr
+			}
 			if errors.Is(err, io.EOF) {
 				reader.Close()
 				r.reader = nil
@@ -159,7 +164,9 @@ func (r *Replicator) replicateFromReader(_ context.Context, recordsChan chan<- [
 		batch = append(batch, walRecord)
 		r.lastOffset = pos
 		if len(batch) >= r.batchSize {
-			sendFunc()
+			if err := sendFunc(); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -177,10 +184,13 @@ func (r *Replicator) getReader() (*dbkernel.Reader, error) {
 	}
 
 	if r.lastLSN != 0 {
-		_, _, err = reader.Next()
+		_, pos, err := reader.Next()
 		if err != nil {
+			reader.Close()
 			return nil, err
 		}
+		// The skipped resume record still advances the position used to wait for appends.
+		r.lastOffset = pos
 	}
 	return reader, nil
 }
