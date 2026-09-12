@@ -1,6 +1,11 @@
 package wal
 
 import (
+	"crypto/sha256"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ankur-anand/unisondb/pkg/walfs"
@@ -35,7 +40,10 @@ func TestListSegments(t *testing.T) {
 
 		segments, err := ListSegments(walDir)
 		require.NoError(t, err)
-		_ = segments
+		assert.Empty(t, segments)
+		entries, err := os.ReadDir(walDir)
+		require.NoError(t, err)
+		assert.Empty(t, entries)
 	})
 
 	t.Run("returns error for invalid directory", func(t *testing.T) {
@@ -169,7 +177,10 @@ func TestGetStats(t *testing.T) {
 		stats, err := GetStats(walDir)
 		require.NoError(t, err)
 
-		assert.GreaterOrEqual(t, stats.TotalSegments, 0)
+		assert.Zero(t, stats.TotalSegments)
+		entries, err := os.ReadDir(walDir)
+		require.NoError(t, err)
+		assert.Empty(t, entries)
 	})
 
 	t.Run("counts sealed segments correctly", func(t *testing.T) {
@@ -196,4 +207,109 @@ func TestGetStats(t *testing.T) {
 		_, err := GetStats("/nonexistent/path")
 		require.Error(t, err)
 	})
+}
+
+func TestInspectionDoesNotModifyStorage(t *testing.T) {
+	operations := map[string]func(string) error{
+		"list":    func(dir string) error { _, err := ListSegments(dir); return err },
+		"inspect": func(dir string) error { _, err := InspectSegment(dir, 1, true); return err },
+		"stats":   func(dir string) error { _, err := GetStats(dir); return err },
+	}
+	for name, inspect := range operations {
+		for _, sealed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/sealed=%t", name, sealed), func(t *testing.T) {
+				dir := t.TempDir()
+				for id := uint32(1); id <= 2; id++ {
+					seg, err := walfs.OpenSegmentFile(dir, ".seg", id, walfs.WithSegmentSize(1024))
+					require.NoError(t, err)
+					_, err = seg.Write([]byte("record"), uint64(id))
+					require.NoError(t, err)
+					if sealed {
+						require.NoError(t, seg.SealSegment())
+					}
+					require.NoError(t, seg.Close())
+					if sealed {
+						// Inspection must not recreate a missing index sidecar.
+						require.NoError(t, os.Remove(walfs.SegmentIndexFileName(dir, ".seg", id)))
+					}
+				}
+				before := snapshotStorage(t, dir)
+				require.NoError(t, inspect(dir))
+				assert.Equal(t, before, snapshotStorage(t, dir))
+			})
+		}
+	}
+}
+
+func TestInspectionOnReadOnlyStorage(t *testing.T) {
+	dir := t.TempDir()
+	seg, err := walfs.OpenSegmentFile(dir, ".seg", 1, walfs.WithSegmentSize(1024))
+	require.NoError(t, err)
+	_, err = seg.Write([]byte("record"), 1)
+	require.NoError(t, err)
+	require.NoError(t, seg.Close())
+	path := walfs.SegmentFileName(dir, ".seg", 1)
+	require.NoError(t, os.Chmod(path, 0444))
+	require.NoError(t, os.Chmod(dir, 0555))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chmod(dir, 0755))
+		require.NoError(t, os.Chmod(path, 0644))
+	})
+	before := snapshotStorage(t, dir)
+	segments, err := ListSegments(dir)
+	require.NoError(t, err)
+	require.Len(t, segments, 1)
+	assert.Equal(t, int64(1024), segments[0].Size)
+	detail, err := InspectSegment(dir, 1, true)
+	require.NoError(t, err)
+	assert.Len(t, detail.IndexEntries, 1)
+	stats, err := GetStats(dir)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1024), stats.TotalSize)
+	assert.Equal(t, before, snapshotStorage(t, dir))
+}
+
+func TestInspectionErrorsDoNotModifyStorage(t *testing.T) {
+	t.Run("missing segment", func(t *testing.T) {
+		dir := t.TempDir()
+		_, err := InspectSegment(dir, 1, true)
+		require.ErrorContains(t, err, "not found")
+		entries, err := os.ReadDir(dir)
+		require.NoError(t, err)
+		assert.Empty(t, entries)
+	})
+	t.Run("corrupt segment", func(t *testing.T) {
+		dir := t.TempDir()
+		path := walfs.SegmentFileName(dir, ".seg", 1)
+		require.NoError(t, os.WriteFile(path, []byte("corrupt"), 0644))
+		before := snapshotStorage(t, dir)
+		_, err := ListSegments(dir)
+		require.Error(t, err)
+		_, err = InspectSegment(dir, 1, true)
+		require.Error(t, err)
+		_, err = GetStats(dir)
+		require.Error(t, err)
+		assert.Equal(t, before, snapshotStorage(t, dir))
+	})
+}
+
+func snapshotStorage(t *testing.T, dir string) map[string][32]byte {
+	t.Helper()
+	files := make(map[string][32]byte)
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		files[path] = sha256.Sum256(data)
+		return nil
+	})
+	require.NoError(t, err)
+	return files
 }

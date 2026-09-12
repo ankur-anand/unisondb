@@ -1,6 +1,8 @@
 package restore
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -414,4 +416,167 @@ func TestRestore(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "not found")
 	})
+}
+
+func TestRestorePreservesExistingDataOnInvalidWAL(t *testing.T) {
+	for _, full := range []bool{false, true} {
+		for _, invalid := range []string{"missing", "empty", "unreadable segment"} {
+			t.Run(fmt.Sprintf("full=%t/%s", full, invalid), func(t *testing.T) {
+				dataDir := t.TempDir()
+				nsDir := filepath.Join(dataDir, "testns")
+				walDir := filepath.Join(nsDir, "wal")
+				require.NoError(t, os.MkdirAll(walDir, 0755))
+				btree := filepath.Join(nsDir, "data.mdb")
+				segment := filepath.Join(walDir, "000000001.seg")
+				require.NoError(t, os.WriteFile(btree, []byte("original btree"), 0644))
+				require.NoError(t, os.WriteFile(segment, []byte("original segment"), 0644))
+
+				backupDir := t.TempDir()
+				btreeBackup := filepath.Join(backupDir, "backup.mdb")
+				require.NoError(t, os.WriteFile(btreeBackup, []byte("replacement btree"), 0644))
+				walBackup := filepath.Join(backupDir, "wal")
+				if invalid != "missing" {
+					require.NoError(t, os.Mkdir(walBackup, 0755))
+				}
+				if invalid == "unreadable segment" {
+					require.NoError(t, os.WriteFile(filepath.Join(walBackup, "000000001.seg"), []byte("replacement segment"), 0644))
+					require.NoError(t, os.Symlink(filepath.Join(backupDir, "missing.seg"), filepath.Join(walBackup, "000000002.seg")))
+				}
+
+				var err error
+				if full {
+					_, err = Restore(Options{DataDir: dataDir, Namespace: "testns", BTreePath: btreeBackup, WALPath: walBackup})
+				} else {
+					_, err = RestoreWAL(walBackup, dataDir, "testns")
+				}
+				require.Error(t, err)
+				contents, err := os.ReadFile(btree)
+				require.NoError(t, err)
+				assert.Equal(t, "original btree", string(contents))
+				contents, err = os.ReadFile(segment)
+				require.NoError(t, err)
+				assert.Equal(t, "original segment", string(contents))
+				entries, err := os.ReadDir(walDir)
+				require.NoError(t, err)
+				assert.Len(t, entries, 1)
+			})
+		}
+	}
+}
+
+func TestInstallFilesRollsBackPublicationFailures(t *testing.T) {
+	// Each file has a preserve and an install rename. Fail once at each step,
+	// including after publishing both the B-tree and a newly added WAL segment.
+	for failAt := 1; failAt <= 6; failAt++ {
+		t.Run(fmt.Sprintf("rename %d", failAt), func(t *testing.T) {
+			dir, backup := t.TempDir(), t.TempDir()
+			files := []restoreFile{
+				{source: filepath.Join(backup, "data.mdb"), target: filepath.Join(dir, "data.mdb")},
+				{source: filepath.Join(backup, "000000001.seg"), target: filepath.Join(dir, "wal", "000000001.seg")},
+				{source: filepath.Join(backup, "000000002.seg"), target: filepath.Join(dir, "wal", "000000002.seg")},
+			}
+			require.NoError(t, os.Mkdir(filepath.Join(dir, "wal"), 0755))
+			for _, file := range files {
+				require.NoError(t, os.WriteFile(file.source, []byte("replacement"), 0644))
+			}
+			require.NoError(t, os.WriteFile(files[0].target, []byte("original btree"), 0644))
+			require.NoError(t, os.WriteFile(files[2].target, []byte("original segment"), 0644))
+			failure := errors.New("injected rename failure")
+			calls := 0
+			err := installFiles(files, func(src, dst string) error {
+				calls++
+				if calls == failAt {
+					return failure
+				}
+				return os.Rename(src, dst)
+			})
+			require.ErrorIs(t, err, failure)
+			btree, err := os.ReadFile(files[0].target)
+			require.NoError(t, err)
+			assert.Equal(t, "original btree", string(btree))
+			segment, err := os.ReadFile(files[2].target)
+			require.NoError(t, err)
+			assert.Equal(t, "original segment", string(segment))
+			_, err = os.Stat(files[1].target)
+			assert.ErrorIs(t, err, os.ErrNotExist)
+			entries, err := os.ReadDir(dir)
+			require.NoError(t, err)
+			assert.Len(t, entries, 2)
+			entries, err = os.ReadDir(filepath.Join(dir, "wal"))
+			require.NoError(t, err)
+			assert.Len(t, entries, 1)
+		})
+	}
+}
+
+func TestInstallFilesRetainsOriginalIfRollbackFails(t *testing.T) {
+	dir := t.TempDir()
+	source, target := filepath.Join(t.TempDir(), "backup"), filepath.Join(dir, "data.mdb")
+	require.NoError(t, os.WriteFile(source, []byte("replacement"), 0644))
+	require.NoError(t, os.WriteFile(target, []byte("original"), 0644))
+	files := []restoreFile{{source: source, target: target}}
+	calls := 0
+	failure := errors.New("injected rename failure")
+	err := installFiles(files, func(src, dst string) error {
+		calls++
+		if calls > 1 {
+			return failure
+		}
+		return os.Rename(src, dst)
+	})
+	require.ErrorIs(t, err, failure)
+	require.NotEmpty(t, files[0].original)
+	assert.Contains(t, err.Error(), files[0].original)
+	contents, err := os.ReadFile(files[0].original)
+	require.NoError(t, err)
+	assert.Equal(t, "original", string(contents))
+}
+
+func TestInstallFilesStagesAllSourcesBeforePublishing(t *testing.T) {
+	dir, backup := t.TempDir(), t.TempDir()
+	source, target := filepath.Join(backup, "data.mdb"), filepath.Join(dir, "data.mdb")
+	require.NoError(t, os.WriteFile(source, []byte("replacement"), 0644))
+	require.NoError(t, os.WriteFile(target, []byte("original"), 0644))
+	err := installFiles([]restoreFile{
+		{source: source, target: target},
+		{source: filepath.Join(backup, "missing.seg"), target: filepath.Join(dir, "000000001.seg")},
+	}, func(src, dst string) error {
+		t.Fatal("publication started before all sources were copied")
+		return nil
+	})
+	require.ErrorIs(t, err, os.ErrNotExist)
+	contents, err := os.ReadFile(target)
+	require.NoError(t, err)
+	assert.Equal(t, "original", string(contents))
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	assert.Len(t, entries, 1)
+}
+
+func TestRestoreReplacesExistingFiles(t *testing.T) {
+	dir, backup := t.TempDir(), t.TempDir()
+	walDir := filepath.Join(dir, "testns", "wal")
+	require.NoError(t, os.MkdirAll(walDir, 0755))
+	for _, name := range []string{"000000001.seg", "000000002.seg"} {
+		require.NoError(t, os.WriteFile(filepath.Join(backup, name), []byte("replacement "+name), 0644))
+		require.NoError(t, os.WriteFile(filepath.Join(walDir, name), []byte("original "+name), 0644))
+	}
+	btree := filepath.Join(dir, "testns", "data.mdb")
+	btreeBackup := filepath.Join(backup, "backup.mdb")
+	require.NoError(t, os.WriteFile(btree, []byte("original btree"), 0644))
+	require.NoError(t, os.WriteFile(btreeBackup, []byte("replacement btree"), 0644))
+	result, err := Restore(Options{DataDir: dir, Namespace: "testns", BTreePath: btreeBackup, WALPath: backup})
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.SegmentsRestored)
+	contents, err := os.ReadFile(btree)
+	require.NoError(t, err)
+	assert.Equal(t, "replacement btree", string(contents))
+	entries, err := os.ReadDir(walDir)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	for _, entry := range entries {
+		contents, err := os.ReadFile(filepath.Join(walDir, entry.Name()))
+		require.NoError(t, err)
+		assert.Equal(t, "replacement "+entry.Name(), string(contents))
+	}
 }

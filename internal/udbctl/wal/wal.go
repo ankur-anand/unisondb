@@ -3,7 +3,11 @@ package wal
 import (
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ankur-anand/unisondb/internal/udbctl/output"
@@ -15,34 +19,21 @@ import (
 var maxUnixSec = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC).Unix()
 
 func ListSegments(walDir string) ([]output.SegmentInfo, error) {
-	wal, err := walfs.NewWALog(walDir, ".seg")
+	segments, err := readSegments(walDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open WAL: %w", err)
+		return nil, err
 	}
-	defer wal.Close()
-
-	segments := wal.Segments()
-	if len(segments) == 0 {
-		return []output.SegmentInfo{}, nil
-	}
-
-	ids := make([]walfs.SegmentID, 0, len(segments))
-	for id := range segments {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 
 	result := make([]output.SegmentInfo, 0, len(segments))
-	for _, id := range ids {
-		seg := segments[id]
+	for _, seg := range segments {
 		info := output.SegmentInfo{
-			ID:            uint32(seg.ID()),
-			Status:        statusString(seg.IsSealed()),
-			Size:          seg.GetSegmentSize(),
-			SizeHuman:     humanize.Bytes(uint64(seg.GetSegmentSize())),
-			EntryCount:    seg.GetEntryCount(),
-			FirstLogIndex: seg.FirstLogIndex(),
-			LastModified:  safeTime(seg.GetLastModifiedAt()),
+			ID:            seg.id,
+			Status:        statusString(walfs.IsSealed(seg.Header.Flags)),
+			Size:          seg.Size,
+			SizeHuman:     humanize.Bytes(uint64(seg.Size)),
+			EntryCount:    seg.Header.EntryCount,
+			FirstLogIndex: seg.Header.FirstLogIndex,
+			LastModified:  safeTime(seg.Header.LastModifiedAt),
 		}
 		result = append(result, info)
 	}
@@ -51,32 +42,33 @@ func ListSegments(walDir string) ([]output.SegmentInfo, error) {
 }
 
 func InspectSegment(walDir string, segmentID uint32, showIndex bool) (*output.SegmentDetail, error) {
-	wal, err := walfs.NewWALog(walDir, ".seg")
+	files, err := segmentFiles(walDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open WAL: %w", err)
+		return nil, err
 	}
-	defer wal.Close()
-
-	segments := wal.Segments()
-	seg, ok := segments[walfs.SegmentID(segmentID)]
+	path, ok := files[segmentID]
 	if !ok {
 		return nil, fmt.Errorf("segment %d not found", segmentID)
 	}
+	seg, err := walfs.InspectSegmentFile(path, showIndex)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect segment %d: %w", segmentID, err)
+	}
 
 	detail := &output.SegmentDetail{
-		ID:            uint32(seg.ID()),
-		Status:        statusString(seg.IsSealed()),
-		Size:          seg.GetSegmentSize(),
-		SizeHuman:     humanize.Bytes(uint64(seg.GetSegmentSize())),
-		WriteOffset:   seg.WriteOffset(),
-		EntryCount:    seg.GetEntryCount(),
-		FirstLogIndex: seg.FirstLogIndex(),
-		Flags:         seg.GetFlags(),
-		LastModified:  safeTime(seg.GetLastModifiedAt()),
+		ID:            segmentID,
+		Status:        statusString(walfs.IsSealed(seg.Header.Flags)),
+		Size:          seg.Size,
+		SizeHuman:     humanize.Bytes(uint64(seg.Size)),
+		WriteOffset:   seg.Header.WriteOffset,
+		EntryCount:    seg.Header.EntryCount,
+		FirstLogIndex: seg.Header.FirstLogIndex,
+		Flags:         seg.Header.Flags,
+		LastModified:  safeTime(seg.Header.LastModifiedAt),
 	}
 
 	if showIndex {
-		entries := seg.IndexEntries()
+		entries := seg.IndexEntries
 		detail.IndexEntries = make([]output.IndexEntryInfo, len(entries))
 		for i, e := range entries {
 			detail.IndexEntries[i] = output.IndexEntryInfo{
@@ -91,13 +83,10 @@ func InspectSegment(walDir string, segmentID uint32, showIndex bool) (*output.Se
 }
 
 func GetStats(walDir string) (*output.WalStats, error) {
-	wal, err := walfs.NewWALog(walDir, ".seg")
+	segments, err := readSegments(walDir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open WAL: %w", err)
+		return nil, err
 	}
-	defer wal.Close()
-
-	segments := wal.Segments()
 
 	stats := &output.WalStats{
 		TotalSegments: len(segments),
@@ -111,20 +100,20 @@ func GetStats(walDir string) (*output.WalStats, error) {
 	var lastIdx uint64 = 0
 
 	for _, seg := range segments {
-		if seg.IsSealed() {
+		if walfs.IsSealed(seg.Header.Flags) {
 			stats.SealedCount++
 		} else {
 			stats.ActiveCount++
 		}
-		stats.TotalEntries += seg.GetEntryCount()
-		stats.TotalSize += seg.GetSegmentSize()
+		stats.TotalEntries += seg.Header.EntryCount
+		stats.TotalSize += seg.Size
 
-		first := seg.FirstLogIndex()
+		first := seg.Header.FirstLogIndex
 		if first > 0 && first < firstIdx {
 			firstIdx = first
 		}
 
-		entryCount := seg.GetEntryCount()
+		entryCount := seg.Header.EntryCount
 		if entryCount > 0 {
 			last := first + uint64(entryCount) - 1
 			if last > lastIdx {
@@ -140,6 +129,54 @@ func GetStats(walDir string) (*output.WalStats, error) {
 	}
 
 	return stats, nil
+}
+
+type inspectedSegment struct {
+	id uint32
+	*walfs.SegmentInspection
+}
+
+func segmentFiles(walDir string) (map[uint32]string, error) {
+	entries, err := os.ReadDir(walDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read WAL directory: %w", err)
+	}
+	files := make(map[uint32]string)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".seg") {
+			continue
+		}
+		id, err := strconv.ParseUint(strings.TrimSuffix(entry.Name(), ".seg"), 10, 32)
+		if err != nil {
+			continue
+		}
+		if _, exists := files[uint32(id)]; exists {
+			return nil, fmt.Errorf("duplicate segment ID %d", id)
+		}
+		files[uint32(id)] = filepath.Join(walDir, entry.Name())
+	}
+	return files, nil
+}
+
+func readSegments(walDir string) ([]inspectedSegment, error) {
+	files, err := segmentFiles(walDir)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]uint32, 0, len(files))
+	for id := range files {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	segments := make([]inspectedSegment, 0, len(ids))
+	for _, id := range ids {
+		info, err := walfs.InspectSegmentFile(files[id], false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inspect segment %d: %w", id, err)
+		}
+		segments = append(segments, inspectedSegment{id: id, SegmentInspection: info})
+	}
+	return segments, nil
 }
 
 func statusString(isSealed bool) string {

@@ -26,6 +26,9 @@ go build -o udbctl ./cmd/udbctl
 ### WAL Commands
 
 WAL inspection commands are read-only and safe to run while the server is running.
+They report stored metadata and actual file sizes without recovering, resizing, or
+sealing segments. `--show-index` validates records and builds the displayed index
+in memory without creating or modifying index sidecars.
 
 ---
 
@@ -219,6 +222,7 @@ udbctl restore --data-dir <path> --namespace <name> [--btree <file>] [--wal <dir
 **Safety Features:**
 
 - **Exclusive Lock**: Acquires `pid.lock` during the entire restore operation, preventing the server from starting and blocking concurrent restore attempts
+- **Failure Rollback**: Stages every requested B-tree and WAL file before replacing destinations, and retains existing files for rollback if a replacement fails. If rollback itself fails, the error identifies where the originals are retained. This does not provide a crash-atomic commit across files.
 - **Dry Run Mode**: Use `--dry-run` to validate backup files and preview what would be restored without modifying any data
 - **Force Flag**: Requires explicit `--force` flag for actual restores to confirm intent
 
