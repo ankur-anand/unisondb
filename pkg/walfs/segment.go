@@ -246,7 +246,7 @@ type Segment struct {
 
 	indexPath     string
 	dense         atomic.Pointer[denseIndex]  // unsealed segments: one offset per record
-	sparse        atomic.Pointer[sparseIndex] // sealed segments: one offset per 64 KiB
+	sparse        atomic.Pointer[sparseIndex] // sealed segments: one offset per 4 KiB
 	indexFlush    sync.WaitGroup
 	firstLogIndex uint64
 	firstLSN      atomic.Uint64 // lock-free copy of firstLogIndex for lookups

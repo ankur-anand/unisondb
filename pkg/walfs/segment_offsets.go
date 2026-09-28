@@ -17,7 +17,7 @@ import (
 const (
 	denseBlockShift = 12
 	denseBlockSize  = 1 << denseBlockShift
-	sparseInterval  = 64 << 10
+	sparseInterval  = 4 << 10
 )
 
 // denseIndex is appended by the writer under the segment write lock and read
