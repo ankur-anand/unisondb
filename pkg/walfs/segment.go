@@ -28,6 +28,9 @@ var (
 	ErrSegmentReaderClosed = errors.New("segment reader is closed")
 	ErrNoNewData           = errors.New("no new data yet")
 	ErrSegmentFull         = errors.New("segment is full, cannot write more records")
+	// ErrSegmentCorrupt reports a sealed segment whose valid records do not
+	// cover the count and end recorded in its header.
+	ErrSegmentCorrupt = errors.New("sealed segment records do not match its header")
 )
 
 type MarkerValidator func(storedMarker uint32) error
@@ -384,6 +387,20 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		return nil, err
 	}
 
+	if !isNew && !s.isSealed.Load() {
+		// Record the recovered end and count, and clear everything after the
+		// valid prefix. A crash can leave a later record intact behind a torn
+		// one; without clearing, a same-size append would reconnect it. Make
+		// both durable before this writer accepts appends.
+		binary.LittleEndian.PutUint64(mmapData[24:32], uint64(offset))
+		binary.LittleEndian.PutUint64(mmapData[32:40], s.indexedCount())
+		binary.LittleEndian.PutUint32(mmapData[56:60], crc32.Checksum(mmapData[0:56], crcTable))
+		s.zeroDiscardedTail(offset, s.mmapSize)
+		if err := s.Sync(); err != nil {
+			return nil, fmt.Errorf("sync recovered segment %d: %w", id, err)
+		}
+	}
+
 	opened = true
 	return s, nil
 }
@@ -400,7 +417,18 @@ func (seg *Segment) setupIndexFile(dirPath, extName string, isNew bool) error {
 		if err := seg.loadIndexFromFile(); err == nil {
 			return nil
 		}
+		// The sealed header is authoritative. A rebuild that cannot reproduce
+		// its range means corruption, not a shorter log.
 		entries := seg.buildIndexFromSegment()
+		end := int64(segmentHeaderSize)
+		if n := len(entries); n > 0 {
+			end = int64(entries[n-1].Offset) + recordOverhead(int64(entries[n-1].Length))
+		}
+		wantCount := binary.LittleEndian.Uint64(seg.mmapData[32:40])
+		if uint64(len(entries)) != wantCount || end != seg.writeOffset.Load() {
+			return fmt.Errorf("%w: segment %d has %d valid records ending at %d, header says %d ending at %d",
+				ErrSegmentCorrupt, seg.id, len(entries), end, wantCount, seg.writeOffset.Load())
+		}
 		return seg.flushIndexToFile(entries)
 	}
 
@@ -442,7 +470,11 @@ func (seg *Segment) loadIndexFromFile() error {
 // segment's state. The returned entries are transient (used for the sidecar).
 func (seg *Segment) buildIndexFromSegment() []segmentIndexEntry {
 	var entries []segmentIndexEntry
+	sealed, end := seg.isSealed.Load(), seg.writeOffset.Load()
 	seg.iterateValidEntries(func(offset int64, length uint32) bool {
+		if sealed && offset+recordOverhead(int64(length)) > end {
+			return false // bytes past a sealed segment's end are not records
+		}
 		entries = append(entries, segmentIndexEntry{Offset: uint64(offset), Length: length})
 		return true
 	})
@@ -1427,8 +1459,19 @@ func (seg *Segment) zeroDiscardedTail(from, to int64) {
 	}
 	// Recovery scans unsealed segments from the beginning, so leaving valid
 	// records anywhere in the discarded range can reconnect them to later
-	// rewrites and resurrect truncated entries.
-	clear(seg.mmapData[from:to])
+	// rewrites and resurrect truncated entries. Only dirty chunks that hold
+	// data, so untouched sparse regions are not allocated.
+	const chunk = 4096
+	for start := from; start < to; {
+		stop := min(to, (start/chunk+1)*chunk)
+		for _, b := range seg.mmapData[start:stop] {
+			if b != 0 {
+				clear(seg.mmapData[start:stop])
+				break
+			}
+		}
+		start = stop
+	}
 }
 
 // Remove closes the segment and removes its underlying files (segment and index).
