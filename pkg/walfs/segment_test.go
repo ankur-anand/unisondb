@@ -260,17 +260,16 @@ func TestOpenSegmentFile_PopulatesLogIndexFromSealedIndex(t *testing.T) {
 	seg.WaitForIndexFlush()
 	require.NoError(t, seg.Close())
 
-	idx := NewShardedIndex()
-	reopened, err := OpenSegmentFile(dir, ".wal", 1, withLogIndex(idx))
+	reopened, err := OpenSegmentFile(dir, ".wal", 1)
 	require.NoError(t, err)
 	defer reopened.Close()
 
 	for i := 1; i <= 3; i++ {
-		got, ok := idx.Get(uint64(i))
+		got, ok := reopened.positionForIndex(uint64(i))
 		require.True(t, ok)
 		assert.Equal(t, positions[uint64(i)], got)
 	}
-	assert.Equal(t, int64(3), idx.Len())
+	assert.Equal(t, uint64(3), reopened.indexedCount())
 }
 
 func TestOpenSegmentFile_PopulatesLogIndexFromUnsealedSegment(t *testing.T) {
@@ -289,20 +288,19 @@ func TestOpenSegmentFile_PopulatesLogIndexFromUnsealedSegment(t *testing.T) {
 
 	require.NoError(t, seg.Close())
 
-	idx := NewShardedIndex()
-	reopened, err := OpenSegmentFile(dir, ".wal", 1, withLogIndex(idx))
+	reopened, err := OpenSegmentFile(dir, ".wal", 1)
 	require.NoError(t, err)
 	defer reopened.Close()
 
 	for i := 5; i <= 8; i++ {
-		got, ok := idx.Get(uint64(i))
+		got, ok := reopened.positionForIndex(uint64(i))
 		require.True(t, ok)
 		assert.Equal(t, positions[uint64(i)], got)
 	}
-	assert.Equal(t, int64(4), idx.Len())
+	assert.Equal(t, uint64(4), reopened.indexedCount())
 }
 
-func TestOpenSegmentFile_SkipsIndexEntriesWhenClearIndexOnFlush(t *testing.T) {
+func TestOpenSegmentFile_SealedKeepsOnlySparseIndex(t *testing.T) {
 	dir := t.TempDir()
 
 	seg, err := OpenSegmentFile(dir, ".wal", 1)
@@ -320,18 +318,18 @@ func TestOpenSegmentFile_SkipsIndexEntriesWhenClearIndexOnFlush(t *testing.T) {
 	seg.WaitForIndexFlush()
 	require.NoError(t, seg.Close())
 
-	idx := NewShardedIndex()
-	reopened, err := OpenSegmentFile(dir, ".wal", 1, withClearIndexOnFlush(), withLogIndex(idx))
+	reopened, err := OpenSegmentFile(dir, ".wal", 1)
 	require.NoError(t, err)
 	defer reopened.Close()
 
-	assert.Empty(t, reopened.IndexEntries())
+	assert.Nil(t, reopened.dense.Load(), "sealed segment must not hold a per-record index")
+	require.NotNil(t, reopened.sparse.Load())
+	assert.Len(t, reopened.IndexEntries(), 3)
 	for i := 10; i <= 12; i++ {
-		got, ok := idx.Get(uint64(i))
+		got, ok := reopened.positionForIndex(uint64(i))
 		require.True(t, ok)
 		assert.Equal(t, positions[uint64(i)], got)
 	}
-	assert.Equal(t, int64(3), idx.Len())
 }
 
 func TestSegment_SequentialWrites(t *testing.T) {

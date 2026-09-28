@@ -242,8 +242,9 @@ func TestClearIndexOnFlush_EnabledClearsAfterRotation(t *testing.T) {
 	seg1.WaitForIndexFlush()
 
 	require.True(t, seg1.IsSealed(), "segment 1 should be sealed after rotation")
-	entries := seg1.IndexEntries()
-	assert.Empty(t, entries, "sealed segment %d should have cleared index after flush", seg1ID)
+	assert.Nil(t, seg1.dense.Load(), "sealed segment %d must not keep a per-record index", seg1ID)
+	assert.Len(t, seg1.IndexEntries(), 3, "sealed entries remain readable from the file")
+	var entries []SegmentIndexEntry
 
 	for i := 0; i < 2; i++ {
 		_, err := wal.Write(data, uint64(i+4))
@@ -278,7 +279,7 @@ func TestClearIndexOnFlush_ReopenedSegmentsRemainCleared(t *testing.T) {
 	seg1.WaitForIndexFlush()
 
 	require.True(t, seg1.IsSealed())
-	assert.Empty(t, seg1.IndexEntries(), "sealed segment should be cleared after flush in first session")
+	assert.Nil(t, seg1.dense.Load(), "sealed segment must not keep a per-record index")
 
 	for i := 0; i < 2; i++ {
 		pos, err := wal1.Write(data, uint64(i+4))
@@ -294,24 +295,20 @@ func TestClearIndexOnFlush_ReopenedSegmentsRemainCleared(t *testing.T) {
 	require.NoError(t, err)
 	defer wal2.Close()
 
-	sealedWithIndex := 0
+	sealedWithDense := 0
 	for _, seg := range wal2.Segments() {
-		if seg.IsSealed() {
-			entries := seg.IndexEntries()
-			if len(entries) > 0 {
-				sealedWithIndex++
-			}
+		if seg.IsSealed() && seg.dense.Load() != nil {
+			sealedWithDense++
 		}
 	}
-	assert.Equal(t, 0, sealedWithIndex,
-		"reopened sealed segments should keep index cleared when ClearIndexOnFlush is enabled")
+	assert.Equal(t, 0, sealedWithDense, "reopened sealed segments must not keep a per-record index")
 
 	for idx, pos := range positions {
-		got, ok := wal2.logIndex.Get(idx)
+		got, ok := wal2.lookupIndex(idx)
 		require.True(t, ok)
 		assert.Equal(t, pos, got)
 	}
-	assert.Equal(t, int64(len(positions)), wal2.logIndex.Len())
+	assert.Equal(t, int64(len(positions)), indexedLen(wal2))
 }
 
 func TestClearIndexOnFlush_DisabledDoesNotClearOnRotation(t *testing.T) {
@@ -333,7 +330,8 @@ func TestClearIndexOnFlush_DisabledDoesNotClearOnRotation(t *testing.T) {
 
 	require.True(t, seg1.IsSealed())
 	entries := seg1.IndexEntries()
-	assert.NotEmpty(t, entries, "sealed segment should still have index when clear disabled")
+	assert.Len(t, entries, 3, "sealed entries remain readable from the file")
+	assert.Nil(t, seg1.dense.Load(), "sealed segment must not keep a per-record index")
 
 	current := wal.Current()
 	_, err = wal.Write(data, 4)
@@ -369,7 +367,7 @@ func TestClearIndexFromMemory_ManualClearOnlySealedNotActive(t *testing.T) {
 	require.False(t, activeSegment.IsSealed(), "active segment should not be sealed")
 
 	seg1.ClearIndexFromMemory()
-	assert.Empty(t, seg1.IndexEntries(), "sealed segment should be cleared")
+	assert.Nil(t, seg1.dense.Load(), "sealed segment keeps no per-record index")
 	activeSegment.ClearIndexFromMemory()
 	assert.NotEmpty(t, activeSegment.IndexEntries(), "active segment should NOT be cleared")
 }
@@ -426,7 +424,7 @@ func TestClearIndexOnFlush_MultipleRotations(t *testing.T) {
 
 	for i, seg := range sealedSegments {
 		require.True(t, seg.IsSealed(), "segment %d should be sealed", i)
-		assert.Empty(t, seg.IndexEntries(), "sealed segment %d should have cleared index", i)
+		assert.Nil(t, seg.dense.Load(), "sealed segment %d must not keep a per-record index", i)
 	}
 	_, err = wal.Write(data, 7)
 	require.NoError(t, err)
@@ -444,24 +442,29 @@ func TestWALog_LogIndexWriteTracking(t *testing.T) {
 	pos1, err := wal.Write(data, 1)
 	require.NoError(t, err)
 
+	// An unindexed record inside an indexed segment would shift every later
+	// log index after a restart (lookup is firstLogIndex + ordinal), so it is
+	// rejected rather than silently misplaced.
 	_, err = wal.Write(data, 0)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, ErrInvalidLogIndex)
+	_, err = wal.Write(data, 3)
+	require.ErrorIs(t, err, ErrInvalidLogIndex)
 
 	pos2, err := wal.Write(data, 2)
 	require.NoError(t, err)
 
-	got1, ok := wal.logIndex.Get(1)
+	got1, ok := wal.lookupIndex(1)
 	require.True(t, ok)
 	assert.Equal(t, pos1, got1)
 
-	_, ok = wal.logIndex.Get(0)
+	_, ok = wal.lookupIndex(0)
 	assert.False(t, ok)
 
-	got2, ok := wal.logIndex.Get(2)
+	got2, ok := wal.lookupIndex(2)
 	require.True(t, ok)
 	assert.Equal(t, pos2, got2)
 
-	assert.Equal(t, int64(2), wal.logIndex.Len())
+	assert.Equal(t, int64(2), indexedLen(wal))
 }
 
 func TestWALog_LogIndexWriteBatchAcrossRotation(t *testing.T) {
@@ -484,11 +487,11 @@ func TestWALog_LogIndexWriteBatchAcrossRotation(t *testing.T) {
 	require.Greater(t, wal.SegmentRotatedCount(), int64(0))
 
 	for i := 0; i < batchSize; i++ {
-		got, ok := wal.logIndex.Get(logIndexes[i])
+		got, ok := wal.lookupIndex(logIndexes[i])
 		require.True(t, ok)
 		assert.Equal(t, positions[i], got)
 	}
-	assert.Equal(t, int64(batchSize), wal.logIndex.Len())
+	assert.Equal(t, int64(batchSize), indexedLen(wal))
 }
 
 func TestWALog_LogIndexTruncateRemovesEntries(t *testing.T) {
@@ -509,15 +512,15 @@ func TestWALog_LogIndexTruncateRemovesEntries(t *testing.T) {
 	require.NoError(t, err)
 
 	for i := 1; i <= 5; i++ {
-		got, ok := wal.logIndex.Get(uint64(i))
+		got, ok := wal.lookupIndex(uint64(i))
 		require.True(t, ok)
 		assert.Equal(t, positions[i-1], got)
 	}
 	for i := 6; i <= 10; i++ {
-		_, ok := wal.logIndex.Get(uint64(i))
+		_, ok := wal.lookupIndex(uint64(i))
 		assert.False(t, ok)
 	}
-	assert.Equal(t, int64(5), wal.logIndex.Len())
+	assert.Equal(t, int64(5), indexedLen(wal))
 }
 
 func TestWALog_LogIndexClearedOnFullTruncate(t *testing.T) {
@@ -532,13 +535,13 @@ func TestWALog_LogIndexClearedOnFullTruncate(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.Greater(t, wal.logIndex.Len(), int64(0))
+	require.Greater(t, indexedLen(wal), int64(0))
 
 	err = wal.Truncate(0)
 	require.NoError(t, err)
 
-	assert.Equal(t, int64(0), wal.logIndex.Len())
-	_, ok := wal.logIndex.Get(1)
+	assert.Equal(t, int64(0), indexedLen(wal))
+	_, ok := wal.lookupIndex(1)
 	assert.False(t, ok)
 }
 
@@ -572,10 +575,10 @@ func TestWALog_LogIndexDeleteSegmentsRemovesEntries(t *testing.T) {
 	count := seg.GetEntryCount()
 	require.Greater(t, count, int64(0))
 
-	lenBefore := wal.logIndex.Len()
+	lenBefore := indexedLen(wal)
 	for i := int64(0); i < count; i++ {
 		idx := first + uint64(i)
-		_, ok := wal.logIndex.Get(idx)
+		_, ok := wal.lookupIndex(idx)
 		require.True(t, ok)
 	}
 
@@ -584,14 +587,14 @@ func TestWALog_LogIndexDeleteSegmentsRemovesEntries(t *testing.T) {
 
 	for i := int64(0); i < count; i++ {
 		idx := first + uint64(i)
-		_, ok := wal.logIndex.Get(idx)
+		_, ok := wal.lookupIndex(idx)
 		assert.False(t, ok)
 	}
-	assert.Equal(t, lenBefore-count, wal.logIndex.Len())
+	assert.Equal(t, lenBefore-count, indexedLen(wal))
 
 	currentSeg := segments[currentID]
 	if currentSeg.GetEntryCount() > 0 && currentSeg.FirstLogIndex() > 0 {
-		_, ok := wal.logIndex.Get(currentSeg.FirstLogIndex())
+		_, ok := wal.lookupIndex(currentSeg.FirstLogIndex())
 		assert.True(t, ok)
 	}
 }
@@ -623,9 +626,20 @@ func TestWALog_LogIndexRebuiltOnReopen(t *testing.T) {
 	defer reopened.Close()
 
 	for idx, pos := range positions {
-		got, ok := reopened.logIndex.Get(idx)
+		got, ok := reopened.lookupIndex(idx)
 		require.True(t, ok)
 		assert.Equal(t, pos, got)
 	}
-	assert.Equal(t, int64(len(positions)), reopened.logIndex.Len())
+	assert.Equal(t, int64(len(positions)), indexedLen(reopened))
+}
+
+// indexedLen counts records reachable through PositionForIndex.
+func indexedLen(wl *WALog) int64 {
+	var n int64
+	if p := wl.lsnSnapshot.Load(); p != nil {
+		for _, seg := range *p {
+			n += int64(seg.indexedCount())
+		}
+	}
+	return n
 }

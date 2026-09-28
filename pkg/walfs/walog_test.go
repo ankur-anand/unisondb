@@ -2252,22 +2252,18 @@ func TestSegmentCleanupRemovesDataAndIndex(t *testing.T) {
 	require.NoError(t, wal.Close())
 }
 
-func TestWALogGetLogIndexShared(t *testing.T) {
+func TestWALogPositionForIndexAfterWrite(t *testing.T) {
 	dir := t.TempDir()
 
 	wal, err := walfs.NewWALog(dir, ".wal")
 	require.NoError(t, err)
 	defer wal.Close()
 
-	idx := wal.LogIndex()
-	require.NotNil(t, idx)
-	assert.Same(t, idx, wal.LogIndex())
-
 	pos, err := wal.Write([]byte("pos-1"), 1)
 	require.NoError(t, err)
 
-	got, ok := idx.Get(1)
-	require.True(t, ok)
+	got, err := wal.PositionForIndex(1)
+	require.NoError(t, err)
 	assert.Equal(t, pos, got)
 }
 
@@ -3402,8 +3398,8 @@ func TestWALog_Bounds_UpdateOnPendingDeletionCleanup(t *testing.T) {
 	assert.Equal(t, expectedFirst, first)
 	assert.Equal(t, expectedLast, last)
 
-	_, ok := wal.LogIndex().Get(1)
-	assert.False(t, ok, "deleted segments should be removed from the log index")
+	_, err = wal.PositionForIndex(1)
+	assert.Error(t, err, "deleted segments should be removed from the log index")
 }
 
 func TestPositionForIndexWithBounds(t *testing.T) {

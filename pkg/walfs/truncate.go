@@ -112,7 +112,6 @@ func (wl *WALog) applyTruncation(intent truncateIntent, entries []segmentIndexEn
 	}
 	if intent.KeepIndex == 0 {
 		wl.currentSegment = nil
-		wl.logIndex.Clear()
 		wl.committedPos.Store(nil)
 		seg, err := wl.openSegment(1)
 		if err != nil {
@@ -122,11 +121,6 @@ func (wl *WALog) applyTruncation(intent truncateIntent, entries []segmentIndexEn
 		wl.currentSegment = seg
 		if err := seg.Sync(); err != nil {
 			return err
-		}
-	} else {
-		_, last, ok := wl.logIndex.GetFirstLast()
-		if ok && last > intent.KeepIndex {
-			wl.logIndex.DeleteRange(intent.KeepIndex+1, last)
 		}
 	}
 	wl.unSynced = 0

@@ -244,12 +244,12 @@ type Segment struct {
 	syncOption     MsyncOption
 	dirSyncer      DirectorySyncer
 
-	indexPath         string
-	indexEntries      []segmentIndexEntry
-	indexFlush        sync.WaitGroup
-	firstLogIndex     uint64
-	clearIndexOnFlush bool
-	logIndex          *ShardedIndex
+	indexPath     string
+	dense         atomic.Pointer[denseIndex]  // unsealed segments: one offset per record
+	sparse        atomic.Pointer[sparseIndex] // sealed segments: one offset per 64 KiB
+	indexFlush    sync.WaitGroup
+	firstLogIndex uint64
+	firstLSN      atomic.Uint64 // lock-free copy of firstLogIndex for lookups
 
 	customMarker    uint32
 	markerValidator MarkerValidator
@@ -271,26 +271,10 @@ func WithSegmentDirectorySyncer(syncer DirectorySyncer) func(*Segment) {
 	}
 }
 
-// withClearIndexOnFlush enables clearing the in-memory index after it's flushed to disk.
-// This is useful when an external index is maintained.
-func withClearIndexOnFlush() func(*Segment) {
-	return func(s *Segment) {
-		s.clearIndexOnFlush = true
-	}
-}
-
 // WithSegmentSize sets the size for the Segment.
 func WithSegmentSize(size int64) func(*Segment) {
 	return func(s *Segment) {
 		s.mmapSize = size
-	}
-}
-
-// withLogIndex set up the log Index that will be used by the segment to populate
-// the log index when recovering the seal segment or after restart.
-func withLogIndex(logIndex *ShardedIndex) func(*Segment) {
-	return func(s *Segment) {
-		s.logIndex = logIndex
 	}
 }
 
@@ -393,6 +377,7 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 
 	if !isNew {
 		s.firstLogIndex = binary.LittleEndian.Uint64(mmapData[44:52])
+		s.firstLSN.Store(s.firstLogIndex)
 	}
 
 	if err := s.setupIndexFile(dirPath, extName, isNew); err != nil {
@@ -405,9 +390,9 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 
 func (seg *Segment) setupIndexFile(dirPath, extName string, isNew bool) error {
 	seg.indexPath = SegmentIndexFileName(dirPath, extName, seg.id)
-	seg.indexEntries = make([]segmentIndexEntry, 0)
 
 	if isNew {
+		seg.dense.Store(newDenseIndex())
 		return nil
 	}
 
@@ -415,8 +400,8 @@ func (seg *Segment) setupIndexFile(dirPath, extName string, isNew bool) error {
 		if err := seg.loadIndexFromFile(); err == nil {
 			return nil
 		}
-		seg.buildIndexFromSegment()
-		return seg.flushIndexToFile(seg.indexEntries)
+		entries := seg.buildIndexFromSegment()
+		return seg.flushIndexToFile(entries)
 	}
 
 	seg.buildIndexFromSegment()
@@ -447,38 +432,26 @@ func (seg *Segment) loadIndexFromFile() error {
 	if offset != seg.writeOffset.Load() {
 		return errors.New("index does not cover segment contents")
 	}
-	// Publish only a fully validated sidecar; failed loads must not leave stale
-	// positions in the shared index before the fallback scan rebuilds it.
-	if seg.logIndex != nil && seg.firstLogIndex > 0 {
-		for i, entry := range entries {
-			seg.logIndex.Set(seg.firstLogIndex+uint64(i), RecordPosition{SegmentID: seg.id, Offset: int64(entry.Offset)})
-		}
-	}
-	if !seg.clearIndexOnFlush {
-		seg.indexEntries = entries
-	}
+	// Publish only a fully validated sidecar. The sealed segment keeps a sparse
+	// sample; the full entries are released with this function's frame.
+	seg.installSparse(entries)
 	return nil
 }
 
-func (seg *Segment) buildIndexFromSegment() {
-	seg.indexEntries = seg.indexEntries[:0]
-	firstIdx := seg.firstLogIndex
-	indexBuild := seg.logIndex != nil && firstIdx > 0
-	var idx uint64
+// buildIndexFromSegment scans valid records and installs the index for the
+// segment's state. The returned entries are transient (used for the sidecar).
+func (seg *Segment) buildIndexFromSegment() []segmentIndexEntry {
+	var entries []segmentIndexEntry
 	seg.iterateValidEntries(func(offset int64, length uint32) bool {
-		seg.indexEntries = append(seg.indexEntries, segmentIndexEntry{
-			Offset: uint64(offset),
-			Length: length,
-		})
-		if indexBuild {
-			seg.logIndex.Set(firstIdx+idx, RecordPosition{
-				SegmentID: seg.id,
-				Offset:    offset,
-			})
-			idx++
-		}
+		entries = append(entries, segmentIndexEntry{Offset: uint64(offset), Length: length})
 		return true
 	})
+	if seg.isSealed.Load() {
+		seg.installSparse(entries)
+	} else {
+		seg.installDense(entries)
+	}
+	return entries
 }
 
 func (seg *Segment) flushIndexToFile(entries []segmentIndexEntry) error {
@@ -539,19 +512,27 @@ func (seg *Segment) flushIndexToFile(entries []segmentIndexEntry) error {
 	return nil
 }
 
-func (seg *Segment) appendIndexEntry(offset int64, length uint32) {
-	seg.indexEntries = append(seg.indexEntries, segmentIndexEntry{
-		Offset: uint64(offset),
-		Length: length,
-	})
+// appendIndexEntry requires writeMu; the record bytes are already written.
+func (seg *Segment) appendIndexEntry(offset int64) {
+	d := seg.dense.Load()
+	if d == nil {
+		d = newDenseIndex()
+		seg.dense.Store(d)
+	}
+	d.append(offset)
 }
 
-// IndexEntries returns a copy of the index metadata for this segment.
+// IndexEntries returns the offset and length of every indexed record. Sealed
+// segments hold only a sparse index, so their entries are read from the file.
 func (seg *Segment) IndexEntries() []SegmentIndexEntry {
 	seg.writeMu.RLock()
 	defer seg.writeMu.RUnlock()
-	entries := make([]SegmentIndexEntry, len(seg.indexEntries))
-	for i, entry := range seg.indexEntries {
+	if seg.closed.Load() {
+		return nil
+	}
+	raw := seg.entriesLocked()
+	entries := make([]SegmentIndexEntry, len(raw))
+	for i, entry := range raw {
 		entries[i] = SegmentIndexEntry{
 			SegmentID: seg.id,
 			Offset:    int64(entry.Offset),
@@ -561,37 +542,24 @@ func (seg *Segment) IndexEntries() []SegmentIndexEntry {
 	return entries
 }
 
-// ClearIndexFromMemory releases the in-memory index entries to free memory.
-// This can be called after the index has been copied to an external data structure.
-// Note: After calling this, IndexEntries() will return an empty slice.
-// Only sealed segments can be cleared; active segments are ignored.
-func (seg *Segment) ClearIndexFromMemory() {
-	seg.writeMu.Lock()
-	defer seg.writeMu.Unlock()
-	if !seg.isSealed.Load() {
-		return
-	}
-	seg.indexEntries = nil
-}
+// ClearIndexFromMemory is retained for compatibility. Sealed segments always
+// keep only a sparse index, so there is nothing further to release.
+//
+// Deprecated: the per-record index of a sealed segment is never retained.
+func (seg *Segment) ClearIndexFromMemory() {}
 
-func (seg *Segment) flushIndexAsync() {
-	entriesCopy := append([]segmentIndexEntry(nil), seg.indexEntries...)
-	clearOnFlush := seg.clearIndexOnFlush
+// flushIndexAsync writes the full sidecar from entries captured at seal time.
+func (seg *Segment) flushIndexAsync(entries []segmentIndexEntry) {
 	seg.indexFlush.Add(1)
-	go func(path string) {
+	go func() {
 		defer seg.indexFlush.Done()
-		if err := seg.flushIndexToFile(entriesCopy); err != nil {
+		if err := seg.flushIndexToFile(entries); err != nil {
 			slog.Error("[walfs]",
 				slog.String("message", "failed to flush index"),
 				slog.Uint64("segment_id", uint64(seg.id)),
 				slog.Any("error", err))
-			return
 		}
-		// clear in-memory index after successful flush if option is enabled
-		if clearOnFlush {
-			seg.ClearIndexFromMemory()
-		}
-	}(seg.indexPath)
+	}()
 }
 
 // WaitForIndexFlush blocks until any pending index flush operations complete.
@@ -639,7 +607,11 @@ func (seg *Segment) SealSegment() error {
 	binary.LittleEndian.PutUint32(mmapData[56:60], crc)
 	seg.isSealed.Store(true)
 
-	seg.flushIndexAsync()
+	// Swap the dense index for a sparse one; the full entries live only until
+	// the sidecar is written.
+	entries := seg.entriesLocked()
+	seg.installSparse(entries)
+	seg.flushIndexAsync(entries)
 	return nil
 }
 
@@ -836,7 +808,7 @@ func (seg *Segment) Write(data []byte, logIndex uint64) (RecordPosition, error) 
 	crc := crc32.Checksum(seg.mmapData[0:56], crcTable)
 	binary.LittleEndian.PutUint32(seg.mmapData[56:60], crc)
 
-	seg.appendIndexEntry(offset, uint32(len(data)))
+	seg.appendIndexEntry(offset)
 
 	// MSync if option is set
 	if seg.syncOption == MsyncOnWrite {
@@ -854,6 +826,7 @@ func (seg *Segment) Write(data []byte, logIndex uint64) (RecordPosition, error) 
 func (seg *Segment) writeFirstIndexEntry(logIndex uint64) {
 	if seg.firstLogIndex == 0 {
 		seg.firstLogIndex = logIndex
+		seg.firstLSN.Store(logIndex)
 		binary.LittleEndian.PutUint64(seg.mmapData[44:52], logIndex)
 		crc := crc32.Checksum(seg.mmapData[0:56], crcTable)
 		binary.LittleEndian.PutUint32(seg.mmapData[56:60], crc)
@@ -891,7 +864,6 @@ func (seg *Segment) WriteBatch(records [][]byte, logIndexes []uint64) ([]RecordP
 	startOffset := seg.writeOffset.Load()
 	currentOffset := startOffset
 	positions := make([]RecordPosition, 0, len(records))
-	lengths := make([]uint32, 0, len(records))
 
 	headerSize := int64(recordHeaderSize)
 	trailerSize := int64(recordTrailerMarkerSize)
@@ -917,7 +889,6 @@ func (seg *Segment) WriteBatch(records [][]byte, logIndexes []uint64) ([]RecordP
 			SegmentID: seg.id,
 			Offset:    currentOffset,
 		})
-		lengths = append(lengths, uint32(len(data)))
 		currentOffset += entrySize
 		recordsToWrite = i + 1
 	}
@@ -969,7 +940,7 @@ func (seg *Segment) WriteBatch(records [][]byte, logIndexes []uint64) ([]RecordP
 	binary.LittleEndian.PutUint32(seg.mmapData[56:60], crc)
 
 	for i := 0; i < recordsToWrite; i++ {
-		seg.appendIndexEntry(positions[i].Offset, lengths[i])
+		seg.appendIndexEntry(positions[i].Offset)
 	}
 
 	// MSync if option is set
@@ -1423,7 +1394,7 @@ func (seg *Segment) applyTruncate(entries []segmentIndexEntry) error {
 	seg.zeroDiscardedTail(end, seg.mmapSize)
 	seg.applyTruncateHeader(end, int64(len(entries)))
 	seg.writeOffset.Store(end)
-	seg.indexEntries = entries
+	seg.installDense(entries)
 	if err := seg.Sync(); err != nil {
 		return fmt.Errorf("failed to sync truncated segment: %w", err)
 	}
