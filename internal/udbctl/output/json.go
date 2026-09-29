@@ -28,6 +28,11 @@ func (f *JSONFormatter) WriteRestoreResult(w io.Writer, result RestoreResult) er
 	return writeJSON(w, result)
 }
 
+// WriteTruncateResult writes WAL truncation result as JSON.
+func (f *JSONFormatter) WriteTruncateResult(w io.Writer, result TruncateResult) error {
+	return writeJSON(w, result)
+}
+
 func writeJSON(w io.Writer, v any) error {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")

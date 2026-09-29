@@ -133,3 +133,25 @@ func (f *TableFormatter) WriteRestoreResult(w io.Writer, result RestoreResult) e
 	}
 	return nil
 }
+
+// WriteTruncateResult writes WAL truncation result.
+func (f *TableFormatter) WriteTruncateResult(w io.Writer, result TruncateResult) error {
+	action := "Removed"
+	if result.DryRun {
+		fmt.Fprintln(w, "[DRY RUN] The following would be truncated:")
+		fmt.Fprintln(w)
+		action = "Would remove"
+	}
+	fmt.Fprintf(w, "WAL:            %s\n", result.WALPath)
+	fmt.Fprintf(w, "LSN range:      %d..%d\n", result.FirstLSN, result.LastLSNBefore)
+	fmt.Fprintf(w, "Keep through:   %d\n", result.KeepThrough)
+	fmt.Fprintf(w, "%s %d records (LSN %d..%d) and %d whole segments\n",
+		action, result.RecordsRemoved, result.KeepThrough+1, result.LastLSNBefore, result.SegmentsRemoved)
+	fmt.Fprintln(w)
+	if result.DryRun {
+		fmt.Fprintln(w, "Run with --force instead of --dry-run to truncate.")
+	} else {
+		fmt.Fprintln(w, "Truncation completed successfully!")
+	}
+	return nil
+}

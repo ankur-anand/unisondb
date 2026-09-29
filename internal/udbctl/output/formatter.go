@@ -68,12 +68,24 @@ type RestoreResult struct {
 	SegmentsRestored  int    `json:"segments_restored,omitempty"`
 }
 
+// TruncateResult contains the result of an offline WAL truncation.
+type TruncateResult struct {
+	DryRun          bool   `json:"dry_run"`
+	WALPath         string `json:"wal_path"`
+	FirstLSN        uint64 `json:"first_lsn"`
+	LastLSNBefore   uint64 `json:"last_lsn_before"`
+	KeepThrough     uint64 `json:"keep_through"`
+	RecordsRemoved  uint64 `json:"records_removed"`
+	SegmentsRemoved int    `json:"segments_removed"`
+}
+
 // Formatter is the interface for output formatting.
 type Formatter interface {
 	WriteSegmentList(w io.Writer, segments []SegmentInfo) error
 	WriteSegmentDetail(w io.Writer, detail SegmentDetail) error
 	WriteWalStats(w io.Writer, stats WalStats) error
 	WriteRestoreResult(w io.Writer, result RestoreResult) error
+	WriteTruncateResult(w io.Writer, result TruncateResult) error
 }
 
 // NewFormatter creates a new formatter for the given format.

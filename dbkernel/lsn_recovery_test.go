@@ -12,6 +12,7 @@ import (
 	"github.com/ankur-anand/unisondb/dbkernel/internal/memtable"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
+	udbctlwal "github.com/ankur-anand/unisondb/internal/udbctl/wal"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -443,6 +444,60 @@ func TestLocalAppendFailureDoesNotConsumeLSN(t *testing.T) {
 			require.NoError(t, e.Close(context.Background()))
 			e = openLSNTestEngine(t, dir, BoltDBEngine)
 			assert.Equal(t, before+1, e.OpsReceivedCount())
+		})
+	}
+}
+
+// `udbctl wal truncate` runs on a stopped server. Cutting the WAL at or after
+// the B-tree checkpoint must leave a server that starts and replays the kept
+// records; cutting before it must make the server refuse to start.
+func TestEngineStartAfterOfflineWALTruncate(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		keepThrough uint64
+		starts      bool
+	}{
+		{name: "after checkpoint", keepThrough: 7, starts: true},
+		{name: "before checkpoint", keepThrough: 3, starts: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			e := openLSNTestEngine(t, dir, BoltDBEngine)
+			for i := 0; i < 5; i++ {
+				require.NoError(t, e.PutKV([]byte(fmt.Sprintf("key%d", i)), []byte("value")))
+			}
+			checkpointLSNTestEngine(t, e) // B-tree holds LSN 1..5
+			for i := 5; i < 10; i++ {
+				require.NoError(t, e.PutKV([]byte(fmt.Sprintf("key%d", i)), []byte("value")))
+			}
+			conf := *e.config
+			require.NoError(t, e.Close(context.Background())) // LSN 6..10 only in the WAL
+
+			_, err := udbctlwal.Truncate(udbctlwal.TruncateOptions{
+				DataDir: dir, Namespace: "lsn", KeepThrough: tc.keepThrough,
+			})
+			require.NoError(t, err)
+
+			e, err = NewStorageEngine(dir, "lsn", &conf)
+			if !tc.starts {
+				if e != nil {
+					require.NoError(t, e.Close(context.Background()))
+				}
+				require.ErrorContains(t, err, "checkpoint")
+				return
+			}
+			require.NoError(t, err)
+			defer func() { require.NoError(t, e.Close(context.Background())) }()
+			for i := 0; i < 10; i++ {
+				_, err := e.GetKV([]byte(fmt.Sprintf("key%d", i)))
+				if uint64(i) < tc.keepThrough {
+					require.NoError(t, err, "key%d (LSN %d) was kept", i, i+1)
+				} else {
+					require.ErrorIs(t, err, ErrKeyNotFound, "key%d (LSN %d) was truncated", i, i+1)
+				}
+			}
+			require.NoError(t, e.PutKV([]byte("after"), []byte("value")))
+			require.Equal(t, tc.keepThrough+1, e.writeSeenCounter.Load())
 		})
 	}
 }
