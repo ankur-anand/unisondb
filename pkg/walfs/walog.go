@@ -21,7 +21,7 @@ var (
 	ErrOffsetOutOfBounds  = errors.New("start offset is beyond segment size")
 	ErrOffsetBeforeHeader = errors.New("start offset is within reserved segment header")
 	ErrFsync              = errors.New("fsync error")
-	ErrRecoveryRequired   = errors.New("WAL truncation interrupted; close and reopen for recovery")
+	ErrRecoveryRequired   = errors.New("WAL durable state unknown after an interrupted truncation or failed seal; close and reopen for recovery")
 	ErrRecordTooLarge     = errors.New("record size exceeds maximum segment capacity")
 	// ErrInvalidLogIndex rejects log indexes that cannot be located positionally
 	// (firstLogIndex + record ordinal), which recovery has always assumed.
@@ -353,6 +353,17 @@ func (wl *WALog) recoverSegments() error {
 		wl.currentSegment = seg
 	}
 
+	// A crash after sealing the last segment but before its successor was
+	// created leaves no writable segment; open the next one.
+	if last := wl.currentSegment; last.IsSealed() {
+		seg, err := wl.openSegment(last.ID() + 1)
+		if err != nil {
+			return fmt.Errorf("failed to open segment after sealed %d: %w", last.ID(), err)
+		}
+		wl.segments[seg.ID()] = seg
+		wl.currentSegment = seg
+	}
+
 	wl.snapshotSegments()
 	wl.recomputeBounds()
 	return nil
@@ -467,7 +478,7 @@ func (wl *WALog) Write(data []byte, logIndex uint64) (RecordPosition, error) {
 	}
 
 	estimatedSize := recordOverhead(int64(len(data)))
-	if wl.currentSegment.WillExceed(len(data)) && estimatedSize > (wl.maxSegmentSize-int64(segmentHeaderSize)) {
+	if wl.currentSegment.WillExceed(len(data)) && estimatedSize > recordLimitFor(wl.maxSegmentSize)-segmentHeaderSize {
 		return RecordPosition{}, ErrRecordTooLarge
 	}
 
@@ -531,11 +542,11 @@ func (wl *WALog) WriteBatch(records [][]byte, logIndexes []uint64) ([]RecordPosi
 	}
 
 	// Pre-check each record to ensure it can fit in a segment
-	remaining := wl.currentSegment.GetSegmentSize() - wl.currentSegment.WriteOffset()
+	remaining := wl.currentSegment.recordLimit() - wl.currentSegment.WriteOffset()
 	for _, data := range records {
 		estimatedSize := recordOverhead(int64(len(data)))
 		if estimatedSize > remaining {
-			remaining = wl.maxSegmentSize - segmentHeaderSize
+			remaining = recordLimitFor(wl.maxSegmentSize) - segmentHeaderSize
 		}
 		if estimatedSize > remaining {
 			return nil, ErrRecordTooLarge
@@ -552,11 +563,11 @@ func (wl *WALog) WriteBatch(records [][]byte, logIndexes []uint64) ([]RecordPosi
 				return nil, fmt.Errorf("%w: batch index %d at position %d", ErrInvalidLogIndex, logIndexes[i], i)
 			}
 		}
-		willRotate := recordOverhead(int64(len(records[0]))) > wl.currentSegment.GetSegmentSize()-wl.currentSegment.WriteOffset()
+		willRotate := recordOverhead(int64(len(records[0]))) > wl.currentSegment.recordLimit()-wl.currentSegment.WriteOffset()
 		if err := wl.validateNextIndex(willRotate, logIndexes[0]); err != nil {
 			return nil, err
 		}
-	} else if wl.currentSegment.firstLSN.Load() > 0 && recordOverhead(int64(len(records[0]))) <= wl.currentSegment.GetSegmentSize()-wl.currentSegment.WriteOffset() {
+	} else if wl.currentSegment.firstLSN.Load() > 0 && recordOverhead(int64(len(records[0]))) <= wl.currentSegment.recordLimit()-wl.currentSegment.WriteOffset() {
 		return nil, fmt.Errorf("%w: unindexed batch after indexed records", ErrInvalidLogIndex)
 	}
 
@@ -817,12 +828,13 @@ func (wl *WALog) RotateSegment() error {
 
 func (wl *WALog) rotateSegment() error {
 	if wl.currentSegment != nil && !IsSealed(wl.currentSegment.GetFlags()) {
+		// SealSegment syncs the records, the footer and the sealed header.
 		if err := wl.currentSegment.SealSegment(); err != nil {
+			if errors.Is(err, ErrFsync) {
+				// The segment's durable state is unknown until recovery reads it.
+				return wl.requireRecovery(fmt.Errorf("seal segment %d: %w", wl.currentSegment.ID(), err))
+			}
 			return fmt.Errorf("failed to seal current segment: %w", err)
-		}
-		err := wl.currentSegment.Sync()
-		if err != nil {
-			return err
 		}
 		// Mark the sealed segment as in-memory sealed
 		wl.currentSegment.MarkSealedInMemory()

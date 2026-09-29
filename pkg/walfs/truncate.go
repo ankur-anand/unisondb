@@ -40,6 +40,12 @@ func (wl *WALog) RecoveryError() error {
 }
 
 func (wl *WALog) failTruncation(err error) error {
+	return wl.requireRecovery(err)
+}
+
+// requireRecovery makes every later operation fail until the WAL is closed
+// and reopened, for failures that leave the durable state unknown.
+func (wl *WALog) requireRecovery(err error) error {
 	failure := fmt.Errorf("%w: %w", ErrRecoveryRequired, err)
 	wl.recoveryErr.Store(&failure)
 	return failure
@@ -87,7 +93,6 @@ func (wl *WALog) applyTruncation(intent truncateIntent, entries []segmentIndexEn
 	if intent.Target != 0 {
 		seg := wl.segments[intent.Target]
 		seg.lifecycleMu.Lock()
-		seg.WaitForIndexFlush()
 		seg.writeMu.Lock()
 		err := seg.applyTruncate(entries)
 		seg.writeMu.Unlock()
@@ -171,7 +176,6 @@ func (wl *WALog) prepareTruncation(index uint64) (truncateIntent, []segmentIndex
 	}
 	target.lifecycleMu.Lock()
 	defer target.lifecycleMu.Unlock()
-	target.WaitForIndexFlush()
 	target.writeMu.Lock()
 	defer target.writeMu.Unlock()
 	entries, err := target.prepareTruncateLocked(index)
@@ -257,10 +261,8 @@ func (wl *WALog) recoverTruncation() error {
 		}
 	}
 	for _, id := range intent.Remove {
-		for _, path := range []string{SegmentFileName(wl.dir, wl.ext, id), SegmentIndexFileName(wl.dir, wl.ext, id)} {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
+		if err := os.Remove(SegmentFileName(wl.dir, wl.ext, id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
 		}
 	}
 	if err := wl.dirSyncer.SyncDir(wl.dir); err != nil {
@@ -330,7 +332,7 @@ func (wl *WALog) recoverTruncateTarget(intent truncateIntent) error {
 		return err
 	}
 	seg := &Segment{fd: file, mmapData: data, mmapSize: info.Size(), path: path, id: intent.Target,
-		firstLogIndex: meta.FirstLogIndex, indexPath: SegmentIndexFileName(wl.dir, wl.ext, intent.Target), dirSyncer: wl.dirSyncer}
+		firstLogIndex: meta.FirstLogIndex, dirSyncer: wl.dirSyncer}
 	seg.writeOffset.Store(meta.WriteOffset)
 	entries, err := seg.prepareTruncateLocked(intent.KeepIndex)
 	if err != nil {

@@ -73,10 +73,9 @@ func TestRecoveryTailCannotResurrectRecords(t *testing.T) {
 	require.Equal(t, []string{"rec-1-old", "rec-2-new"}, got)
 }
 
-// A sealed segment whose sidecar is missing and whose middle record is
-// corrupt must not silently shrink: records past the corruption were durable,
-// so opening fails instead of dropping them from lookups and bounds.
-func TestSealedCorruptionWithoutSidecarIsNotSilent(t *testing.T) {
+// A corrupt record inside a sealed segment is reported by the reader rather
+// than skipped; the footer still indexes every record the header promises.
+func TestSealedRecordCorruptionIsLoud(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewWALog(dir, ".wal")
 	require.NoError(t, err)
@@ -91,17 +90,25 @@ func TestSealedCorruptionWithoutSidecarIsNotSilent(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, w.Close())
 
-	require.NoError(t, os.Remove(SegmentIndexFileName(dir, ".wal", 1)))
 	flipByte(t, SegmentFileName(dir, ".wal", 1), pos[1].Offset+recordHeaderSize) // payload of rec-2
 
-	_, err = NewWALog(dir, ".wal")
-	require.ErrorIs(t, err, ErrSegmentCorrupt)
+	w, err = NewWALog(dir, ".wal")
+	require.NoError(t, err)
+	defer w.Close()
+	first, last := w.GetBounds()
+	require.Equal(t, uint64(1), first)
+	require.Equal(t, uint64(4), last)
+	got3, err := w.PositionForIndex(3)
+	require.NoError(t, err)
+	require.Equal(t, pos[2], got3)
+	records, err := readAllRecords(w)
+	require.ErrorIs(t, err, ErrInvalidCRC)
+	require.Equal(t, []string{"rec-1"}, records)
 }
 
 // Recovery rewrites the active segment's header count to the valid prefix, so
-// sealing it later records the true count. Otherwise the strict sealed rebuild
-// would reject a healthy segment whose sidecar is missing.
-func TestRecoveredCountSurvivesSealAndSidecarRebuild(t *testing.T) {
+// the footer written when it is later sealed agrees with the header.
+func TestRecoveredCountSurvivesSeal(t *testing.T) {
 	dir := t.TempDir()
 	w, err := NewWALog(dir, ".wal")
 	require.NoError(t, err)
@@ -119,12 +126,7 @@ func TestRecoveredCountSurvivesSealAndSidecarRebuild(t *testing.T) {
 	require.NoError(t, w.RotateSegment())
 	_, err = w.Write([]byte("rec-3-new"), 3)
 	require.NoError(t, err)
-	w.Current().WaitForIndexFlush()
-	for _, seg := range w.Segments() {
-		seg.WaitForIndexFlush()
-	}
 	require.NoError(t, w.Close())
-	require.NoError(t, os.Remove(SegmentIndexFileName(dir, ".wal", 1)))
 
 	w, err = NewWALog(dir, ".wal")
 	require.NoError(t, err)

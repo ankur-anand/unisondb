@@ -239,7 +239,6 @@ func TestClearIndexOnFlush_EnabledClearsAfterRotation(t *testing.T) {
 	seg1ID := seg1.ID()
 
 	require.NoError(t, wal.RotateSegment())
-	seg1.WaitForIndexFlush()
 
 	require.True(t, seg1.IsSealed(), "segment 1 should be sealed after rotation")
 	assert.Nil(t, seg1.dense.Load(), "sealed segment %d must not keep a per-record index", seg1ID)
@@ -276,7 +275,6 @@ func TestClearIndexOnFlush_ReopenedSegmentsRemainCleared(t *testing.T) {
 
 	seg1 := wal1.Current()
 	require.NoError(t, wal1.RotateSegment())
-	seg1.WaitForIndexFlush()
 
 	require.True(t, seg1.IsSealed())
 	assert.Nil(t, seg1.dense.Load(), "sealed segment must not keep a per-record index")
@@ -326,7 +324,6 @@ func TestClearIndexOnFlush_DisabledDoesNotClearOnRotation(t *testing.T) {
 
 	seg1 := wal.Current()
 	require.NoError(t, wal.RotateSegment())
-	seg1.WaitForIndexFlush()
 
 	require.True(t, seg1.IsSealed())
 	entries := seg1.IndexEntries()
@@ -355,7 +352,6 @@ func TestClearIndexFromMemory_ManualClearOnlySealedNotActive(t *testing.T) {
 
 	seg1 := wal.Current()
 	require.NoError(t, wal.RotateSegment())
-	seg1.WaitForIndexFlush()
 
 	for i := 0; i < 2; i++ {
 		_, err := wal.Write(data, uint64(i+4))
@@ -418,7 +414,6 @@ func TestClearIndexOnFlush_MultipleRotations(t *testing.T) {
 
 		seg := wal.Current()
 		require.NoError(t, wal.RotateSegment())
-		seg.WaitForIndexFlush()
 		sealedSegments = append(sealedSegments, seg)
 	}
 
@@ -612,9 +607,7 @@ func TestWALog_LogIndexRebuiltOnReopen(t *testing.T) {
 		require.NoError(t, err)
 		positions[uint64(i+1)] = pos
 		if i == 2 {
-			seg := wal.Current()
 			require.NoError(t, wal.RotateSegment())
-			seg.WaitForIndexFlush()
 		}
 	}
 

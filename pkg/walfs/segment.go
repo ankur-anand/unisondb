@@ -1,7 +1,6 @@
 package walfs
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -60,7 +59,7 @@ const (
 	// just a string of "UWAL"
 	// 'U' = 0x55 and so on. Unison Write ahead log.
 	segmentMagicNumber   = 0x5557414C
-	segmentHeaderVersion = 1
+	segmentHeaderVersion = 2 // 2: sealed segments carry a footer; no .idx sidecar
 
 	// layout: 4 (checksum) + 4 (length) = 8 bytes
 	recordHeaderSize = 8
@@ -242,15 +241,13 @@ type Segment struct {
 
 	isSealed       atomic.Bool
 	inMemorySealed atomic.Bool
-	lifecycleMu    sync.Mutex // serializes sealing, truncation and close with index flushes
+	lifecycleMu    sync.Mutex // serializes sealing, truncation and close
 	writeMu        sync.RWMutex
 	syncOption     MsyncOption
 	dirSyncer      DirectorySyncer
 
-	indexPath     string
 	dense         atomic.Pointer[denseIndex]  // unsealed segments: one offset per record
-	sparse        atomic.Pointer[sparseIndex] // sealed segments: one offset per 4 KiB
-	indexFlush    sync.WaitGroup
+	sparse        atomic.Pointer[sparseIndex] // sealed segments: from the footer
 	firstLogIndex uint64
 	firstLSN      atomic.Uint64 // lock-free copy of firstLogIndex for lookups
 
@@ -321,11 +318,8 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		opt(s)
 	}
 
-	if s.mmapSize > maxSegmentSize {
-		return nil, fmt.Errorf("segment size exceeds 4 GiB limit: %d bytes", s.mmapSize)
-	}
-	if s.mmapSize < segmentHeaderSize {
-		return nil, fmt.Errorf("segment size is smaller than header: %d bytes", s.mmapSize)
+	if err := validateSegmentSize(s.mmapSize); err != nil {
+		return nil, err
 	}
 
 	fd, mmapData, err := s.prepareSegmentFile(path, isNew)
@@ -351,6 +345,10 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		meta, err := decodeSegmentHeader(mmapData[:segmentHeaderSize])
 		if err != nil {
 			return nil, fmt.Errorf("failed to decode metadata: %w", err)
+		}
+		if meta.Magic != segmentMagicNumber || meta.Version != segmentHeaderVersion {
+			return nil, fmt.Errorf("unsupported WAL segment format: magic %08x version %d, want %08x version %d",
+				meta.Magic, meta.Version, segmentMagicNumber, segmentHeaderVersion)
 		}
 
 		if IsSealed(meta.Flags) && (meta.WriteOffset < segmentHeaderSize || meta.WriteOffset > s.mmapSize) {
@@ -383,7 +381,7 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 		s.firstLSN.Store(s.firstLogIndex)
 	}
 
-	if err := s.setupIndexFile(dirPath, extName, isNew); err != nil {
+	if err := s.setupIndex(isNew); err != nil {
 		return nil, err
 	}
 
@@ -405,142 +403,28 @@ func OpenSegmentFile(dirPath, extName string, id uint32, opts ...func(*Segment))
 	return s, nil
 }
 
-func (seg *Segment) setupIndexFile(dirPath, extName string, isNew bool) error {
-	seg.indexPath = SegmentIndexFileName(dirPath, extName, seg.id)
-
+// setupIndex installs the in-memory index when a segment is opened: a
+// sealed segment's sparse index comes from its footer, an unsealed segment is
+// scanned. A sealed segment whose footer is invalid is corrupt.
+func (seg *Segment) setupIndex(isNew bool) error {
 	if isNew {
 		seg.dense.Store(newDenseIndex())
 		return nil
 	}
-
 	if seg.isSealed.Load() {
-		if err := seg.loadIndexFromFile(); err == nil {
-			return nil
+		sparse, err := seg.readFooterLocked()
+		if err != nil {
+			return err
 		}
-		// The sealed header is authoritative. A rebuild that cannot reproduce
-		// its range means corruption, not a shorter log.
-		entries := seg.buildIndexFromSegment()
-		end := int64(segmentHeaderSize)
-		if n := len(entries); n > 0 {
-			end = int64(entries[n-1].Offset) + recordOverhead(int64(entries[n-1].Length))
-		}
-		wantCount := binary.LittleEndian.Uint64(seg.mmapData[32:40])
-		if uint64(len(entries)) != wantCount || end != seg.writeOffset.Load() {
-			return fmt.Errorf("%w: segment %d has %d valid records ending at %d, header says %d ending at %d",
-				ErrSegmentCorrupt, seg.id, len(entries), end, wantCount, seg.writeOffset.Load())
-		}
-		return seg.flushIndexToFile(entries)
+		seg.sparse.Store(sparse)
+		return nil
 	}
-
-	seg.buildIndexFromSegment()
-	return nil
-}
-
-func (seg *Segment) loadIndexFromFile() error {
-	data, err := os.ReadFile(seg.indexPath)
-	if err != nil {
-		return err
-	}
-	count := int64(len(data) / indexEntrySize)
-	if len(data)%indexEntrySize != 0 || count != int64(binary.LittleEndian.Uint64(seg.mmapData[32:40])) {
-		return fmt.Errorf("corrupt index file size: %d", len(data))
-	}
-	entries := make([]segmentIndexEntry, 0, count)
-	offset := int64(segmentHeaderSize)
-	for i := int64(0); i < count; i++ {
-		buf := data[i*indexEntrySize : (i+1)*indexEntrySize]
-		entry := segmentIndexEntry{Offset: binary.LittleEndian.Uint64(buf[:8]), Length: binary.LittleEndian.Uint32(buf[8:12])}
-		end := offset + recordOverhead(int64(entry.Length))
-		if entry.Offset != uint64(offset) || end > seg.writeOffset.Load() || end > seg.mmapSize || binary.LittleEndian.Uint32(seg.mmapData[offset+4:offset+8]) != entry.Length {
-			return fmt.Errorf("invalid index entry %d", i)
-		}
-		entries = append(entries, entry)
-		offset = end
-	}
-	if offset != seg.writeOffset.Load() {
-		return errors.New("index does not cover segment contents")
-	}
-	// Publish only a fully validated sidecar. The sealed segment keeps a sparse
-	// sample; the full entries are released with this function's frame.
-	seg.installSparse(entries)
-	return nil
-}
-
-// buildIndexFromSegment scans valid records and installs the index for the
-// segment's state. The returned entries are transient (used for the sidecar).
-func (seg *Segment) buildIndexFromSegment() []segmentIndexEntry {
 	var entries []segmentIndexEntry
-	sealed, end := seg.isSealed.Load(), seg.writeOffset.Load()
 	seg.iterateValidEntries(func(offset int64, length uint32) bool {
-		if sealed && offset+recordOverhead(int64(length)) > end {
-			return false // bytes past a sealed segment's end are not records
-		}
 		entries = append(entries, segmentIndexEntry{Offset: uint64(offset), Length: length})
 		return true
 	})
-	if seg.isSealed.Load() {
-		seg.installSparse(entries)
-	} else {
-		seg.installDense(entries)
-	}
-	return entries
-}
-
-func (seg *Segment) flushIndexToFile(entries []segmentIndexEntry) error {
-	if seg.indexPath == "" {
-		return nil
-	}
-	indexDir := filepath.Dir(seg.indexPath)
-	if err := os.MkdirAll(indexDir, 0o755); err != nil {
-		return fmt.Errorf("ensure index dir: %w", err)
-	}
-
-	tmpFile, err := os.CreateTemp(indexDir, filepath.Base(seg.indexPath)+".tmp")
-	if err != nil {
-		return fmt.Errorf("open index for flush: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-
-	writer := bufio.NewWriterSize(tmpFile, 32*1024)
-	defer func() {
-		_ = writer.Flush()
-		_ = tmpFile.Close()
-		_ = os.Remove(tmpPath)
-	}()
-
-	buf := make([]byte, indexEntrySize)
-	for _, entry := range entries {
-		binary.LittleEndian.PutUint64(buf[0:8], entry.Offset)
-		binary.LittleEndian.PutUint32(buf[8:12], entry.Length)
-		for i := 12; i < indexEntrySize; i++ {
-			buf[i] = 0
-		}
-		if _, err := writer.Write(buf); err != nil {
-			return fmt.Errorf("write index entry: %w", err)
-		}
-	}
-
-	if err := writer.Flush(); err != nil {
-		return fmt.Errorf("flush index writer: %w", err)
-	}
-	if err := tmpFile.Sync(); err != nil {
-		return fmt.Errorf("sync index file: %w", err)
-	}
-
-	if err := tmpFile.Close(); err != nil {
-		return fmt.Errorf("close index file: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, seg.indexPath); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("rename index file: %w", err)
-	}
-
-	if seg.dirSyncer != nil {
-		if err := seg.dirSyncer.SyncDir(indexDir); err != nil {
-			return fmt.Errorf("fsync index directory: %w", err)
-		}
-	}
+	seg.installDense(entries)
 	return nil
 }
 
@@ -580,25 +464,6 @@ func (seg *Segment) IndexEntries() []SegmentIndexEntry {
 // Deprecated: the per-record index of a sealed segment is never retained.
 func (seg *Segment) ClearIndexFromMemory() {}
 
-// flushIndexAsync writes the full sidecar from entries captured at seal time.
-func (seg *Segment) flushIndexAsync(entries []segmentIndexEntry) {
-	seg.indexFlush.Add(1)
-	go func() {
-		defer seg.indexFlush.Done()
-		if err := seg.flushIndexToFile(entries); err != nil {
-			slog.Error("[walfs]",
-				slog.String("message", "failed to flush index"),
-				slog.Uint64("segment_id", uint64(seg.id)),
-				slog.Any("error", err))
-		}
-	}()
-}
-
-// WaitForIndexFlush blocks until any pending index flush operations complete.
-func (seg *Segment) WaitForIndexFlush() {
-	seg.indexFlush.Wait()
-}
-
 // IsSealed returns if teh provided flag has sealed bit set.
 func IsSealed(flags uint32) bool {
 	return flags&FlagSealed != 0
@@ -623,11 +488,27 @@ func (seg *Segment) SealSegment() error {
 		return nil
 	}
 
-	mmapData := seg.mmapData
+	// Footer first, made durable before the header marks the segment sealed:
+	// write-back order is not guaranteed, so one sync for both could persist a
+	// sealed header without its footer.
+	end := seg.writeOffset.Load()
+	count := seg.indexedCount()
+	d := seg.dense.Load()
+	sparse := buildSparseIndex(count, func(i uint64) int64 { off, _ := d.get(i); return off })
+	if err := seg.writeFooterLocked(sparse, end); err != nil {
+		return err
+	}
+	if err := seg.Sync(); err != nil {
+		// Leave no footer bytes behind in a segment that stays unsealed.
+		clear(seg.mmapData[end : end+footerSize(sparse)])
+		return fmt.Errorf("%w: sync footer of segment %d: %w", ErrFsync, seg.id, err)
+	}
 
+	mmapData := seg.mmapData
 	now := uint64(time.Now().UnixNano())
 	binary.LittleEndian.PutUint64(mmapData[16:24], now)
-	binary.LittleEndian.PutUint64(mmapData[24:32], uint64(seg.writeOffset.Load()))
+	binary.LittleEndian.PutUint64(mmapData[24:32], uint64(end))
+	binary.LittleEndian.PutUint64(mmapData[32:40], count)
 	flags := binary.LittleEndian.Uint32(mmapData[40:44])
 	// clear 'active' bit
 	flags &^= FlagActive
@@ -637,13 +518,15 @@ func (seg *Segment) SealSegment() error {
 
 	crc := crc32.Checksum(mmapData[0:56], crcTable)
 	binary.LittleEndian.PutUint32(mmapData[56:60], crc)
+	if err := seg.Sync(); err != nil {
+		// The header may or may not have reached disk; either state is valid
+		// for recovery (sealed with a durable footer, or unsealed and scanned),
+		// but this handle can no longer tell which. Report it as fatal.
+		return fmt.Errorf("%w: sync sealed header of segment %d: %w", ErrFsync, seg.id, err)
+	}
 	seg.isSealed.Store(true)
-
-	// Swap the dense index for a sparse one; the full entries live only until
-	// the sidecar is written.
-	entries := seg.entriesLocked()
-	seg.installSparse(entries)
-	seg.flushIndexAsync(entries)
+	seg.sparse.Store(sparse)
+	seg.dense.Store(nil)
 	return nil
 }
 
@@ -691,9 +574,9 @@ func (seg *Segment) prepareSegmentFile(path string, isNew bool) (*os.File, mmap.
 			_ = fd.Close()
 			return nil, nil, err
 		}
-		if info.Size() < segmentHeaderSize || info.Size() > maxSegmentSize {
+		if err := validateSegmentSize(info.Size()); err != nil {
 			_ = fd.Close()
-			return nil, nil, fmt.Errorf("invalid existing segment size: %d", info.Size())
+			return nil, nil, fmt.Errorf("invalid existing segment: %w", err)
 		}
 		// Configuration determines the capacity of NEW segments only.
 		seg.mmapSize = info.Size()
@@ -808,7 +691,7 @@ func (seg *Segment) Write(data []byte, logIndex uint64) (RecordPosition, error) 
 	rawSize := headerSize + dataSize + trailerSize
 	entrySize := alignUp(rawSize)
 
-	if offset+entrySize > seg.mmapSize {
+	if offset+entrySize > seg.recordLimit() {
 		return NilRecordPosition, errors.New("write exceeds Segment size")
 	}
 
@@ -907,11 +790,11 @@ func (seg *Segment) WriteBatch(records [][]byte, logIndexes []uint64) ([]RecordP
 		rawSize := headerSize + dataSize + trailerSize
 		entrySize := alignUp(rawSize)
 
-		if entrySize > seg.mmapSize-segmentHeaderSize {
+		if entrySize > seg.recordLimit()-segmentHeaderSize {
 			return nil, 0, fmt.Errorf("record at index %d (size %d bytes) exceeds maximum segment capacity", i, len(data))
 		}
 
-		if currentOffset+entrySize > seg.mmapSize {
+		if currentOffset+entrySize > seg.recordLimit() {
 			// can't fit from this record - stop here
 			recordsToWrite = i
 			break
@@ -1069,12 +952,15 @@ func (seg *Segment) Sync() error {
 		return fmt.Errorf("mmap flush error: %w", err)
 	}
 
-	if err := seg.fd.Sync(); err != nil {
+	if err := fsyncFile(seg.fd); err != nil {
 		return fmt.Errorf("fsync error: %w", err)
 	}
 
 	return nil
 }
+
+// fsyncFile is replaced in tests to inject fsync failures.
+var fsyncFile = func(f *os.File) error { return f.Sync() }
 
 func (seg *Segment) MSync() error {
 	if seg.closed.Load() {
@@ -1087,13 +973,13 @@ func (seg *Segment) MSync() error {
 	return nil
 }
 
-// WillExceed returns true if writing a record of the given dataSize would overflow
-// the segment's allocated (memory-mapped) size.
+// WillExceed returns true if a record of the given dataSize would not fit
+// before the space reserved for the segment's footer.
 func (seg *Segment) WillExceed(dataSize int) bool {
 	rawSize := int64(recordHeaderSize + dataSize + recordTrailerMarkerSize)
 	entrySize := alignUp(rawSize)
 	offset := seg.writeOffset.Load()
-	return offset+entrySize > seg.mmapSize
+	return offset+entrySize > seg.recordLimit()
 }
 
 // Close gracefully shuts down the segment by waiting for all active readers to complete.
@@ -1111,26 +997,25 @@ func (seg *Segment) Close() error {
 	}
 	seg.closeCond.L.Unlock()
 
-	seg.indexFlush.Wait()
+	syncErr := seg.Sync()
 
-	if err := seg.Sync(); err != nil {
-		defer func() {
-			_ = seg.mmapData.Unmap()
-			_ = seg.fd.Close()
-		}()
-		return fmt.Errorf("sync error during close: %w", err)
-	}
+	// Lookups and IndexEntries check closed and read the mapping under
+	// writeMu's read lock and hold no reference; take the write lock so none
+	// is mid-read when the mapping goes away, on every path.
+	seg.writeMu.Lock()
+	defer seg.writeMu.Unlock()
 	seg.closed.Store(true)
+	unmapErr := seg.mmapData.Unmap()
+	closeErr := seg.fd.Close()
 
-	if err := seg.mmapData.Unmap(); err != nil {
-		_ = seg.fd.Close()
-		return fmt.Errorf("unmap error: %w", err)
+	switch {
+	case syncErr != nil:
+		return fmt.Errorf("sync error during close: %w", syncErr)
+	case unmapErr != nil:
+		return fmt.Errorf("unmap error: %w", unmapErr)
+	case closeErr != nil:
+		return fmt.Errorf("file close error: %w", closeErr)
 	}
-
-	if err := seg.fd.Close(); err != nil {
-		return fmt.Errorf("file close error: %w", err)
-	}
-
 	return nil
 }
 
@@ -1237,18 +1122,7 @@ func (seg *Segment) cleanup() {
 		deletedSegment = true
 	}
 
-	deletedIndex := false
-	if seg.indexPath != "" {
-		if err := os.Remove(seg.indexPath); err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				slog.Error("[walfs]", slog.String("message", "Failed to delete segment index"), slog.String("path", seg.indexPath), slog.Any("error", err))
-			}
-		} else {
-			deletedIndex = true
-		}
-	}
-
-	if seg.dirSyncer != nil && (deletedSegment || deletedIndex) {
+	if seg.dirSyncer != nil && deletedSegment {
 		dir := filepath.Dir(seg.path)
 		if err := seg.dirSyncer.SyncDir(dir); err != nil {
 			slog.Error("[walfs]",
@@ -1365,18 +1239,12 @@ func SegmentFileName(dirPath string, extName string, id SegmentID) string {
 	return filepath.Join(dirPath, fmt.Sprintf("%09d"+extName, id))
 }
 
-// SegmentIndexFileName returns the file name of the index for a segment.
-func SegmentIndexFileName(dirPath string, extName string, id SegmentID) string {
-	return filepath.Join(dirPath, fmt.Sprintf("%09d"+extName+".idx", id))
-}
-
 // TruncateTo truncates the segment to the specified log index.
 // All entries after the given log index will be discarded.
 // If the log index is not found in this segment, it returns an error.
 func (seg *Segment) TruncateTo(logIndex uint64) error {
 	seg.lifecycleMu.Lock()
 	defer seg.lifecycleMu.Unlock()
-	seg.WaitForIndexFlush()
 	seg.writeMu.Lock()
 	defer seg.writeMu.Unlock()
 
@@ -1422,7 +1290,8 @@ func (seg *Segment) prepareTruncateLocked(logIndex uint64) ([]segmentIndexEntry,
 func (seg *Segment) applyTruncate(entries []segmentIndexEntry) error {
 	last := entries[len(entries)-1]
 	end := int64(last.Offset) + recordOverhead(int64(last.Length))
-	// Clear the entire unused tail, including bytes beyond a stale write offset.
+	// Clear the entire unused tail, including bytes beyond a stale write offset
+	// and a sealed segment's footer.
 	seg.zeroDiscardedTail(end, seg.mmapSize)
 	seg.applyTruncateHeader(end, int64(len(entries)))
 	seg.writeOffset.Store(end)
@@ -1430,7 +1299,7 @@ func (seg *Segment) applyTruncate(entries []segmentIndexEntry) error {
 	if err := seg.Sync(); err != nil {
 		return fmt.Errorf("failed to sync truncated segment: %w", err)
 	}
-	return seg.flushIndexToFile(entries)
+	return nil
 }
 
 func (seg *Segment) applyTruncateHeader(newWriteOffset int64, newEntryCount int64) {
@@ -1474,7 +1343,7 @@ func (seg *Segment) zeroDiscardedTail(from, to int64) {
 	}
 }
 
-// Remove closes the segment and removes its underlying files (segment and index).
+// Remove closes the segment and removes its file.
 func (seg *Segment) Remove() error {
 	if err := seg.Close(); err != nil {
 		return fmt.Errorf("failed to close segment %d: %w", seg.id, err)
@@ -1484,12 +1353,6 @@ func (seg *Segment) Remove() error {
 
 	if err := os.Remove(seg.path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to remove segment file %s: %w", seg.path, err)
-	}
-
-	if seg.indexPath != "" {
-		if err := os.Remove(seg.indexPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("failed to remove index file %s: %w", seg.indexPath, err)
-		}
 	}
 
 	if seg.dirSyncer != nil {

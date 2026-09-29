@@ -225,11 +225,31 @@ func TestCorruption_ZeroFill(t *testing.T) {
 	require.NoError(t, seg.SealSegment())
 	require.NoError(t, seg.Close())
 
-	// Records 7-10 were sealed after the zeroed record. The sealed header
-	// promises all ten, so reopening reports corruption instead of silently
-	// keeping only the prefix.
-	_, err = OpenSegmentFile(tmpDir, ".wal", 1)
-	require.ErrorIs(t, err, ErrSegmentCorrupt)
+	// The footer indexes all ten records, so the segment opens; the zeroed
+	// record is reported when a reader reaches it.
+
+	seg2, err := OpenSegmentFile(tmpDir, ".wal", 1)
+	require.NoError(t, err)
+	defer seg2.Close()
+
+	reader := seg2.NewReader()
+	defer reader.Close()
+
+	recovered := 0
+	for {
+		data, _, err := reader.Next()
+		if err == io.EOF || errors.Is(err, ErrNoNewData) {
+			break
+		}
+		if err != nil {
+			t.Logf("Error at record %d: %v", recovered, err)
+			break
+		}
+		assert.Equal(t, testData[recovered], data)
+		recovered++
+	}
+
+	assert.Equal(t, 5, recovered, "should recover records before zero-filled section")
 }
 
 // TestCorruption_TrailerMarker_Protects verifies that trailer marker corruption

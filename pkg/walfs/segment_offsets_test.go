@@ -45,7 +45,6 @@ func TestPositionForIndex_EveryRecordAcrossSealAndReopen(t *testing.T) {
 		require.Error(t, err)
 		for _, seg := range w.Segments() {
 			if seg.IsSealed() {
-				seg.WaitForIndexFlush()
 				assert.Nil(t, seg.dense.Load(), "sealed segment %d keeps a per-record index", seg.ID())
 			}
 		}
@@ -139,4 +138,48 @@ func TestPositionForIndex_AfterTruncate(t *testing.T) {
 	data, err := w.Read(got)
 	require.NoError(t, err)
 	assert.Equal(t, []byte("after"), data)
+}
+
+// Lookups walk a sealed segment's mapping and hold no reference, so Close
+// must not unmap while one is mid-walk. Retention deletes segment 1 while
+// lookups and IndexEntries hammer it; before the fix this crashed (SIGSEGV).
+func TestLookupDuringSegmentRemovalDoesNotCrash(t *testing.T) {
+	for iter := 0; iter < 50; iter++ { // the unfixed code crashes within 50
+		w, err := NewWALog(t.TempDir(), ".wal", WithMaxSegmentSize(64<<10), WithAutoCleanupPolicy(0, 0, 1, true))
+		require.NoError(t, err)
+		// 1-byte records: many records between samples, so each lookup walks far.
+		var lsn uint64
+		for len(w.Segments()) < 3 {
+			lsn++
+			_, err := w.Write([]byte{1}, lsn)
+			require.NoError(t, err)
+		}
+		seg1 := w.Segments()[1]
+		last1 := seg1.firstLSN.Load() + seg1.indexedCount() - 1
+
+		var stop atomic.Bool
+		var wg sync.WaitGroup
+		for g := 0; g < 4; g++ {
+			wg.Add(1)
+			go func(g int) {
+				defer wg.Done()
+				for !stop.Load() {
+					if g == 0 {
+						_ = seg1.IndexEntries()
+					} else {
+						_, _ = w.PositionForIndex(last1)
+					}
+				}
+			}(g)
+		}
+		w.MarkSegmentsForDeletion()
+		w.cleanPendingSegments(func(SegmentID) bool { return true })
+		stop.Store(true)
+		wg.Wait()
+
+		_, err = w.PositionForIndex(last1)
+		require.Error(t, err, "removed segment must not resolve")
+		require.Nil(t, seg1.IndexEntries(), "closed segment has no entries")
+		require.NoError(t, w.Close())
+	}
 }

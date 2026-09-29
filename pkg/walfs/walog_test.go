@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -228,7 +229,9 @@ func TestSegmentManager_NewReaderWithStart_Errors(t *testing.T) {
 func TestSegmentManager_WriteWithRotation(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	maxSegmentSize := int64(528 + 64 + 1)
+	// One 512-byte record (528 bytes framed) after the header, plus the
+	// 40-byte footer reserve of a segment this size.
+	maxSegmentSize := int64(528 + 64 + 40)
 
 	manager, err := walfs.NewWALog(tmpDir, ".wal", walfs.WithMaxSegmentSize(maxSegmentSize))
 	assert.NoError(t, err)
@@ -2054,9 +2057,9 @@ func TestWALogSyncsDirectoryOnlyForNewSegments(t *testing.T) {
 	require.Equal(t, []string{dir}, syncer.Calls())
 
 	require.NoError(t, wal.RotateSegment())
-	require.Equal(t, []string{dir, dir, dir}, syncer.Calls())
+	require.Equal(t, []string{dir, dir}, syncer.Calls(), "rotation syncs the directory once, for the new segment")
 	require.NoError(t, wal.Close())
-	require.Equal(t, []string{dir, dir, dir, dir}, syncer.Calls())
+	require.Equal(t, []string{dir, dir, dir}, syncer.Calls())
 
 	syncer.Reset()
 
@@ -2081,7 +2084,6 @@ func TestSegmentDeletionSyncsDirectory(t *testing.T) {
 
 	segments := wal.Segments()
 	seg := segments[1]
-	seg.WaitForIndexFlush()
 
 	before := len(syncer.Calls())
 	seg.MarkForDeletion()
@@ -2102,8 +2104,6 @@ func TestBackupSyncsDestinationDirectory(t *testing.T) {
 	_, err = wal.Write([]byte("hello"), 0)
 	require.NoError(t, err)
 	require.NoError(t, wal.RotateSegment())
-	segments := wal.Segments()
-	segments[1].WaitForIndexFlush()
 
 	before := len(syncer.Calls())
 	_, err = wal.BackupLastRotatedSegment(backupDir)
@@ -2127,103 +2127,77 @@ func TestCloseSyncsDirectory(t *testing.T) {
 	require.Equal(t, []string{dir, dir}, syncer.Calls())
 }
 
-func TestWALSegmentIndexCreationAndRebuild(t *testing.T) {
+func TestSealedSegmentCarriesFooterNotSidecar(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	wal, err := walfs.NewWALog(tmpDir, ".wal")
 	require.NoError(t, err)
 
-	payloads := [][]byte{
-		[]byte("alpha"),
-		[]byte("bravo"),
-		[]byte("charlie"),
-	}
-
-	for _, data := range payloads {
-		_, err := wal.Write(data, 0)
+	payloads := [][]byte{[]byte("alpha"), []byte("bravo"), []byte("charlie")}
+	for i, data := range payloads {
+		_, err := wal.Write(data, uint64(i+1))
 		require.NoError(t, err)
 	}
-
-	sealed := wal.Segments()[1]
-	require.NotNil(t, sealed)
 	require.NoError(t, wal.RotateSegment())
-	sealed.WaitForIndexFlush()
 	require.NoError(t, wal.Close())
 
-	indexPath := walfs.SegmentIndexFileName(tmpDir, ".wal", 1)
-	info, err := os.Stat(indexPath)
+	entries, err := os.ReadDir(tmpDir)
 	require.NoError(t, err)
-	assert.Greater(t, info.Size(), int64(0))
+	for _, e := range entries {
+		assert.False(t, strings.HasSuffix(e.Name(), ".idx"), "no sidecar files: %s", e.Name())
+	}
 
-	indexBytes, err := os.ReadFile(indexPath)
+	data, err := os.ReadFile(walfs.SegmentFileName(tmpDir, ".wal", 1))
 	require.NoError(t, err)
-	require.NotZero(t, len(indexBytes))
-	perEntry := len(indexBytes) / len(payloads)
-	assert.Equal(t, 16, perEntry, "each index entry should be 16 bytes")
-	firstOffset := binary.LittleEndian.Uint64(indexBytes[:8])
-	assert.Equal(t, uint64(64), firstOffset, "first record should start after header")
-
-	require.NoError(t, os.Remove(indexPath))
+	end := binary.LittleEndian.Uint64(data[24:32])
+	footer := data[end:]
+	assert.Equal(t, uint32(0x464C4157), binary.LittleEndian.Uint32(footer[0:4]), "footer magic")
+	assert.Equal(t, uint32(0xFFFFFFFF), binary.LittleEndian.Uint32(footer[4:8]), "length sentinel")
+	assert.Equal(t, uint64(len(payloads)), binary.LittleEndian.Uint64(footer[8:16]), "record count")
+	assert.Equal(t, uint32(1), binary.LittleEndian.Uint32(footer[16:20]), "one sample for a small segment")
+	assert.Equal(t, uint32(0), binary.LittleEndian.Uint32(footer[32:36]), "first sample ordinal")
+	assert.Equal(t, uint32(64), binary.LittleEndian.Uint32(footer[36:40]), "first sample offset")
 
 	wal2, err := walfs.NewWALog(tmpDir, ".wal")
 	require.NoError(t, err)
-	require.NoError(t, wal2.Close())
-
-	info, err = os.Stat(indexPath)
-	require.NoError(t, err)
-	assert.Equal(t, int64(len(payloads)*16), info.Size(), "rebuild should recreate index entries")
+	defer wal2.Close()
+	for i := range payloads {
+		pos, err := wal2.PositionForIndex(uint64(i + 1))
+		require.NoError(t, err)
+		got, err := wal2.Read(pos)
+		require.NoError(t, err)
+		assert.Equal(t, payloads[i], got)
+	}
 }
 
-func TestSegmentIndexCreatedOnlyAfterSeal(t *testing.T) {
+func TestFooterWrittenOnlyAtSeal(t *testing.T) {
 	dir := t.TempDir()
 
 	wal, err := walfs.NewWALog(dir, ".wal")
 	require.NoError(t, err)
-	_, err = wal.Write([]byte("hot"), 0)
+	_, err = wal.Write([]byte("hot"), 1)
 	require.NoError(t, err)
 	require.NoError(t, wal.Close())
 
-	idxPath := walfs.SegmentIndexFileName(dir, ".wal", 1)
-	_, err = os.Stat(idxPath)
-	require.ErrorIs(t, err, os.ErrNotExist, "active segment should not flush index")
+	footerMagicAtEnd := func() bool {
+		data, err := os.ReadFile(walfs.SegmentFileName(dir, ".wal", 1))
+		require.NoError(t, err)
+		end := binary.LittleEndian.Uint64(data[24:32])
+		return binary.LittleEndian.Uint32(data[end:end+4]) == 0x464C4157
+	}
+	assert.False(t, footerMagicAtEnd(), "an active segment has no footer")
 
 	wal2, err := walfs.NewWALog(dir, ".wal")
 	require.NoError(t, err)
-	_, err = wal2.Write([]byte("seal-me"), 0)
+	_, err = wal2.Write([]byte("seal-me"), 2)
 	require.NoError(t, err)
 	require.NoError(t, wal2.RotateSegment())
-	wal2.Segments()[1].WaitForIndexFlush()
 	require.NoError(t, wal2.Close())
 
-	_, err = os.Stat(idxPath)
-	require.NoError(t, err, "sealed segment must flush index file")
+	assert.True(t, footerMagicAtEnd(), "sealing writes the footer")
 }
 
-func TestSegmentIndexRebuildWithoutFile(t *testing.T) {
-	dir := t.TempDir()
-
-	wal, err := walfs.NewWALog(dir, ".wal")
-	require.NoError(t, err)
-	_, err = wal.Write([]byte("alpha"), 0)
-	require.NoError(t, err)
-	require.NoError(t, wal.RotateSegment())
-	wal.Segments()[1].WaitForIndexFlush()
-	require.NoError(t, wal.Close())
-
-	idxPath := walfs.SegmentIndexFileName(dir, ".wal", 1)
-	require.NoError(t, os.Remove(idxPath), "simulate missing index file")
-
-	wal2, err := walfs.NewWALog(dir, ".wal")
-	require.NoError(t, err)
-	wal2.Segments()[1].WaitForIndexFlush()
-	require.NoError(t, wal2.Close())
-
-	info, err := os.Stat(idxPath)
-	require.NoError(t, err, "recovery should rebuild missing index")
-	assert.Greater(t, info.Size(), int64(0))
-}
-
-func TestSegmentCleanupRemovesDataAndIndex(t *testing.T) {
+func TestSegmentCleanupRemovesData(t *testing.T) {
 	dir := t.TempDir()
 
 	wal, err := walfs.NewWALog(dir, ".wal")
@@ -2235,19 +2209,13 @@ func TestSegmentCleanupRemovesDataAndIndex(t *testing.T) {
 	}
 
 	require.NoError(t, wal.RotateSegment())
-	wal.Segments()[1].WaitForIndexFlush()
 
 	segmentPath := walfs.SegmentFileName(dir, ".wal", 1)
-	indexPath := walfs.SegmentIndexFileName(dir, ".wal", 1)
-
 	seg := wal.Segments()[1]
 	seg.MarkForDeletion()
 
 	_, err = os.Stat(segmentPath)
 	require.ErrorIs(t, err, os.ErrNotExist, "segment data file should be deleted")
-
-	_, err = os.Stat(indexPath)
-	require.ErrorIs(t, err, os.ErrNotExist, "segment index file should be deleted")
 
 	require.NoError(t, wal.Close())
 }

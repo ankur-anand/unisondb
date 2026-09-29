@@ -169,9 +169,3 @@ func (seg *Segment) installDense(entries []segmentIndexEntry) {
 	seg.dense.Store(d)
 	seg.sparse.Store(nil)
 }
-
-// installSparse replaces the index with a sparse index covering entries.
-func (seg *Segment) installSparse(entries []segmentIndexEntry) {
-	seg.sparse.Store(buildSparseIndex(uint64(len(entries)), func(i uint64) int64 { return int64(entries[i].Offset) }))
-	seg.dense.Store(nil)
-}
