@@ -257,20 +257,18 @@ func TestOpenSegmentFile_PopulatesLogIndexFromSealedIndex(t *testing.T) {
 	}
 
 	require.NoError(t, seg.SealSegment())
-	seg.WaitForIndexFlush()
 	require.NoError(t, seg.Close())
 
-	idx := NewShardedIndex()
-	reopened, err := OpenSegmentFile(dir, ".wal", 1, withLogIndex(idx))
+	reopened, err := OpenSegmentFile(dir, ".wal", 1)
 	require.NoError(t, err)
 	defer reopened.Close()
 
 	for i := 1; i <= 3; i++ {
-		got, ok := idx.Get(uint64(i))
+		got, ok := reopened.positionForIndex(uint64(i))
 		require.True(t, ok)
 		assert.Equal(t, positions[uint64(i)], got)
 	}
-	assert.Equal(t, int64(3), idx.Len())
+	assert.Equal(t, uint64(3), reopened.indexedCount())
 }
 
 func TestOpenSegmentFile_PopulatesLogIndexFromUnsealedSegment(t *testing.T) {
@@ -289,20 +287,19 @@ func TestOpenSegmentFile_PopulatesLogIndexFromUnsealedSegment(t *testing.T) {
 
 	require.NoError(t, seg.Close())
 
-	idx := NewShardedIndex()
-	reopened, err := OpenSegmentFile(dir, ".wal", 1, withLogIndex(idx))
+	reopened, err := OpenSegmentFile(dir, ".wal", 1)
 	require.NoError(t, err)
 	defer reopened.Close()
 
 	for i := 5; i <= 8; i++ {
-		got, ok := idx.Get(uint64(i))
+		got, ok := reopened.positionForIndex(uint64(i))
 		require.True(t, ok)
 		assert.Equal(t, positions[uint64(i)], got)
 	}
-	assert.Equal(t, int64(4), idx.Len())
+	assert.Equal(t, uint64(4), reopened.indexedCount())
 }
 
-func TestOpenSegmentFile_SkipsIndexEntriesWhenClearIndexOnFlush(t *testing.T) {
+func TestOpenSegmentFile_SealedKeepsOnlySparseIndex(t *testing.T) {
 	dir := t.TempDir()
 
 	seg, err := OpenSegmentFile(dir, ".wal", 1)
@@ -317,21 +314,20 @@ func TestOpenSegmentFile_SkipsIndexEntriesWhenClearIndexOnFlush(t *testing.T) {
 	}
 
 	require.NoError(t, seg.SealSegment())
-	seg.WaitForIndexFlush()
 	require.NoError(t, seg.Close())
 
-	idx := NewShardedIndex()
-	reopened, err := OpenSegmentFile(dir, ".wal", 1, withClearIndexOnFlush(), withLogIndex(idx))
+	reopened, err := OpenSegmentFile(dir, ".wal", 1)
 	require.NoError(t, err)
 	defer reopened.Close()
 
-	assert.Empty(t, reopened.IndexEntries())
+	assert.Nil(t, reopened.dense.Load(), "sealed segment must not hold a per-record index")
+	require.NotNil(t, reopened.sparse.Load())
+	assert.Len(t, reopened.IndexEntries(), 3)
 	for i := 10; i <= 12; i++ {
-		got, ok := idx.Get(uint64(i))
+		got, ok := reopened.positionForIndex(uint64(i))
 		require.True(t, ok)
 		assert.Equal(t, positions[uint64(i)], got)
 	}
-	assert.Equal(t, int64(3), idx.Len())
 }
 
 func TestSegment_SequentialWrites(t *testing.T) {
@@ -621,7 +617,8 @@ func TestSegment_WriteAtExactBoundary(t *testing.T) {
 		assert.NoError(t, seg.Close())
 	})
 
-	size := segmentSize - segmentHeaderSize - recordHeaderSize - recordTrailerMarkerSize
+	// Records may fill the segment up to the space reserved for its footer.
+	size := recordLimitFor(segmentSize) - segmentHeaderSize - recordHeaderSize - recordTrailerMarkerSize
 	data := make([]byte, size)
 	for i := range data {
 		data[i] = 'A'
@@ -630,7 +627,7 @@ func TestSegment_WriteAtExactBoundary(t *testing.T) {
 	_, err = seg.Write(data, uint64(1))
 	assert.NoError(t, err)
 
-	assert.Equal(t, int64(segmentSize), seg.WriteOffset())
+	assert.Equal(t, recordLimitFor(segmentSize), seg.WriteOffset())
 
 	_, err = seg.Write([]byte("extra"), 0)
 	assert.Error(t, err)
@@ -2132,7 +2129,7 @@ func TestSegment_WriteBatch_ExactlyFullSegment(t *testing.T) {
 		assert.NoError(t, seg.Close())
 	})
 
-	availableSpace := segmentSize - segmentHeaderSize
+	availableSpace := recordLimitFor(segmentSize) - segmentHeaderSize
 
 	dataLen := 88
 	numRecords := int(availableSpace / alignUp(int64(recordHeaderSize+dataLen+recordTrailerMarkerSize)))
@@ -2148,8 +2145,8 @@ func TestSegment_WriteBatch_ExactlyFullSegment(t *testing.T) {
 	assert.Equal(t, numRecords, len(positions))
 
 	finalOffset := seg.WriteOffset()
-	assert.LessOrEqual(t, finalOffset, segmentSize, "should not exceed segment size")
-	assert.Greater(t, finalOffset, segmentSize-200, "should be nearly full")
+	assert.LessOrEqual(t, finalOffset, recordLimitFor(segmentSize), "should not reach the footer reserve")
+	assert.Greater(t, finalOffset, recordLimitFor(segmentSize)-200, "should be nearly full")
 
 	_, written2, err := seg.WriteBatch([][]byte{[]byte("extra")}, nil)
 	if err == nil {
@@ -2318,13 +2315,14 @@ func TestSegment_WriteBatch_PaddingZeroed(t *testing.T) {
 
 func TestSegment_WriteBatch_SegmentFullOnFirstRecord(t *testing.T) {
 	tmpDir := t.TempDir()
-	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(256))
+	seg, err := OpenSegmentFile(tmpDir, ".wal", 1, WithSegmentSize(512))
 	assert.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, seg.Close())
 	})
 
-	filler := bytes.Repeat([]byte("x"), 150)
+	// Leaves 88 bytes before the footer reserve: too little for the 100-byte record.
+	filler := bytes.Repeat([]byte("x"), 300)
 	_, err = seg.Write(filler, uint64(1))
 	assert.NoError(t, err)
 
@@ -2452,11 +2450,6 @@ func TestSegment_RemoveDeletesFiles(t *testing.T) {
 
 	_, err = os.Stat(seg.path)
 	assert.True(t, os.IsNotExist(err), "segment file should be removed")
-
-	if seg.indexPath != "" {
-		_, err = os.Stat(seg.indexPath)
-		assert.True(t, os.IsNotExist(err), "index file should be removed")
-	}
 }
 
 func TestSegmentMarkerMismatch_StandaloneMarker(t *testing.T) {

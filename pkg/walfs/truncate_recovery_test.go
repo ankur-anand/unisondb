@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"sync/atomic"
 	"testing"
-	"testing/synctest"
 
 	"github.com/stretchr/testify/require"
 )
@@ -26,9 +25,6 @@ func newTruncationFixture(t *testing.T, dir string, opts ...WALogOptions) *WALog
 		require.NoError(t, err)
 	}
 	require.Len(t, w.Segments(), 4)
-	for _, seg := range w.Segments() {
-		seg.WaitForIndexFlush()
-	}
 	return w
 }
 
@@ -60,9 +56,9 @@ func assertTruncationPrefix(t *testing.T, w *WALog, end uint64) {
 }
 
 func TestTruncationFailureRequiresRecovery(t *testing.T) {
-	// Directory syncs occur after intent publication, target-index replacement,
-	// each suffix removal, and intent removal. Fail at every boundary.
-	for stage := 1; stage <= 5; stage++ {
+	// Directory syncs occur after intent publication, each suffix removal, and
+	// intent removal. Fail at every boundary.
+	for stage := 1; stage <= 4; stage++ {
 		t.Run(fmt.Sprint(stage), func(t *testing.T) {
 			dir := t.TempDir()
 			var armed atomic.Bool
@@ -197,7 +193,7 @@ func TestTruncationCrashHelper(t *testing.T) {
 
 func TestTruncationCrashRecovery(t *testing.T) {
 	for _, reset := range []bool{false, true} {
-		maxStage := 5
+		maxStage := 4 // intent, two removals, intent removal
 		if reset {
 			maxStage = 7
 		} // intent, four removals, new segment, intent removal
@@ -329,51 +325,12 @@ func TestCleanupQueueHonorsRetentionAcrossTicks(t *testing.T) {
 	reader := w.Segments()[1].NewReader()
 	require.NotNil(t, reader)
 	defer reader.Close()
+	// The pinned oldest segment blocks the queued segment behind it too.
 	w.cleanPendingSegments(func(SegmentID) bool { return true })
-	require.Len(t, w.Segments(), 3)
+	require.Len(t, w.Segments(), 4)
 	reader.Close()
 	// Releasing a reader must not initiate deletion outside the WAL lock.
-	require.Len(t, w.Segments(), 3)
+	require.Len(t, w.Segments(), 4)
 	w.cleanPendingSegments(func(SegmentID) bool { return true })
 	require.Len(t, w.Segments(), 2)
-}
-
-func TestTruncationWaitsForPendingIndexFlush(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		var block atomic.Bool
-		flushing := make(chan struct{})
-		release := make(chan struct{})
-		syncer := DirectorySyncFunc(func(dir string) error {
-			if block.CompareAndSwap(true, false) {
-				close(flushing)
-				<-release
-			}
-			return syncDir(dir)
-		})
-		w, err := NewWALog(t.TempDir(), ".wal", WithMaxSegmentSize(1024), WithClearIndexOnFlush(), WithDirectorySyncer(syncer))
-		require.NoError(t, err)
-		defer w.Close()
-		for i := uint64(1); i <= 3; i++ {
-			_, err = w.Write(bytes.Repeat([]byte{byte(i)}, 250), i)
-			require.NoError(t, err)
-		}
-		block.Store(true)
-		require.NoError(t, w.Current().SealSegment())
-		<-flushing
-		done := make(chan error, 1)
-		go func() { done <- w.Truncate(2) }()
-		synctest.Wait()
-		select {
-		case err := <-done:
-			t.Fatalf("truncation returned before pending flush completed: %v", err)
-		default:
-		}
-		close(release)
-		require.NoError(t, <-done)
-		require.Len(t, w.Current().IndexEntries(), 2)
-		_, err = w.Write(bytes.Repeat([]byte{3}, 250), 3)
-		require.NoError(t, err)
-		require.Len(t, w.Current().IndexEntries(), 3)
-		assertTruncationPrefix(t, w, 3)
-	})
 }

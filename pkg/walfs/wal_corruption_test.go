@@ -225,6 +225,9 @@ func TestCorruption_ZeroFill(t *testing.T) {
 	require.NoError(t, seg.SealSegment())
 	require.NoError(t, seg.Close())
 
+	// The footer indexes all ten records, so the segment opens; the zeroed
+	// record is reported when a reader reaches it.
+
 	seg2, err := OpenSegmentFile(tmpDir, ".wal", 1)
 	require.NoError(t, err)
 	defer seg2.Close()

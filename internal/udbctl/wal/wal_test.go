@@ -228,10 +228,6 @@ func TestInspectionDoesNotModifyStorage(t *testing.T) {
 						require.NoError(t, seg.SealSegment())
 					}
 					require.NoError(t, seg.Close())
-					if sealed {
-						// Inspection must not recreate a missing index sidecar.
-						require.NoError(t, os.Remove(walfs.SegmentIndexFileName(dir, ".seg", id)))
-					}
 				}
 				before := snapshotStorage(t, dir)
 				require.NoError(t, inspect(dir))

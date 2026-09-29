@@ -10,6 +10,7 @@ import (
 
 	"github.com/ankur-anand/unisondb/dbkernel/internal"
 	"github.com/ankur-anand/unisondb/dbkernel/internal/memtable"
+	"github.com/ankur-anand/unisondb/dbkernel/internal/wal"
 	"github.com/ankur-anand/unisondb/internal/logcodec"
 	"github.com/ankur-anand/unisondb/schemas/logrecord"
 	"github.com/stretchr/testify/assert"
@@ -71,6 +72,16 @@ func TestChunkedFlushRetryRecordCount(t *testing.T) {
 	}
 }
 
+// appendUnvalidated writes straight into the active segment, bypassing the
+// WAL's write-time LSN checks, to reproduce on-disk state from older versions
+// or damage that recovery must still reject.
+func appendUnvalidated(t *testing.T, e *Engine, data []byte, lsn uint64) *wal.Offset {
+	t.Helper()
+	pos, err := e.walIO.WAL().Current().Write(data, lsn)
+	require.NoError(t, err)
+	return &pos
+}
+
 func TestLSNRecoveryRejectsInvalidSequence(t *testing.T) {
 	for _, sequence := range [][]uint64{{0}, {1, 1}, {1, 3}, {1, 2, 1}} {
 		t.Run(fmt.Sprint(sequence), func(t *testing.T) {
@@ -80,8 +91,7 @@ func TestLSNRecoveryRejectsInvalidSequence(t *testing.T) {
 				record := logcodec.LogRecord{
 					LSN: lsn, TxnState: logrecord.TransactionStateBegin, EntryType: logrecord.LogEntryTypeKV,
 				}
-				_, err := e.walIO.Append(record.FBEncode(128), lsn)
-				require.NoError(t, err)
+				appendUnvalidated(t, e, record.FBEncode(128), lsn)
 			}
 			conf := *e.config
 			require.NoError(t, e.Close(context.Background()))
@@ -119,13 +129,12 @@ func TestLSNRecoveryRejectsInconsistentCheckpointIndex(t *testing.T) {
 			e := openLSNTestEngine(t, dir, BoltDBEngine)
 			require.NoError(t, e.PutKV([]byte("first"), []byte("value")))
 			record := logcodec.LogRecord{LSN: badLSN, TxnState: logrecord.TransactionStateBegin}
-			pos, err := e.walIO.Append(record.FBEncode(128), badLSN)
-			require.NoError(t, err)
+			pos := appendUnvalidated(t, e, record.FBEncode(128), badLSN)
 			meta := internal.Metadata{Pos: pos, RecordProcessed: 2}
 			require.NoError(t, e.dataStore.StoreMetadata(internal.SysKeyWalCheckPoint, meta.MarshalBinary()))
 			conf := *e.config
 			require.NoError(t, e.Close(context.Background()))
-			e, err = NewStorageEngine(dir, "lsn", &conf)
+			e, err := NewStorageEngine(dir, "lsn", &conf)
 			if e != nil {
 				require.NoError(t, e.Close(context.Background()))
 			}

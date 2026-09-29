@@ -55,7 +55,8 @@ func BenchmarkWalIOAppendThroughput(b *testing.B) {
 	var totalBytes int64
 
 	for i := 0; i < b.N; i++ {
-		_, err := walInstance.Append(data, uint64(i))
+		// Log indexes start at 1; 0 marks an unindexed record.
+		_, err := walInstance.Append(data, uint64(i+1))
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -101,11 +102,17 @@ func BenchmarkWalIOAppendThroughputConcurrent(b *testing.B) {
 	b.ResetTimer()
 	var totalBytes int64
 	var mu sync.Mutex // To safely update totalBytes
-	var idx atomic.Uint64
+	var appendMu sync.Mutex
+	var idx uint64
 
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			_, err := walInstance.Append(data, idx.Add(1))
+			// Assign and append the log index together, as the engine does
+			// under e.mu, so indexes reach the WAL in order.
+			appendMu.Lock()
+			idx++
+			_, err := walInstance.Append(data, idx)
+			appendMu.Unlock()
 			if err != nil {
 				b.Fatal(err)
 			}
@@ -136,14 +143,18 @@ func BenchmarkWalIOReadWriteThroughputConcurrent(b *testing.B) {
 	b.ResetTimer()
 
 	var errCount atomic.Uint64
-	var idx atomic.Uint64
+	var appendMu sync.Mutex
+	var idx uint64
 
 	for i := 0; i < numWriters; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for j := 0; j < b.N; j++ {
-				pos, err := walInstance.Append(data, idx.Add(1))
+				appendMu.Lock()
+				idx++
+				pos, err := walInstance.Append(data, idx)
+				appendMu.Unlock()
 				if err != nil {
 					errCount.Add(1)
 					b.Errorf("wal append failed %v", err)
