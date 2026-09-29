@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +24,9 @@ var (
 	ErrFsync              = errors.New("fsync error")
 	ErrRecoveryRequired   = errors.New("WAL durable state unknown after an interrupted truncation or failed seal; close and reopen for recovery")
 	ErrRecordTooLarge     = errors.New("record size exceeds maximum segment capacity")
+	// ErrSegmentUnavailable means a segment the reader still had to read was
+	// closed or removed first; its records are no longer readable here.
+	ErrSegmentUnavailable = errors.New("segment closed or removed before the reader reached it")
 	// ErrInvalidLogIndex rejects log indexes that cannot be located positionally
 	// (firstLogIndex + record ordinal), which recovery has always assumed.
 	ErrInvalidLogIndex = errors.New("non-contiguous or mixed WAL log index")
@@ -1166,25 +1170,52 @@ func (wl *WALog) CleanupStalePendingSegments() {
 // Selection only queues candidates. Perform deletion under the WAL lock, after
 // checking the predicate and references, so no deferred deletion can later remove
 // a segment that has since been unsealed and reused as a truncation target.
+//
+// Retention only trims a prefix: segments go oldest first, and the first one
+// that cannot go yet (predicate, pinned by a reader, not sealed) stops the
+// pass. Deleting past it would leave a hole that readers cannot cross.
 func (wl *WALog) cleanPendingSegments(canDeleteFn func(SegmentID) bool) {
 	wl.deletionMu.Lock()
 	defer wl.deletionMu.Unlock()
-	for id, seg := range wl.pendingDeletion {
-		if canDeleteFn == nil || !canDeleteFn(id) {
-			continue
-		}
-		wl.writeMu.Lock()
-		if wl.RecoveryError() == nil && wl.segments[id] == seg && seg != wl.currentSegment && seg.IsSealed() && seg.refCount.Load() == 0 {
-			if err := wl.deleteSegments([]SegmentID{id}); err != nil {
-				slog.Error("[walfs]", "message", "failed to remove pending segment", "segment_id", id, "error", err)
-			} else {
-				delete(wl.pendingDeletion, id)
-				wl.snapshotSegments()
-				wl.recomputeBounds()
-			}
-		}
-		wl.writeMu.Unlock()
+	ids := make([]SegmentID, 0, len(wl.pendingDeletion))
+	for id := range wl.pendingDeletion {
+		ids = append(ids, id)
 	}
+	slices.Sort(ids)
+	for _, id := range ids {
+		if canDeleteFn == nil || !canDeleteFn(id) {
+			return
+		}
+		if !wl.removeOldestPending(id) {
+			return
+		}
+	}
+}
+
+// removeOldestPending deletes a queued segment if it is still the oldest one
+// and nothing holds it. It reports whether the pass may continue.
+func (wl *WALog) removeOldestPending(id SegmentID) bool {
+	wl.writeMu.Lock()
+	defer wl.writeMu.Unlock()
+	seg := wl.pendingDeletion[id]
+	if wl.segments[id] != seg {
+		// Already gone, or the id now names another segment: drop the entry.
+		delete(wl.pendingDeletion, id)
+		return true
+	}
+	oldest := *wl.segmentSnapshot.Load()
+	if wl.RecoveryError() != nil || len(oldest) == 0 || oldest[0] != seg ||
+		seg == wl.currentSegment || !seg.IsSealed() || seg.refCount.Load() != 0 {
+		return false
+	}
+	if err := wl.deleteSegments([]SegmentID{id}); err != nil {
+		slog.Error("[walfs]", "message", "failed to remove pending segment", "segment_id", id, "error", err)
+		return false
+	}
+	delete(wl.pendingDeletion, id)
+	wl.snapshotSegments()
+	wl.recomputeBounds()
+	return true
 }
 
 // deleteSegments requires writeMu. Publish index/map removals only after the
@@ -1289,12 +1320,12 @@ func (r *Reader) Next() ([]byte, RecordPosition, error) {
 				return nil, NilRecordPosition, io.EOF
 			}
 			seg := r.segments[r.segmentIndex]
-			r.segmentIndex++
-
 			reader := seg.NewReader()
 			if reader == nil {
-				continue
+				// Skipping would silently drop every record in this segment.
+				return nil, NilRecordPosition, fmt.Errorf("%w: segment %d", ErrSegmentUnavailable, seg.ID())
 			}
+			r.segmentIndex++
 			// make sure to advance to correct offset
 			if r.segmentIndex == 1 && r.startOffset > segmentHeaderSize {
 				reader.readOffset = r.startOffset

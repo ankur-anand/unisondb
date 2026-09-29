@@ -962,6 +962,10 @@ func (seg *Segment) Sync() error {
 // fsyncFile is replaced in tests to inject fsync failures.
 var fsyncFile = func(f *os.File) error { return f.Sync() }
 
+// newReaderPinnedHook is set in tests to run between NewReader's pin and its
+// state check.
+var newReaderPinnedHook func(*Segment)
+
 func (seg *Segment) MSync() error {
 	if seg.closed.Load() {
 		return ErrClosed
@@ -1159,14 +1163,22 @@ func (r *SegmentReader) Close() {
 
 // NewReader creates a new SegmentReader for reading from the segment.
 func (seg *Segment) NewReader() *SegmentReader {
+	// Pin first, then check. Close stores Closing and then loads refCount, so
+	// either Close sees this pin and waits, or this check sees Closing and the
+	// pin is withdrawn. Checking first would let both checks pass and the
+	// reader use a mapping Close has already removed.
+	seg.incrRef()
+	if newReaderPinnedHook != nil {
+		newReaderPinnedHook(seg)
+	}
 	// prevent new readers to segments marked for deletion or not opened
 	if seg.markedForDeletion.Load() || seg.state.Load() != StateOpen {
+		seg.releaseRef()
 		return nil
 	}
 
 	id := seg.readerIDCounter.Add(1)
 	seg.activeReaders.Add(id)
-	seg.incrRef()
 
 	reader := &SegmentReader{
 		segment:    seg,

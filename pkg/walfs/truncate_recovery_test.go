@@ -325,11 +325,12 @@ func TestCleanupQueueHonorsRetentionAcrossTicks(t *testing.T) {
 	reader := w.Segments()[1].NewReader()
 	require.NotNil(t, reader)
 	defer reader.Close()
+	// The pinned oldest segment blocks the queued segment behind it too.
 	w.cleanPendingSegments(func(SegmentID) bool { return true })
-	require.Len(t, w.Segments(), 3)
+	require.Len(t, w.Segments(), 4)
 	reader.Close()
 	// Releasing a reader must not initiate deletion outside the WAL lock.
-	require.Len(t, w.Segments(), 3)
+	require.Len(t, w.Segments(), 4)
 	w.cleanPendingSegments(func(SegmentID) bool { return true })
 	require.Len(t, w.Segments(), 2)
 }
