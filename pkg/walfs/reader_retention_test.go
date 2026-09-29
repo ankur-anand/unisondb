@@ -3,6 +3,7 @@ package walfs
 import (
 	"encoding/binary"
 	"errors"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -201,4 +202,187 @@ func TestStreamingReadersRaceRetention(t *testing.T) {
 		wg.Wait()
 		require.NoError(t, w.Close())
 	}
+}
+
+// runCleaner runs one cleaner pass in the background.
+func runCleaner(w *WALog) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		w.cleanPendingSegments(func(SegmentID) bool { return true })
+		close(done)
+	}()
+	return done
+}
+
+func setUnpublishedHook(t *testing.T, fn func(*Segment)) {
+	var once sync.Once
+	segmentUnpublishedHook = func(s *Segment) { once.Do(func() { fn(s) }) }
+	t.Cleanup(func() { segmentUnpublishedHook = nil })
+}
+
+// A reader that pins the oldest segment after the cleaner's check makes Close
+// wait. That wait must happen outside writeMu: writes carry on, the segment is
+// already gone from lookups, and the reader keeps a valid mapping.
+func TestRetentionWaitForReaderDoesNotBlockWriters(t *testing.T) {
+	w := newNumberedWAL(t, 40, WithAutoCleanupPolicy(0, 1, 2, true))
+	defer w.Close()
+	oldest := w.Segments()[1]
+	count := uint64(oldest.GetEntryCount())
+
+	pinned := make(chan *SegmentReader, 1)
+	setUnpublishedHook(t, func(s *Segment) {
+		// A reader created from an earlier snapshot pins it now.
+		pinned <- s.NewReader()
+	})
+	w.MarkSegmentsForDeletion()
+	done := runCleaner(w)
+	reader := <-pinned
+	require.NotNil(t, reader)
+	require.Eventually(t, func() bool { return oldest.state.Load() == StateClosing }, time.Second, time.Millisecond)
+
+	wrote := make(chan error, 1)
+	go func() {
+		payload := make([]byte, 100)
+		binary.LittleEndian.PutUint64(payload, 41)
+		_, err := w.Write(payload, 41)
+		wrote <- err
+	}()
+	select {
+	case err := <-wrote:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		reader.Close() // let the cleaner finish so the deferred Close returns
+		<-wrote
+		t.Fatal("Write blocked while the cleaner waited for a reader")
+	}
+	_, err := w.PositionForIndex(1)
+	require.Error(t, err, "an unpublished segment must not resolve")
+
+	for i := uint64(1); i <= count; i++ {
+		data, _, err := reader.Next()
+		require.NoError(t, err)
+		require.Equal(t, i, lsnOf(data))
+	}
+	select {
+	case <-done:
+		t.Fatal("cleaner finished while a reader still held the segment")
+	case <-time.After(20 * time.Millisecond):
+	}
+	reader.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleaner did not finish after the reader let go")
+	}
+	_, err = os.Stat(SegmentFileName(w.dir, ".wal", oldest.ID()))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+// WALog.Close must not return while the cleaner is still closing and deleting
+// a segment it already unpublished.
+func TestWALCloseWaitsForInFlightRemoval(t *testing.T) {
+	w := newNumberedWAL(t, 40, WithAutoCleanupPolicy(0, 1, 2, true))
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	setUnpublishedHook(t, func(*Segment) {
+		close(entered)
+		<-release
+	})
+	w.MarkSegmentsForDeletion()
+	done := runCleaner(w)
+	<-entered
+
+	closed := make(chan error, 1)
+	go func() { closed <- w.Close() }()
+	select {
+	case err := <-closed:
+		closed <- err
+		t.Error("WALog.Close returned while a removal was in flight")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-done
+	require.NoError(t, <-closed)
+}
+
+// A removal that fails after unpublishing (here the unlink, because the
+// directory is read-only) is finished first on the next pass, before anything
+// younger is deleted, so segment files leave the disk oldest first.
+func TestRetentionFinishesFailedRemovalFirst(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	w := newNumberedWAL(t, 40, WithAutoCleanupPolicy(0, 1, 2, true))
+	defer w.Close()
+	before := segmentIDs(w)
+	w.MarkSegmentsForDeletion()
+
+	require.NoError(t, os.Chmod(w.dir, 0o555))
+	w.cleanPendingSegments(func(SegmentID) bool { return true })
+	require.NoError(t, os.Chmod(w.dir, 0o755))
+	require.Equal(t, before[1:], segmentIDs(w), "only the failed segment is unpublished")
+	require.NotNil(t, w.unlinking)
+	for _, id := range before {
+		_, err := os.Stat(SegmentFileName(w.dir, ".wal", id))
+		require.NoError(t, err, "segment %d: nothing may be deleted after a failed removal", id)
+	}
+
+	w.cleanPendingSegments(func(SegmentID) bool { return true })
+	require.Nil(t, w.unlinking)
+	require.Len(t, segmentIDs(w), 2)
+	for _, id := range before[:len(before)-2] {
+		_, err := os.Stat(SegmentFileName(w.dir, ".wal", id))
+		require.ErrorIs(t, err, os.ErrNotExist, "segment %d left on disk", id)
+	}
+}
+
+// A crash after unpublishing but before the unlink leaves the file on disk.
+// On reopen it is the oldest segment again, contiguous with the rest, and
+// retention removes it again.
+func TestUnpublishedSegmentSurvivingCrashIsHarmless(t *testing.T) {
+	w := newNumberedWAL(t, 40, WithAutoCleanupPolicy(0, 1, 2, true))
+	dir := w.dir
+	var saved []byte
+	var savedID SegmentID
+	setUnpublishedHook(t, func(s *Segment) {
+		savedID = s.ID()
+		var err error
+		saved, err = os.ReadFile(SegmentFileName(dir, ".wal", savedID))
+		require.NoError(t, err)
+	})
+	first := segmentIDs(w)[0]
+	w.MarkSegmentsForDeletion()
+	// The crash stops the pass at its first segment.
+	w.cleanPendingSegments(func(id SegmentID) bool { return id == first })
+	require.NoError(t, w.Close())
+	require.Equal(t, first, savedID)
+	// Put the file back as if the unlink never reached disk.
+	require.NoError(t, os.WriteFile(SegmentFileName(dir, ".wal", savedID), saved, 0o644))
+
+	w, err := NewWALog(dir, ".wal", WithMaxSegmentSize(1024), WithAutoCleanupPolicy(0, 1, 2, true))
+	require.NoError(t, err)
+	defer w.Close()
+	require.Equal(t, savedID, segmentIDs(w)[0])
+	pos, err := w.PositionForIndex(1)
+	require.NoError(t, err)
+	r, err := w.NewReaderWithStart(pos)
+	require.NoError(t, err)
+	var prev uint64
+	for {
+		data, _, err := r.Next()
+		if err != nil {
+			require.ErrorIs(t, err, ErrNoNewData)
+			break
+		}
+		lsn := lsnOf(data)
+		if lsn != prev+1 {
+			t.Fatalf("gap after restored segment: LSN %d after %d", lsn, prev)
+		}
+		prev = lsn
+	}
+	r.Close()
+
+	w.MarkSegmentsForDeletion()
+	w.cleanPendingSegments(func(SegmentID) bool { return true })
+	require.NotContains(t, segmentIDs(w), savedID)
 }

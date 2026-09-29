@@ -2,6 +2,7 @@ package walfs
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"testing"
 	"time"
@@ -635,4 +636,23 @@ func indexedLen(wl *WALog) int64 {
 		}
 	}
 	return n
+}
+
+// deleteSegments removes the given segments outright, with writeMu held, for
+// tests that need a compacted or gapped WAL.
+func (wl *WALog) deleteSegments(ids []SegmentID) error {
+	wl.writeMu.Lock()
+	defer wl.writeMu.Unlock()
+	for _, id := range ids {
+		seg := wl.segments[id]
+		if err := seg.Remove(); err != nil {
+			return fmt.Errorf("failed to remove segment %d: %w", id, err)
+		}
+		delete(wl.segments, id)
+		if wl.currentSegment == seg {
+			wl.currentSegment = nil
+		}
+	}
+	wl.snapshotSegments()
+	return nil
 }

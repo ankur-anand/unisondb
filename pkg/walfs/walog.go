@@ -210,7 +210,10 @@ type WALog struct {
 	enableAutoCleanup   bool
 	deletionMu          sync.Mutex
 	pendingDeletion     map[SegmentID]*Segment
-	dirSyncer           DirectorySyncer
+	// unlinking is a segment already unpublished whose removal failed part
+	// way; the next cleaner pass finishes it first. Guarded by deletionMu.
+	unlinking *Segment
+	dirSyncer DirectorySyncer
 	// lsnSnapshot lists segments with a first log index, ordered by it, for
 	// lock-free PositionForIndex. Rebuilt with segmentSnapshot.
 	lsnSnapshot atomic.Pointer[[]*Segment]
@@ -300,34 +303,10 @@ func (wl *WALog) openSegment(id uint32) (*Segment, error) {
 }
 
 func (wl *WALog) recoverSegments() error {
-	files, err := os.ReadDir(wl.dir)
+	segmentIDs, err := wl.listSegmentIDs()
 	if err != nil {
-		return fmt.Errorf("failed to read segment directory: %w", err)
+		return err
 	}
-
-	var segmentIDs []SegmentID
-
-	for _, file := range files {
-		if file.IsDir() || !strings.HasSuffix(file.Name(), wl.ext) {
-			continue
-		}
-		// e.g. "000000001.wal" -> 1
-		base := strings.TrimSuffix(file.Name(), wl.ext)
-		id, err := strconv.ParseUint(base, 10, 32)
-		if err != nil {
-			// skip non-numeric segment files
-			continue
-		}
-		segID := SegmentID(id)
-		segmentIDs = append(segmentIDs, segID)
-	}
-
-	// 000000001.wal
-	// 000000002.wal
-	// 000000003.wal
-	sort.Slice(segmentIDs, func(i, j int) bool {
-		return segmentIDs[i] < segmentIDs[j]
-	})
 
 	if len(segmentIDs) == 0 {
 		seg, err := wl.openSegment(1)
@@ -371,6 +350,39 @@ func (wl *WALog) recoverSegments() error {
 	wl.snapshotSegments()
 	wl.recomputeBounds()
 	return nil
+}
+
+// listSegmentIDs returns the IDs of the segment files in the WAL directory in
+// ascending order.
+func (wl *WALog) listSegmentIDs() ([]SegmentID, error) {
+	files, err := os.ReadDir(wl.dir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read segment directory: %w", err)
+	}
+
+	var segmentIDs []SegmentID
+
+	for _, file := range files {
+		if file.IsDir() || !strings.HasSuffix(file.Name(), wl.ext) {
+			continue
+		}
+		// e.g. "000000001.wal" -> 1
+		base := strings.TrimSuffix(file.Name(), wl.ext)
+		id, err := strconv.ParseUint(base, 10, 32)
+		if err != nil {
+			// skip non-numeric segment files
+			continue
+		}
+		segmentIDs = append(segmentIDs, SegmentID(id))
+	}
+
+	// 000000001.wal
+	// 000000002.wal
+	// 000000003.wal
+	sort.Slice(segmentIDs, func(i, j int) bool {
+		return segmentIDs[i] < segmentIDs[j]
+	})
+	return segmentIDs, nil
 }
 
 func (wl *WALog) snapshotSegments() {
@@ -450,6 +462,10 @@ func (wl *WALog) CommittedPosition() RecordPosition {
 
 // Close gracefully shuts down all segments managed by the WALog.
 func (wl *WALog) Close() error {
+	// Same order as the cleaner and Truncate: wait for a segment the cleaner
+	// has unpublished but not yet closed and deleted.
+	wl.deletionMu.Lock()
+	defer wl.deletionMu.Unlock()
 	wl.writeMu.Lock()
 	defer wl.writeMu.Unlock()
 	var cErr error
@@ -627,36 +643,12 @@ func (wl *WALog) writeBatchLocked(records [][]byte, logIndexes []uint64) ([]Reco
 		// successfully written positions
 		allPositions = append(allPositions, positions...)
 
-		if logIndexes != nil && written > 0 {
-			var minIdx uint64
-			var maxIdx uint64
-			for i := 0; i < written; i++ {
-				idx := logIndexes[indexOffset+i]
-				if idx > 0 {
-					if minIdx == 0 || idx < minIdx {
-						minIdx = idx
-					}
-					if idx > maxIdx {
-						maxIdx = idx
-					}
-				}
-			}
-			if minIdx > 0 {
-				wl.updateBoundsRange(minIdx, maxIdx)
-			}
+		var writtenIndexes []uint64
+		if logIndexes != nil {
+			writtenIndexes = logIndexes[indexOffset : indexOffset+written]
 		}
-
-		// unsynced bytes counter
-		for i := 0; i < written; i++ {
-			wl.unSynced += recordOverhead(int64(len(remaining[i])))
-		}
-
-		if wl.bytesPerSync > 0 && wl.unSynced >= wl.bytesPerSync {
-			if syncErr := wl.currentSegment.MSync(); syncErr != nil {
-				return allPositions, fmt.Errorf("%w: %w", ErrFsync, syncErr)
-			}
-			wl.unSynced = 0
-			wl.bytesPerSyncCalled.Add(1)
+		if err := wl.noteBatchWritten(remaining[:written], writtenIndexes); err != nil {
+			return allPositions, err
 		}
 
 		if written == len(remaining) {
@@ -684,6 +676,40 @@ func (wl *WALog) writeBatchLocked(records [][]byte, logIndexes []uint64) ([]Reco
 	}
 
 	return allPositions, nil
+}
+
+// noteBatchWritten records the part of a batch the current segment accepted:
+// it widens the log index bounds, counts the unsynced bytes, and msyncs once
+// bytesPerSync is reached.
+func (wl *WALog) noteBatchWritten(records [][]byte, logIndexes []uint64) error {
+	var minIdx, maxIdx uint64
+	for _, idx := range logIndexes {
+		if idx > 0 {
+			if minIdx == 0 || idx < minIdx {
+				minIdx = idx
+			}
+			if idx > maxIdx {
+				maxIdx = idx
+			}
+		}
+	}
+	if minIdx > 0 {
+		wl.updateBoundsRange(minIdx, maxIdx)
+	}
+
+	// unsynced bytes counter
+	for _, record := range records {
+		wl.unSynced += recordOverhead(int64(len(record)))
+	}
+
+	if wl.bytesPerSync > 0 && wl.unSynced >= wl.bytesPerSync {
+		if syncErr := wl.currentSegment.MSync(); syncErr != nil {
+			return fmt.Errorf("%w: %w", ErrFsync, syncErr)
+		}
+		wl.unSynced = 0
+		wl.bytesPerSyncCalled.Add(1)
+	}
+	return nil
 }
 
 func recordOverhead(dataLen int64) int64 {
@@ -1177,6 +1203,11 @@ func (wl *WALog) CleanupStalePendingSegments() {
 func (wl *WALog) cleanPendingSegments(canDeleteFn func(SegmentID) bool) {
 	wl.deletionMu.Lock()
 	defer wl.deletionMu.Unlock()
+	// A removal that failed part way goes first: its file may still be on
+	// disk, and deleting a younger file before it would leave a hole there.
+	if wl.unlinking != nil && !wl.finishRemoval(wl.unlinking) {
+		return
+	}
 	ids := make([]SegmentID, 0, len(wl.pendingDeletion))
 	for id := range wl.pendingDeletion {
 		ids = append(ids, id)
@@ -1186,54 +1217,66 @@ func (wl *WALog) cleanPendingSegments(canDeleteFn func(SegmentID) bool) {
 		if canDeleteFn == nil || !canDeleteFn(id) {
 			return
 		}
-		if !wl.removeOldestPending(id) {
+		seg, ok := wl.unpublishOldestPending(id)
+		if !ok {
+			return
+		}
+		if seg == nil {
+			continue
+		}
+		if segmentUnpublishedHook != nil {
+			segmentUnpublishedHook(seg)
+		}
+		if !wl.finishRemoval(seg) {
 			return
 		}
 	}
 }
 
-// removeOldestPending deletes a queued segment if it is still the oldest one
-// and nothing holds it. It reports whether the pass may continue.
-func (wl *WALog) removeOldestPending(id SegmentID) bool {
+// segmentUnpublishedHook is set in tests to run after the cleaner has removed
+// a segment from the WAL's view and before it closes the segment.
+var segmentUnpublishedHook func(*Segment)
+
+// unpublishOldestPending removes a queued segment from wl.segments and the
+// snapshots if it is still the oldest one and unpinned. It returns the segment
+// to finish removing (nil for a stale queue entry) and whether the pass may
+// continue.
+func (wl *WALog) unpublishOldestPending(id SegmentID) (*Segment, bool) {
 	wl.writeMu.Lock()
 	defer wl.writeMu.Unlock()
 	seg := wl.pendingDeletion[id]
 	if wl.segments[id] != seg {
 		// Already gone, or the id now names another segment: drop the entry.
 		delete(wl.pendingDeletion, id)
-		return true
+		return nil, true
 	}
 	oldest := *wl.segmentSnapshot.Load()
 	if wl.RecoveryError() != nil || len(oldest) == 0 || oldest[0] != seg ||
 		seg == wl.currentSegment || !seg.IsSealed() || seg.refCount.Load() != 0 {
-		return false
+		return nil, false
 	}
-	if err := wl.deleteSegments([]SegmentID{id}); err != nil {
-		slog.Error("[walfs]", "message", "failed to remove pending segment", "segment_id", id, "error", err)
-		return false
-	}
+	delete(wl.segments, id)
 	delete(wl.pendingDeletion, id)
 	wl.snapshotSegments()
 	wl.recomputeBounds()
-	return true
+	return seg, true
 }
 
-// deleteSegments requires writeMu. Publish index/map removals only after the
-// corresponding file removal succeeds.
-func (wl *WALog) deleteSegments(ids []SegmentID) error {
-	for _, id := range ids {
-		seg := wl.segments[id]
-		if err := seg.Remove(); err != nil {
-			return fmt.Errorf("failed to remove segment %d: %w", id, err)
-		}
-		delete(wl.segments, id)
-		if wl.currentSegment == seg {
-			wl.currentSegment = nil
-		}
+// finishRemoval closes an unpublished segment, then deletes its file and syncs
+// the directory. It runs without writeMu: a reader that pinned the segment
+// before it was unpublished makes Close wait, and that must delay only the
+// cleaner, never writers. It requires deletionMu until the file is gone:
+// removals must reach disk oldest first, and Truncate(0) recreates segment 1
+// at the same path. A crash before the unlink brings the segment back as the
+// oldest one, which retention removes again.
+func (wl *WALog) finishRemoval(seg *Segment) bool {
+	wl.unlinking = seg
+	if err := seg.Remove(); err != nil {
+		slog.Error("[walfs]", "message", "failed to remove pending segment", "segment_id", seg.ID(), "error", err)
+		return false
 	}
-	// Unpublish removed segments from lookups before returning.
-	wl.snapshotSegments()
-	return nil
+	wl.unlinking = nil
+	return true
 }
 
 // https://man7.org/linux/man-pages/man2/fsync.2.html
