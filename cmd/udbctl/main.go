@@ -49,7 +49,7 @@ func main() {
 func walCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "wal",
-		Usage: "WAL inspection commands",
+		Usage: "WAL inspection and offline recovery commands",
 		Subcommands: []*cli.Command{
 			{
 				Name:  "list",
@@ -103,6 +103,43 @@ func walCommand() *cli.Command {
 					formatFlag,
 				},
 				Action: walStatsAction,
+			},
+			{
+				Name:  "truncate",
+				Usage: "Remove every WAL record after an LSN (offline recovery; requires server stopped)",
+				Description: "Keeps records up to and including --keep-through and removes the rest.\n" +
+					"The server must be stopped: the command takes the namespace's pid.lock and\n" +
+					"refuses to run while the server holds it. If the B-tree checkpoint is after\n" +
+					"--keep-through, the server will refuse to start; restore an older B-tree first.",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "data-dir",
+						Aliases:  []string{"d"},
+						Required: true,
+						Usage:    "Server data directory",
+					},
+					&cli.StringFlag{
+						Name:     "namespace",
+						Aliases:  []string{"n"},
+						Required: true,
+						Usage:    "Namespace whose WAL to truncate",
+					},
+					&cli.Uint64Flag{
+						Name:     "keep-through",
+						Required: true,
+						Usage:    "Last LSN to keep",
+					},
+					&cli.BoolFlag{
+						Name:  "force",
+						Usage: "Confirm the server is stopped (required for actual truncation)",
+					},
+					&cli.BoolFlag{
+						Name:  "dry-run",
+						Usage: "Show what would be removed without truncating",
+					},
+					formatFlag,
+				},
+				Action: walTruncateAction,
 			},
 		},
 	}
@@ -192,6 +229,39 @@ func walStatsAction(c *cli.Context) error {
 	}
 
 	return formatter.WriteWalStats(os.Stdout, *stats)
+}
+
+func walTruncateAction(c *cli.Context) error {
+	formatter, err := getFormatter(c)
+	if err != nil {
+		return err
+	}
+
+	dryRun := c.Bool("dry-run")
+	if !dryRun && !c.Bool("force") {
+		return errors.New("--force flag required to confirm server is stopped (use --dry-run to preview)")
+	}
+
+	opts := wal.TruncateOptions{
+		DataDir:     c.String("data-dir"),
+		Namespace:   c.String("namespace"),
+		KeepThrough: c.Uint64("keep-through"),
+		DryRun:      dryRun,
+	}
+	if !dryRun {
+		// stderr, so --format json output stays parseable.
+		fmt.Fprintln(os.Stderr, "WARNING: This permanently removes WAL records!")
+		fmt.Fprintf(os.Stderr, "  Data Dir:     %s\n", opts.DataDir)
+		fmt.Fprintf(os.Stderr, "  Namespace:    %s\n", opts.Namespace)
+		fmt.Fprintf(os.Stderr, "  Keep through: LSN %d\n", opts.KeepThrough)
+		fmt.Fprintln(os.Stderr)
+	}
+
+	result, err := wal.Truncate(opts)
+	if err != nil {
+		return err
+	}
+	return formatter.WriteTruncateResult(os.Stdout, *result)
 }
 
 func restoreAction(c *cli.Context) error {

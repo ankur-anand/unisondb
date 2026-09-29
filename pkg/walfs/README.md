@@ -7,6 +7,14 @@ Implements Write Ahead log using the mmap: Designed for Reading At Scale as well
 * Built-in corruption detection using CRC32 and trailer markers
 * Designed for fast recovery and streaming-based replication
 
+## Scope
+
+walfs is UnisonDB's WAL, not a general-purpose one. It assumes contiguous log
+indexes, a single writer process, zero-copy reads whose slices live only as long
+as the reader holds the segment, and retention driven by dbkernel's checkpoint.
+`Truncate` is for offline recovery only (`udbctl wal truncate`). See the package
+documentation (`doc.go`) for the full list.
+
 ## Segment
 
 Each Segment is Divided into Two Region.

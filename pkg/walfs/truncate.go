@@ -58,9 +58,22 @@ func (wl *WALog) truncateIntentPath() string {
 // Truncate discards entries after logIndex, or resets the WAL when logIndex is 0.
 // Validation failures leave storage unchanged. Once an intent is published, an
 // I/O failure requires reopening the WAL so recovery can finish the operation.
-// Callers must coordinate reader creation and advancement, and the lifetime of
-// returned mmap slices, with truncation. Readers on segments being removed
-// prevent truncation.
+//
+// Truncate is for offline recovery tooling only (udbctl wal truncate), run on
+// a WAL that nothing else has open. The server must not call it: no engine, replicator,
+// streamer, or other reader may be using the WAL. It is not safe against
+// concurrent readers, which do not take the WAL lock:
+//   - It checks reader pins once, so a reader can pin a segment right after
+//     the check. A reader tailing a segment Truncate removes makes it wait
+//     forever while holding every WAL lock, stopping writes.
+//   - A reader can deliver records that are then truncated, and continue on
+//     the rewritten history without an error.
+//   - It unseals a sealed segment and rewrites its tail, so mmap slices
+//     returned earlier can change.
+//
+// Replicas cannot use it to undo a forked tail either: records they received
+// are already applied to the memtable and B-tree, which Truncate cannot roll
+// back. A diverged replica must be rebuilt from a snapshot.
 func (wl *WALog) Truncate(logIndex uint64) error {
 	// The cleaner uses the same lock order. It must not delete a target or a
 	// retained prefix while we prepare or execute a durable truncation.
